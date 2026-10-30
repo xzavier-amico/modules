@@ -110,13 +110,17 @@ scriptings:
       script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/request.js"
 
   # youtube.enhance.response：改写 browse/next/player 等响应（9 个开关全量注入）
-  # 注: 原版 match 还包含 guide / account/get_setting —— 「我的」页打不开的最可能元凶,
-  #     现暂时摘除以隔离问题（列表秒杀/首页/播放页不受影响）。日志显示该两路由无异常后,
-  #     可把 |guide|account/get_setting 加回:
-  #     ^https://youtubei\.googleapis\.com/youtubei/v1/(?:navigation/resolve_url|browse|next|player|search|reel/reel_watch_sequence|guide|account/get_setting|get_watch)(?:\?.*)?$
+  # 路由 A/B 测试记录:
+  #   [A] 原版全量 match（当前, 含 guide / account/get_setting）—— 保留原版全部功能
+  #       （隐藏上传 tab 等), 正在验证「我的」页是否与之共存:
+  #       ^https://youtubei\.googleapis\.com/youtubei/v1/(?:navigation/resolve_url|browse|next|player|search|reel/reel_watch_sequence|guide|account/get_setting|get_watch)(?:\?.*)?$
+  #   [B] 缩窄 match（摘除 guide / account/get_setting）—— 已验证: 主页/「我的」页/后台播放
+  #       均正常, 但丢失这两条路由上的过滤效果。若 [A] 下「我的」页复发, 把下面 match
+  #       换回 [B] 即秒回可用版:
+  #       ^https://youtubei\.googleapis\.com/youtubei/v1/(?:navigation/resolve_url|browse|next|player|search|reel/reel_watch_sequence|get_watch)(?:\?.*)?$
   - http_response:
       name: "youtube.enhance.response"
-      match: "^https://youtubei\\.googleapis\\.com/youtubei/v1/(?:navigation/resolve_url|browse|next|player|search|reel/reel_watch_sequence|get_watch)(?:\\?.*)?$"
+      match: "^https://youtubei\\.googleapis\\.com/youtubei/v1/(?:navigation/resolve_url|browse|next|player|search|reel/reel_watch_sequence|guide|account/get_setting|get_watch)(?:\\?.*)?$"
       script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/response.js"
       body_required: true
       binary_body: true

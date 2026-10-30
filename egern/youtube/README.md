@@ -106,38 +106,29 @@ modules:
 - **功能范围**：本模块严格按 gholts 原版模块的功能面转换（去广告、后台播放、PiP、
   最高 4x 倍速、On-the-go 控件），未额外添加其他平台版本中的附加 feature。
 
-## 「我的」页打不开 —— 路由级修复（进行中）
+## 「我的」页 —— 路由 A/B 测试（当前：全量版测试中）
 
-**症状**：使用 gholts 原版脚本时，YouTube 底栏「我的/You」页面打不开（其他页面正常）。
+**历史症状**：早期版本（response 全量 match）下，YouTube 底栏「我的/You」页面打不开
+（其他页面正常）。
 
-**定位假设**：「我的」页流量命中 `youtube.enhance.response` 的 `guide` 与
-`account/get_setting` 两条路由；response.js 对这两类响应的改写不兼容（Surge 与 Egern
-兼容层的运行时差异放大了这一点）。
+**[B] 缩窄版 —— 已验证可用**：从 response 的 `match` 摘除
+`guide|account/get_setting` 两条路由后，「我的」页、主页、后台播放均正常，
+但依赖这两条路由的过滤效果（隐藏上传 tab 等）失效。缩窄版 match 完整保留在
+yaml 注释中，如需回退，替换一行即可。
 
-**已做处理**（yaml 注释中保留了原版 match，随时可加回）：
+**[A] 全量版 —— 当前发布，测试中**：恢复原版全量 match（保留原版全部功能），
+验证「我的」页与全量路由是否共存。早期打不开也可能由当时其他因素引起
+（脚本取回失败 / max_size 截断 / 首次运行缺密钥），当时均已一并修复，故值得重测。
 
-1. 从 response 的 `match` 中暂时摘除 `guide|account/get_setting` 两条路由。
-   该两路由只承担「引导栏 / 账户页的 AI、商店过滤」，摘除后仅这几个页面失去过滤效果，
-   首页/搜索/播放页/列表秒杀均不受影响。
-2. 重新导入模块确认「我的」页恢复；日志中不再出现与 guide/account 相关的
-   `YouTube response:` 报错即可确认。
+**若 [A] 复发的逐条定位路径**：
 
-**如何加回**：把 yaml 中 response 的 `match` 换成注释里的原版表达式：
-
-```regex
-^https://youtubei\.googleapis\.com/youtubei/v1/(?:navigation/resolve_url|browse|next|player|search|reel/reel_watch_sequence|guide|account/get_setting|get_watch)(?:\?.*)?$
-```
-
-**逐条回加定位**（若加回后再次复发）：
-
-1. 先只加 `|guide` → 打开「我的」页；有问题则元凶是 guide 路由。
+1. 先只加 `|guide`（其余不变）→ 打开「我的」页；有问题则元凶是 guide 路由。
 2. 再加 `|account/get_setting` → 复发则元凶是该路由。
 3. 复发时抓取 Egern 日志中相应请求前后的 `YouTube response:` / `YouTube On-the-go:` 行，
-   可精确定位到 response.js 里处理该分支的具体函数。
+   定位 response.js 处理该分支的具体函数。
 
 **若确认是脚本级不兼容**：由本仓库自行修补 `js/response.js` 对应分支
-（按第 3 步日志定位到的具体函数做兼容修正，如对 Surge/Egern 运行时差异做防御性
-判断），并恢复两条被摘除的路由；修好后回加 `|guide` / `|account/get_setting` 即可。
+（对 Surge/Egern 运行时差异做防御性修正），修好后恢复全量 match 或按需逐条回加。
 
 ## 排障（exec timeout / 不生效）
 
