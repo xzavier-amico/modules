@@ -1,26 +1,23 @@
 # YouTube Enhance — Egern 版
 
 由 Surge 模块 [`gholts/surge → modules/youtube-enhance.sgmodule`](https://raw.githubusercontent.com/gholts/surge/refs/heads/main/modules/youtube-enhance.sgmodule)
-转换而成的 **Egern** 模块；原始 JS 与适配后的 Egern 脚本统一存放在 `js/` 子目录。
+转换的 **Egern** 模块。转换采用与 [IBL3ND 的 Egern-YouTube.yaml](https://github.com/Yuanxsxs/QtumultX)
+一致、经过验证的范式：**Egern 的「Surge 兼容运行模式」直接执行 Surge 原版脚本**，
+参数经 `env._compat.$argument` 注入，无需任何脚本包装。
 
 ## 目录结构
 
 ```
 /opt/modules/egern/youtube/
-├── youtube-enhance.yaml        # Egern 模块（引用主对应文件，script_url 指向 js/ 下的相对路径）
+├── youtube-enhance.yaml        # Egern 模块（script_url 用 js/ 下相对路径）
 ├── README.md                   # 本说明
-├── build_adapters.py           # 适配器生成器（升级原版脚本后重跑 python3 build_adapters.py）
 ├── icon/
-│   └── YouTube.png             # 模块图标本地备份（yaml 中的 icon 用其 GitHub raw URL）
+│   └── YouTube.png             # 模块图标本地备份（yaml 中 icon 用其 GitHub raw URL）
 └── js/
-    ├── request.js              # Surge 原版脚本（保留备查，勿改）
-    ├── response.js
-    ├── key.js
-    ├── ump.js
-    ├── request.egern.js        # Egern 适配脚本（模块实际引用；由 build_adapters.py 生成）
-    ├── response.egern.js
-    ├── key.egern.js
-    └── ump.egern.js
+    ├── request.js              # Surge 原版脚本（ad-break / init / auto-hd / log-event 共用）
+    ├── response.js             # 响应改写（browse/next/player 等）
+    ├── key.js                  # config/log_event 响应 → 提取 client/encrypt 密钥
+    └── ump.js                  # initplayback UMP 解密/改写（AES+SHA256+gzip，较重）
 ```
 
 ## 使用方法
@@ -35,8 +32,7 @@ modules:
     enabled: true
 ```
 
-3. 在模块设置页用 **Toggle 开关**（来自 `compat_arguments_schema`）调整各功能；
-   也可在主配置里覆盖默认参数：
+3. 模块设置页用 **Toggle 开关**（`compat_arguments_schema`）调整功能；也可在主配置里覆写：
 
 ```yaml
 modules:
@@ -45,8 +41,8 @@ modules:
       block_shorts: "true"      # 例：连 Shorts 标签一起去掉
 ```
 
-4. HTTPS 改写需要 **安装并信任 Egern CA 证书且开启 MITM**（覆盖以下主机：
-   `*.googlevideo.com`、`youtubei.googleapis.com`、`www.youtube.com`、`s.youtube.com`）。
+4. HTTPS 改写需要 **安装并信任 Egern CA 证书并开启 MITM**
+   （`*.googlevideo.com`、`youtubei.googleapis.com`、`www.youtube.com`、`s.youtube.com`）。
 
 ## 参数（与 Surge `#!arguments` 一一对应）
 
@@ -67,35 +63,56 @@ modules:
 | Surge 语法 | Egern 语法 |
 | --- | --- |
 | `*.sgmodule`（INI 风格） | `*.yaml` 模块文件 |
-| `#!name/#!desc/#!category` | `name / description / author`（+ `icon`、`homepage` 等） |
-| `#!arguments` / `#!arguments-desc` | `compat_arguments` / `compat_arguments_desc`（默认值经 `{{{参数}}}` 注入各脚本 env） |
-| （无 UI） | `compat_arguments_schema`（设置页 Toggle 开关） |
+| `#!name/#!desc/#!category` | `name / description / author`（+ `icon`、`homepage` 等元数据） |
+| `#!arguments` / `#!arguments-desc` | `compat_arguments` / `compat_arguments_desc` |
+| 设置页 UI | `compat_arguments_schema`（Toggle 开关），主配置 `compat_arguments` 覆写 |
 | `#!requirement=SYSTEM = 'iOS'` | 无对应能力；Egern 本身仅 iOS，语义恒成立 |
 | `[Script] type=http-request|http-response` | `scriptings[].http_request / http_response` |
 | `pattern=` | `match` |
 | `script-path=` | `script_url` |
 | `requires-body=1` / `binary-body-mode=1` | `body_required: true` / `binary_body: true` |
-| `max-size=-1`（无限制） | `max_size: 33554432`（32 MiB，大于 Egern 默认 1 MiB） |
-| `engine=jsc` / `engine=webview` | 无对应（同一 JS 运行时）；需 polyfill 的 API 已在适配层补齐 |
-| `argument="{"flag":...}"` | `script env` 注入；适配脚本重建为 `$argument` JSON |
-| `$request / $response / $done / $persistentStore / $argument` | `ctx.request / ctx.response / 返回值 / ctx.storage / ctx.env`（适配层 1:1 模拟） |
-| `#!REQUIREMENT "'{{{auto_hd}}}' == 'true'"` | 模块级无按参数启用的能力；`request.js` 内部本就按 `autoHd` 自行判断，脚本常开不影响行为 |
-| `[URL Rewrite] - reject` | `url_rewrites[].location: "http://reject/"`（空 404；可改 `http://reject-200/` 等） |
-| `[MITM] hostname=%APPEND% ...` | `mitm.hostnames` 列表 |
+| `max-size=-1`（不限制） | `max_size: 33554432`（32 MiB 显式值；官方未定义 0 的语义，默认 1 MiB 会截断大响应体） |
+| `argument="{"flag":...}"` | `env._compat.$argument: '<原样 JSON + 三花括号占位符>'` |
+| `$request/$response/$done/$persistentStore/$argument` | Egern 脚本兼容运行模式原生可用（无需包装/转换） |
+| `engine=jsc` / `engine=webview` | 无对应（Egern 单一运行时，脚本只用纯 JS + 标准流/压缩 API） |
+| `#!REQUIREMENT "'{...}' == 'true'"`（按参数条件启用） | 无等价能力；`request.js` 内部本就按 `autoHd` 自行判断，脚本常开无副作用 |
+| `[URL Rewrite] - reject` | `rewrites[].actions[].respond: {status: 404}` |
+| `[MITM] hostname = %APPEND% ...` | `mitm.hostnames.includes` |
 
 ## 已知差异与注意事项
 
-- **脚本运行时不同**：Surge 的 `engine=webview`（有 DOM）→ Egern 单一运行时。原脚本只用纯 JS + 流/压缩/加密 API，不依赖 DOM；
-  Egern 运行时若缺少 `Uint8Array#toBase64`、`TextEncoder/Decoder`、`CompressionStream/DecompressionStream`，适配层会按需 polyfill
-  （压缩方向走 Egern 官方 `ctx.compress`）。
-- **持久化存储**：所有脚本经 `ctx.storage` 共享 `YouTubeConfig`（客户端/加密密钥）与 `YouTubeQuality`（分辨率缓存）两个键，
-  各脚本之间有数据依赖；若你的 Egern 版本按脚本隔离存储，将导致 ump 解密失败（旧版会自动 LE 级重建键，表现为偶发 4x 不可用）。
-- **拒绝策略**：Surge `reject` 为断链/空响应；Egern `http://reject/` 返回 404 空响应，语义近似。若想让页面拿到 200 空响应可改 `http://reject-200/`。
-- **远端托管**：`script_url` 目前为相对路径 `js/*.egern.js`，适合「按目录导入/本地路径」用法；若改为远程 https 托管，请把
-  `youtube-enhance.yaml` 中 7 处 `script_url` 改成对应的绝对 URL（例如 `https://你的服务/youtube/js/request.egern.js`）。
-- **升级**：更新 `js/*.js`（Surge 原版）后重跑 `python3 build_adapters.py` 重新生成 `*.egern.js`。
+- **超时**：`youtube.enhance.ump` 需在纯 JS 里对最多 16 MiB 数据做 AES+SHA256+gzip，
+  属天然重负载；yaml 已给 `timeout: 30`。若设备较慢仍超时，可继续调大（上限 600）。
+- **max_size 的语义与内部上限**：官方文档只说默认 `1048576`（1 MiB），**未定义 `0` 的含义**。
+  经验上，body 超限不会报错，只会"不传给脚本"→ 脚本按放行处理（UMP/键协商静默跳过）。
+  若日志出现「exceeded N bytes」类提示：N 若恰为 `1048576` 即说明写 0 回落了默认 1 MiB
+  （IBL3ND 的 `max_size: 0` 也是这种写法）；本模块已显式给 32 MiB，若 N 变成了这个自定义值，
+  说明引擎接受大值；若 N 是另一个固定数字，说明引擎层还有更硬的内部上限——届时只能降级：
+  大体积请求会原样放行（不影响播放，只是该视频的 4x/自动 HD 那轮不生效）。
+  可根据日志再评估是否调更高（如 67108864）。
+- **远端托管**：`script_url` 目前为相对路径 `js/*.js`，适合按目录导入；若远程托管，
+  请把 yaml 各处 `script_url` 换成绝对 URL（例如原始仓库
+  `https://raw.githubusercontent.com/gholts/surge/main/scripts/youtube/request.js`）。
+- **持久化共享**：`key.js` 写入 `YouTubeConfig`，`ump.js` 读取用于解密；二者都在
+  `youtubei.googleapis.com`/`googlevideo.com` 请求链路上正常触发时互相配合，请勿单独禁用。
+- **拒绝模式**：Egern `rewrites → respond 404` 等价 Surge 的空响应 reject；如需和应用层
+  完全一致可改为 200（`respond: {status: 200}`）。
+- **上游特性差异**：IBL3ND 版在 gholts 版基础上额外加了「原生下载」「字幕双显」等功能；
+  本模块严格按 gholts 原版功能面转换，不含那些附加项（可通过其对应模块单独叠加）。
+
+## 排障（exec timeout / 不生效）
+
+1. Egern 日志里原版脚本的输出会原样透出，按前缀定位：
+   - `YouTube request: ...`（request.js 异常）
+   - `YouTube response: ...` / `YouTube On-the-go: ...`（response.js）
+   - `YouTube keys: ...` / `YouTube key write failed`（key.js）
+   - `YouTube quality ...` / `UMP ...`（ump.js）
+2. 若超时条目是 `youtube.enhance.ump`：多为大视频 + 慢设备（AES/SHA256 纯 JS 计算慢），
+   调大 `timeout`；若首次出现 `YouTubeConfig requires a valid stored clientKey`，
+   属正常——先播放一次让 `key.js` 抓到密钥，之后 UMP 解密才会生效。
+3. 若所有条目超时：确认模块是否启用了 MITM（证书已安装且信任、`mitm.hostnames` 生效）。
 
 ## 许可
 
-- 原始脚本与模块：基于 Maasea 的代码（**Apache-2.0**），整理自 [gholts/surge](https://github.com/gholts/surge)。
-- 本目录的适配层与 YAML 仅作格式转换，延续上游许可。
+- 原始模块与脚本：基于 Maasea 的代码（**Apache-2.0**），来自 [gholts/surge](https://github.com/gholts/surge)。
+- YAML/文档仅做格式转换，延续上游许可。
