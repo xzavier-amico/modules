@@ -1,0 +1,209 @@
+#=======================================================================================
+# YouTube Enhance — Egern 模块
+#
+# 由 Surge 模块 youtube-enhance.sgmodule (https://github.com/gholts/surge) 转换而来。
+# JS 脚本（含适配层）置于本文件同级目录 js/ 下；
+#   - js/request.js / response.js / key.js / ump.js     —— Surge 原版脚本（保留备查）
+#   - js/*.egern.js                                     —— Egern 适配脚本（yaml 实际引用）
+#   - js/*.egern.js 由 build_adapters.py 生成，升级原版后重新运行即可。
+#
+# 文档参考:
+#   模块: https://egernapp.com/docs/configuration/modules
+#   脚本: https://egernapp.com/docs/configuration/scriptings
+#   JS API: https://egernapp.com/docs/javascript-api
+#
+# Surge → Egern 字段对照:
+#   [Script] type=http-request / http-response      → scriptings[].http_request / http_response
+#   pattern=...                                     → match
+#   script-path=...                                 → script_url （此处用相对路径，指向 js/ 子目录;
+#                                                      如改为远程托管，请替换为绝对 URL）
+#   requires-body=1,binary-body-mode=1              → body_required: true + binary_body: true
+#   max-size=-1（不限制）                            → max_size: 33554432 （Egern 需要显式数值,取 32 MiB,
+#                                                      显著大于默认的 1 MiB，避免大响应体被跳过）
+#   argument="{"flag":...}"                         → script env 注入 “JSON 键 = compat_arguments”
+#   #!arguments 默认值                               → compat_arguments （由 compat_arguments_schema
+#                                                      在模块设置页以开关（Toggle）形式修改）
+#   #!REQUIREMENT "'{{{auto_hd}}}' == 'true'"       → Egern 模块无按参数条件启用的等价物；
+#                                                      request.js 内部本身按 autoHd 自行判断
+#                                                      （auto_hd 为 false 时不会改写 videoplayback(initplayback)），
+#                                                      故该脚本保持常开。
+#   [URL Rewrite] ... - reject                      → url_rewrites[] + location: "http://reject/"
+#   [MITM] hostname = %APPEND% ...                  → mitm.hostnames
+#
+# 注意:
+#   - 需在 Egern 中安装并信任 CA 证书并开启 MITM（HTTPS 改写必需）。
+#   - 所有脚本通过 ctx.storage 共享持久化数据（"YouTubeConfig" / "YouTubeQuality"），
+#     key/ump 等脚本之间有数据依赖，请勿单独删改。
+#=======================================================================================
+
+name: "YouTube Enhance"
+description: "去广告 + 后台播放 + PiP + 最高 4x 倍速 + On-the-go 控件。\n基于 Maasea 的代码 (Apache-2.0)，由 Surge 模块 youtube-enhance.sgmodule 转换。"
+author: "gholts"
+homepage: "https://github.com/gholts/surge"
+manual: "https://raw.githubusercontent.com/gholts/surge/main/modules/youtube-enhance.sgmodule"
+icon: "play.rectangle.fill"
+
+# ---- 参数（与 Surge #!arguments 一一的默认值）----
+compat_arguments:
+  block_upload: "true"
+  block_shorts: "false"
+  auto_hd: "true"
+  block_games: "true"
+  block_vertical_live: "false"
+  jump_ahead: "true"
+  block_store: "true"
+  block_ai: "true"
+  on_the_go: "true"
+
+compat_arguments_desc: |
+  block_upload          — 移除「上传」标签 tab
+  block_shorts          — 移除 Shorts 标签 tab
+  auto_hd               — 优先选择最高分辨率（已授权时用 Premium 高码率）
+  block_games           — 移除首页 Playables（小游戏）
+  block_vertical_live   — 移除首页竖屏直播
+  jump_ahead            — 启用 Jump Ahead 按钮
+  block_store           — 移除创作者商店/商品卡/悬浮层
+  block_ai              — 移除 Ask/AI 摘要及相关控件
+  on_the_go             — 在兼容 UI 组件可用时启用 On-the-go 控件
+
+# ---- 模块设置页 UI（Toggle 开关；true/false 之外可选确切值）----
+compat_arguments_schema:
+  block_upload:
+    name: "Remove upload tab"
+    description: "移除「上传」标签页"
+    options: ["true", "false"]
+  block_shorts:
+    name: "Remove Shorts tab"
+    description: "移除 Shorts 标签页"
+    options: ["true", "false"]
+  auto_hd:
+    name: "Auto HD"
+    description: "优先最高分辨率；已授权 Premium 时使用高码率"
+    options: ["true", "false"]
+  block_games:
+    name: "Remove Playables"
+    description: "移除首页小游戏（Playables）"
+    options: ["true", "false"]
+  block_vertical_live:
+    name: "Remove vertical live"
+    description: "移除首页竖屏直播"
+    options: ["true", "false"]
+  jump_ahead:
+    name: "Jump Ahead button"
+    description: "启用 Jump Ahead 按钮"
+    options: ["true", "false"]
+  block_store:
+    name: "Remove creator stores"
+    description: "移除创作者商店、商品卡片与悬浮层"
+    options: ["true", "false"]
+  block_ai:
+    name: "Remove Ask / AI"
+    description: "移除 Ask、AI 摘要及相关控件"
+    options: ["true", "false"]
+  on_the_go:
+    name: "On-the-go controls"
+    description: "在兼容 UI 组件可用时启用 On-the-go 控件"
+    options: ["true", "false"]
+
+# ---- 脚本（Surge [Script] 六条 → Egern 七条: init/videoplayback 拆成两个入口）----
+scriptings:
+  # Surge: youtube.enhance.ad-break (http-request, engine=jsc, 无 body/argument)
+  - http_request:
+      name: "youtube.enhance.ad-break"
+      match: "^https://youtubei\\.googleapis\\.com/youtubei/v1/player/ad_break(?:\\?.*)?$"
+      script_url: "js/request.egern.js"
+      timeout: 10
+
+  # Surge: youtube.enhance.response (http-response, engine=webview, 带完整 argument JSON)
+  - http_response:
+      name: "youtube.enhance.response"
+      match: "^https://youtubei\\.googleapis\\.com/youtubei/v1/(?:navigation/resolve_url|browse|next|player|search|reel/reel_watch_sequence|guide|account/get_setting|get_watch)(?:\\?.*)?$"
+      script_url: "js/response.egern.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 30
+      env:
+        BLOCK_UPLOAD: "{{{block_upload}}}"
+        BLOCK_SHORTS: "{{{block_shorts}}}"
+        BLOCK_GAMES: "{{{block_games}}}"
+        BLOCK_VERTICAL_LIVE: "{{{block_vertical_live}}}"
+        JUMP_AHEAD: "{{{jump_ahead}}}"
+        AUTO_HD: "{{{auto_hd}}}"
+        BLOCK_STORE: "{{{block_store}}}"
+        BLOCK_AI: "{{{block_ai}}}"
+        ON_THE_GO: "{{{on_the_go}}}"
+
+  # Surge: youtube.enhance.key (http-response, engine=jsc)
+  - http_response:
+      name: "youtube.enhance.key"
+      match: "^https://youtubei\\.googleapis\\.com/youtubei/v1/(?:config|log_event)(?:\\?.*)?$"
+      script_url: "js/key.egern.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 10
+
+  # Surge: youtube.enhance.ump (http-response, engine=webview)
+  - http_response:
+      name: "youtube.enhance.ump"
+      match: "^https?://[\\w-]+\\.googlevideo\\.com/initplayback(?:\\?.*)?$"
+      script_url: "js/ump.egern.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 30
+      env:
+        BLOCK_GAMES: "{{{block_games}}}"
+        BLOCK_VERTICAL_LIVE: "{{{block_vertical_live}}}"
+        JUMP_AHEAD: "{{{jump_ahead}}}"
+        AUTO_HD: "{{{auto_hd}}}"
+        BLOCK_STORE: "{{{block_store}}}"
+        BLOCK_AI: "{{{block_ai}}}"
+        ON_THE_GO: "{{{on_the_go}}}"
+
+  # Surge: youtube.enhance.init (http-request)
+  - http_request:
+      name: "youtube.enhance.init"
+      match: "^https?://[\\w-]+\\.googlevideo\\.com/initplayback(?:\\?.*)?$"
+      script_url: "js/request.egern.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 10
+      env:
+        AUTO_HD: "{{{auto_hd}}}"
+
+  # Surge: youtube.enhance.auto-hd (http-request; Surge 加 #!REQUIREMENT auto_hd, Egern 常开、脚本内部自判)
+  - http_request:
+      name: "youtube.enhance.auto-hd"
+      match: "^https?://[\\w-]+\\.googlevideo\\.com/videoplayback(?:\\?.*)?$"
+      script_url: "js/request.egern.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 10
+      env:
+        AUTO_HD: "{{{auto_hd}}}"
+
+  # Surge: youtube.enhance.log-event (http-request)
+  - http_request:
+      name: "youtube.enhance.log-event"
+      match: "^https://youtubei\\.googleapis\\.com/youtubei/v1/log_event(?:\\?.*)?$"
+      script_url: "js/request.egern.js"
+      timeout: 10
+
+# ---- URL Rewrite（Surge 的 - reject → Egern reject 用法, 返回空 404;可选 http://reject-200/）----
+url_rewrites:
+  - match: "^https://www\\.youtube\\.com/(pagead|pcs)/"
+    location: "http://reject/"
+  - match: "^https://s\\.youtube\\.com/api/stats/ads"
+    location: "http://reject/"
+
+# ---- MITM（Surge [MITM] hostname %APPEND% 直译；注意 *.googlevideo.com 并不匹配裸 googlevideo.com）----
+mitm:
+  hostnames:
+    - "*.googlevideo.com"
+    - "youtubei.googleapis.com"
+    - "www.youtube.com"
+    - "s.youtube.com"
