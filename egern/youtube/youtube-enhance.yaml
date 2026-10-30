@@ -10,8 +10,8 @@
 # Surge → Egern 字段对照:
 #   [Script] type=http-request / http-response      → scriptings[].http_request / http_response
 #   pattern=...                                     → match
-#   script-path=...                                 → script_url （此处为 js/ 相对路径；远程托管时可换
-#                                                      绝对 URL，如 https://raw.githubusercontent.com/gholts/surge/main/scripts/youtube/request.js）
+#   script-path=...                                 → script_url （本模块已托管在 GitHub，直接用 raw 绝对路径;
+#                                                      若改为纯本地导入/本地路径引用，可换回相对路径 js/xxx.js）
 #   requires-body=1,binary-body-mode=1              → body_required: true + binary_body: true
 #   max-size=-1（不限制）                            → max_size: 33554432 （显式大值。注意: 文档默认 1 MiB
 #                                                      = 1048576; "0 = 不限制"的语义官方未定义，勿依赖）
@@ -34,9 +34,10 @@ description: "去广告 + 后台播放 + PiP + 最高 4x 倍速 + On-the-go 控�
 author: "gholts"
 homepage: "https://github.com/gholts/surge"
 manual: "https://raw.githubusercontent.com/gholts/surge/main/modules/youtube-enhance.sgmodule"
-# 图标：支持 SF Symbols 名称或图片 URL（本地图标备份见 icon/YouTube.png）
-icon: "https://raw.githubusercontent.com/Yuanxsxs/QtumultX/master/Icon/Hand-Painted-icon/Social_Media/YouTube.png"
-# 若想用内置符号图标，可改回: icon: "play.rectangle.fill"
+# 图标改用本仓库托管的同一张图（Yuanxsxs 原图的本地备份，不依赖上游是否删图）；
+# 想换回原图可改: https://raw.githubusercontent.com/Yuanxsxs/QtumultX/master/Icon/Hand-Painted-icon/Social_Media/YouTube.png
+# 或改回内置符号图标: icon: "play.rectangle.fill"
+icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/icon/YouTube.png"
 
 # ---- 参数（与 Surge #!arguments 一致的默认值，snake_case 键名以三花括号占位符注入）----
 compat_arguments:
@@ -106,13 +107,17 @@ scriptings:
   - http_request:
       name: "youtube.enhance.ad-break"
       match: "^https://youtubei\\.googleapis\\.com/youtubei/v1/player/ad_break(?:\\?.*)?$"
-      script_url: "js/request.js"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/request.js"
 
   # youtube.enhance.response：改写 browse/next/player 等响应（9 个开关全量注入）
+  # 注: 原版 match 还包含 guide / account/get_setting —— 「我的」页打不开的最可能元凶,
+  #     现暂时摘除以隔离问题（列表秒杀/首页/播放页不受影响）。日志显示该两路由无异常后,
+  #     可把 |guide|account/get_setting 加回:
+  #     ^https://youtubei\.googleapis\.com/youtubei/v1/(?:navigation/resolve_url|browse|next|player|search|reel/reel_watch_sequence|guide|account/get_setting|get_watch)(?:\?.*)?$
   - http_response:
       name: "youtube.enhance.response"
-      match: "^https://youtubei\\.googleapis\\.com/youtubei/v1/(?:navigation/resolve_url|browse|next|player|search|reel/reel_watch_sequence|guide|account/get_setting|get_watch)(?:\\?.*)?$"
-      script_url: "js/response.js"
+      match: "^https://youtubei\\.googleapis\\.com/youtubei/v1/(?:navigation/resolve_url|browse|next|player|search|reel/reel_watch_sequence|get_watch)(?:\\?.*)?$"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/response.js"
       body_required: true
       binary_body: true
       max_size: 33554432    # 32 MiB（0 的语义文档未定义，显式大值；默认 1 MiB 会截断大响应）
@@ -123,7 +128,7 @@ scriptings:
   - http_response:
       name: "youtube.enhance.key"
       match: "^https://youtubei\\.googleapis\\.com/youtubei/v1/(?:config|log_event)(?:\\?.*)?$"
-      script_url: "js/key.js"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/key.js"
       body_required: true
       binary_body: true
       max_size: 33554432
@@ -133,7 +138,7 @@ scriptings:
   - http_response:
       name: "youtube.enhance.ump"
       match: "^https?://[\\w-]+\\.googlevideo\\.com/initplayback(?:\\?.*)?$"
-      script_url: "js/ump.js"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/ump.js"
       body_required: true
       binary_body: true
       max_size: 33554432
@@ -145,7 +150,7 @@ scriptings:
   - http_request:
       name: "youtube.enhance.init"
       match: "^https?://[\\w-]+\\.googlevideo\\.com/initplayback(?:\\?.*)?$"
-      script_url: "js/request.js"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/request.js"
       body_required: true
       binary_body: true
       max_size: 33554432
@@ -156,7 +161,7 @@ scriptings:
   - http_request:
       name: "youtube.enhance.auto-hd"
       match: "^https?://[\\w-]+\\.googlevideo\\.com/videoplayback(?:\\?.*)?$"
-      script_url: "js/request.js"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/request.js"
       body_required: true
       binary_body: true
       max_size: 33554432
@@ -167,7 +172,7 @@ scriptings:
   - http_request:
       name: "youtube.enhance.log-event"
       match: "^https://youtubei\\.googleapis\\.com/youtubei/v1/log_event(?:\\?.*)?$"
-      script_url: "js/request.js"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/request.js"
 
 # ---- URL Rewrite（Surge 的 - reject → respond 404 空响应）----
 rewrites:

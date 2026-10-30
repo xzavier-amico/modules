@@ -9,10 +9,10 @@
 
 ```
 /opt/modules/egern/youtube/
-├── youtube-enhance.yaml        # Egern 模块（script_url 用 js/ 下相对路径）
+├── youtube-enhance.yaml        # Egern 模块（script_url 为本仓库 GitHub raw 绝对 URL）
 ├── README.md                   # 本说明
 ├── icon/
-│   └── YouTube.png             # 模块图标本地备份（yaml 中 icon 用其 GitHub raw URL）
+│   └── YouTube.png             # 模块图标（yaml 中 icon 用其本仓库 raw URL）
 └── js/
     ├── request.js              # Surge 原版脚本（ad-break / init / auto-hd / log-event 共用）
     ├── response.js             # 响应改写（browse/next/player 等）
@@ -20,23 +20,30 @@
     └── ump.js                  # initplayback UMP 解密/改写（AES+SHA256+gzip，较重）
 ```
 
+对应仓库：`xzavier-amico/modules`（分支 `master`），raw 基准 URL：
+
+```
+https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/
+```
+
 ## 使用方法
 
-1. 把整个 `youtube/` 目录放到能被 Egern 读取的位置（或托管到 https 服务器）。
-2. 在 Egern 主配置 `modules:` 中引用：
+1. 模块已托管在 GitHub raw，在 Egern 主配置 `modules:` 中直接引用该 URL：
 
 ```yaml
 modules:
   - name: "YouTube Enhance"
-    url: "<路径或URL>/youtube-enhance.yaml"   # 本地文件路径或远程 https URL
+    url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/youtube-enhance.yaml"
     enabled: true
 ```
+
+   （本地文件路径也同样可用；脚本 URL 已是绝对路径，无需连带托管 `js/` 目录。）
 
 3. 模块设置页用 **Toggle 开关**（`compat_arguments_schema`）调整功能；也可在主配置里覆写：
 
 ```yaml
 modules:
-  - url: "<路径或URL>/youtube-enhance.yaml"
+  - url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/youtube-enhance.yaml"
     compat_arguments:
       block_shorts: "true"      # 例：连 Shorts 标签一起去掉
 ```
@@ -90,15 +97,49 @@ modules:
   说明引擎接受大值；若 N 是另一个固定数字，说明引擎层还有更硬的内部上限——届时只能降级：
   大体积请求会原样放行（不影响播放，只是该视频的 4x/自动 HD 那轮不生效）。
   可根据日志再评估是否调更高（如 67108864）。
-- **远端托管**：`script_url` 目前为相对路径 `js/*.js`，适合按目录导入；若远程托管，
-  请把 yaml 各处 `script_url` 换成绝对 URL（例如原始仓库
-  `https://raw.githubusercontent.com/gholts/surge/main/scripts/youtube/request.js`）。
+- **脚本托管**：全部 `script_url`（及 `icon`）均使用本仓库 GitHub raw 绝对 URL，
+  在任何设备上导入 yaml 都能直接拉到脚本；本地化使用时可按需换回相对路径 `js/*.js`。
 - **持久化共享**：`key.js` 写入 `YouTubeConfig`，`ump.js` 读取用于解密；二者都在
   `youtubei.googleapis.com`/`googlevideo.com` 请求链路上正常触发时互相配合，请勿单独禁用。
 - **拒绝模式**：Egern `rewrites → respond 404` 等价 Surge 的空响应 reject；如需和应用层
   完全一致可改为 200（`respond: {status: 200}`）。
 - **上游特性差异**：IBL3ND 版在 gholts 版基础上额外加了「原生下载」「字幕双显」等功能；
   本模块严格按 gholts 原版功能面转换，不含那些附加项（可通过其对应模块单独叠加）。
+
+## 「我的」页打不开 —— 路由级修复（进行中）
+
+**症状**：使用 gholts 原版脚本时，YouTube 底栏「我的/You」页面打不开（其他页面正常）。
+
+**定位假设**：「我的」页流量命中 `youtube.enhance.response` 的 `guide` 与
+`account/get_setting` 两条路由；response.js 对这两类响应的改写不兼容（Surge 与 Egern
+兼容层的运行时差异放大了这一点）。
+
+**已做处理**（yaml 注释中保留了原版 match，随时可加回）：
+
+1. 从 response 的 `match` 中暂时摘除 `guide|account/get_setting` 两条路由。
+   该两路由只承担「引导栏 / 账户页的 AI、商店过滤」，摘除后仅这几个页面失去过滤效果，
+   首页/搜索/播放页/列表秒杀均不受影响。
+2. 重新导入模块确认「我的」页恢复；日志中不再出现与 guide/account 相关的
+   `YouTube response:` 报错即可确认。
+
+**如何加回**：把 yaml 中 response 的 `match` 换成注释里的原版表达式：
+
+```regex
+^https://youtubei\.googleapis\.com/youtubei/v1/(?:navigation/resolve_url|browse|next|player|search|reel/reel_watch_sequence|guide|account/get_setting|get_watch)(?:\?.*)?$
+```
+
+**逐条回加定位**（若加回后再次复发）：
+
+1. 先只加 `|guide` → 打开「我的」页；有问题则元凶是 guide 路由。
+2. 再加 `|account/get_setting` → 复发则元凶是该路由。
+3. 复发时抓取 Egern 日志中相应请求前后的 `YouTube response:` / `YouTube On-the-go:` 行，
+   可精确定位到 response.js 里处理该分支的具体函数。
+
+**若确认是脚本级不兼容**的备选方案：将 `js/response.js`（及可选 `js/request.js`）
+整体替换为 IBL3ND 的 Egern 实测版
+（`https://raw.githubusercontent.com/IBL3ND/module/refs/heads/main/youtube-response.js`、
+`youtube-request.js`）——功能面略有增减（含原生下载、字幕双显），属于换脚本不换模块
+结构的改动，恢复两条被摘除路由后使用。
 
 ## 排障（exec timeout / 不生效）
 
