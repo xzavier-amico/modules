@@ -1,8 +1,8 @@
 # YouTube Enhance — Egern 版
 
 由 Surge 模块 [`gholts/surge → modules/youtube-enhance.sgmodule`](https://raw.githubusercontent.com/gholts/surge/refs/heads/main/modules/youtube-enhance.sgmodule)
-转换的 **Egern** 模块。转换采用与 [IBL3ND 的 Egern-YouTube.yaml](https://github.com/Yuanxsxs/QtumultX)
-一致、经过验证的范式：**Egern 的「Surge 兼容运行模式」直接执行 Surge 原版脚本**，
+转换的 **Egern** 模块。转换思路：**直接在 Egern 的「Surge 兼容运行模式」下执行
+Surge 原版脚本**（`$request` / `$response` / `$done` / `$persistentStore` 原生可用），
 参数经 `env._compat.$argument` 注入，无需任何脚本包装。
 
 ## 目录结构
@@ -92,8 +92,8 @@ modules:
   属天然重负载；yaml 已给 `timeout: 30`。若设备较慢仍超时，可继续调大（上限 600）。
 - **max_size 的语义与内部上限**：官方文档只说默认 `1048576`（1 MiB），**未定义 `0` 的含义**。
   经验上，body 超限不会报错，只会"不传给脚本"→ 脚本按放行处理（UMP/键协商静默跳过）。
-  若日志出现「exceeded N bytes」类提示：N 若恰为 `1048576` 即说明写 0 回落了默认 1 MiB
-  （IBL3ND 的 `max_size: 0` 也是这种写法）；本模块已显式给 32 MiB，若 N 变成了这个自定义值，
+  若日志出现「exceeded N bytes」类提示：N 若恰为 `1048576` 即说明写 0 回落了默认 1 MiB；
+  本模块已显式给 32 MiB，若 N 变成了这个自定义值，
   说明引擎接受大值；若 N 是另一个固定数字，说明引擎层还有更硬的内部上限——届时只能降级：
   大体积请求会原样放行（不影响播放，只是该视频的 4x/自动 HD 那轮不生效）。
   可根据日志再评估是否调更高（如 67108864）。
@@ -103,8 +103,8 @@ modules:
   `youtubei.googleapis.com`/`googlevideo.com` 请求链路上正常触发时互相配合，请勿单独禁用。
 - **拒绝模式**：Egern `rewrites → respond 404` 等价 Surge 的空响应 reject；如需和应用层
   完全一致可改为 200（`respond: {status: 200}`）。
-- **上游特性差异**：IBL3ND 版在 gholts 版基础上额外加了「原生下载」「字幕双显」等功能；
-  本模块严格按 gholts 原版功能面转换，不含那些附加项（可通过其对应模块单独叠加）。
+- **功能范围**：本模块严格按 gholts 原版模块的功能面转换（去广告、后台播放、PiP、
+  最高 4x 倍速、On-the-go 控件），未额外添加其他平台版本中的附加 feature。
 
 ## 「我的」页打不开 —— 路由级修复（进行中）
 
@@ -135,11 +135,9 @@ modules:
 3. 复发时抓取 Egern 日志中相应请求前后的 `YouTube response:` / `YouTube On-the-go:` 行，
    可精确定位到 response.js 里处理该分支的具体函数。
 
-**若确认是脚本级不兼容**的备选方案：将 `js/response.js`（及可选 `js/request.js`）
-整体替换为 IBL3ND 的 Egern 实测版
-（`https://raw.githubusercontent.com/IBL3ND/module/refs/heads/main/youtube-response.js`、
-`youtube-request.js`）——功能面略有增减（含原生下载、字幕双显），属于换脚本不换模块
-结构的改动，恢复两条被摘除路由后使用。
+**若确认是脚本级不兼容**：由本仓库自行修补 `js/response.js` 对应分支
+（按第 3 步日志定位到的具体函数做兼容修正，如对 Surge/Egern 运行时差异做防御性
+判断），并恢复两条被摘除的路由；修好后回加 `|guide` / `|account/get_setting` 即可。
 
 ## 排障（exec timeout / 不生效）
 

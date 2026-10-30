@@ -5,7 +5,7 @@
 # 脚本直接复用 gholts 原版 Surge JS（js/ 子目录），不加任何包装：
 #   Egern 对这类脚本按「Surge 兼容模式」运行（$request / $response / $done /
 #   $persistentStore 全局变量可用），参数通过 env 的 _compat.$argument 传入，
-#   与 IBL3ND 的 Egern-YouTube.yaml 采用同一套已验证范式。
+#   采用本模块实测可行的兼容范式。
 #
 # Surge → Egern 字段对照:
 #   [Script] type=http-request / http-response      → scriptings[].http_request / http_response
