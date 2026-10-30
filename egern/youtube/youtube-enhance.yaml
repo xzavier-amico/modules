@@ -41,7 +41,10 @@ description: "去广告 + 后台播放 + PiP + 最高 4x 倍速 + On-the-go 控�
 author: "gholts"
 homepage: "https://github.com/gholts/surge"
 manual: "https://raw.githubusercontent.com/gholts/surge/main/modules/youtube-enhance.sgmodule"
-icon: "play.rectangle.fill"
+# 图标：支持 SF Symbols 名称或图片 URL；此处用手绘 YouTube 图标（模块设置页显示）
+# 本地备份副本： icon/YouTube.png （108x108 PNG, 5.4 KB）
+icon: "https://raw.githubusercontent.com/Yuanxsxs/QtumultX/master/Icon/Hand-Painted-icon/Social_Media/YouTube.png"
+# 若想用内置符号图标，可改回: icon: "play.rectangle.fill"
 
 # ---- 参数（与 Surge #!arguments 一一的默认值）----
 compat_arguments:

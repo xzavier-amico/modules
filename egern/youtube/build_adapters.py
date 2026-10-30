@@ -45,7 +45,6 @@ HEADER = """\
 
 SHIM = """\
 /* =========================== Surge 兼容层（生成） =========================== */
-const ctx$ = ctx;
 
 function surge$hasAPI(name) {
   try {
@@ -85,8 +84,8 @@ function surge$headersToObject(src) {
   return out;
 }
 
-/** polyfill 种子：只补充运行时缺失的 API（幂等）。 */
-function surge$installPolyfills() {
+/** polyfill 种子：只补充运行时缺失的 API（幂等）。c = Egern ctx。 */
+function surge$installPolyfills(c) {
   const g = globalThis;
 
   // Uint8Array.prototype.toBase64（key.js 使用；iOS 17.4+ JSC 自带，其他引擎按需补）
@@ -272,20 +271,20 @@ function surge$installPolyfills() {
           }
         };
       if (typeof g.CompressionStream !== "function") {
-        g.CompressionStream = makeShim("Compression", (d) => ctx$.compress.gzip(d));
+        g.CompressionStream = makeShim("Compression", (d) => c.compress.gzip(d));
       }
       if (typeof g.DecompressionStream !== "function") {
-        g.DecompressionStream = makeShim("Decompression", (d) => ctx$.compress.gunzip(d));
+        g.DecompressionStream = makeShim("Decompression", (d) => c.compress.gunzip(d));
       }
     }
   }
 }
 
 /** $argument：由 env 重建出的 JSON（脚本自带 `{{{` 防呆，未提供 env 时用其内部默认值）。 */
-function surge$buildArgument(mapping) {
+function surge$buildArgument(c, mapping) {
   const args = {};
   for (const [envKey, jsonKey] of Object.entries(mapping)) {
-    const raw = ctx$.env ? ctx$.env[envKey] : undefined;
+    const raw = c.env ? c.env[envKey] : undefined;
     if (raw === undefined || raw === "") continue;
     args[jsonKey] = String(raw).trim().toLowerCase() === "true" || raw === true;
   }
@@ -293,11 +292,11 @@ function surge$buildArgument(mapping) {
 }
 
 /** $persistentStore -> ctx.storage（Surge: write(value[, key]) => boolean）。 */
-function surge$persistentStoreObject() {
+function surge$persistentStoreObject(c) {
   return {
     read(key) {
       try {
-        const value = ctx$.storage.get(String(key));
+        const value = c.storage.get(String(key));
         return value == null ? undefined : String(value);
       } catch {
         return undefined;
@@ -305,7 +304,7 @@ function surge$persistentStoreObject() {
     },
     write(value, key) {
       try {
-        ctx$.storage.set(String(key == null ? "default" : key), String(value == null ? "" : value));
+        c.storage.set(String(key == null ? "default" : key), String(value == null ? "" : value));
         return true;
       } catch {
         return false;
@@ -348,9 +347,10 @@ async function surge$readBinary(stream) {
 
 REQUEST_BODY = """\
 export default async function (ctx) {
-  surge$installPolyfills();
+  surge$installPolyfills(ctx);
+  const EG_SCRIPT = "@@SCRIPT_NAME@@";
 @@ARGUMENT@@
-  const $persistentStore = surge$persistentStoreObject();
+  const $persistentStore = surge$persistentStoreObject(ctx);
   const { future, $done } = surge$doneFuture();
 
   const $request = {
@@ -361,7 +361,14 @@ export default async function (ctx) {
   };
   const $response = undefined;
 
-@@ORIGINAL@@
+  try {
+    @@ORIGINAL@@
+  } catch (adapterError) {
+    // 原版脚本在 $done 之前异常时不让适配器悬空（否则就是 exec timeout）
+    console.log("[YouTube Enhance/" + EG_SCRIPT + "] adapter caught: " +
+      (adapterError instanceof Error ? adapterError.stack : String(adapterError)));
+    $done(undefined);
+  }
 
   const result = await future;
   if (result == null) return undefined;
@@ -381,9 +388,10 @@ export default async function (ctx) {
 
 RESPONSE_BODY = """\
 export default async function (ctx) {
-  surge$installPolyfills();
+  surge$installPolyfills(ctx);
+  const EG_SCRIPT = "@@SCRIPT_NAME@@";
 @@ARGUMENT@@
-  const $persistentStore = surge$persistentStoreObject();
+  const $persistentStore = surge$persistentStoreObject(ctx);
   const { future, $done } = surge$doneFuture();
 
   const $request = {
@@ -398,7 +406,14 @@ export default async function (ctx) {
     body: ctx.response.body == null ? undefined : await surge$readBinary(ctx.response.body),
   };
 
-@@ORIGINAL@@
+  try {
+    @@ORIGINAL@@
+  } catch (adapterError) {
+    // 原版脚本在 $done 之前异常时不让适配器悬空（否则就是 exec timeout）
+    console.log("[YouTube Enhance/" + EG_SCRIPT + "] adapter caught: " +
+      (adapterError instanceof Error ? adapterError.stack : String(adapterError)));
+    $done(undefined);
+  }
 
   const result = await future;
   if (result == null) return undefined;
@@ -467,8 +482,10 @@ def build(name: str) -> pathlib.Path:
     # body_required + binary_body=true 决定，适配层只负责把已捕获的 body 原样交给脚本。
     adapter = (
         HEADER.replace("@@NAME@@", name)
-        + SHIM.replace("@@NAME@@", name)
-        + body.replace("@@ARGUMENT@@", ARGUMENTS[name]).replace("@@ORIGINAL@@", strip_header_fence(source))
+        + SHIM
+        + body.replace("@@SCRIPT_NAME@@", name)
+              .replace("@@ARGUMENT@@", ARGUMENTS[name])
+              .replace("@@ORIGINAL@@", strip_header_fence(source))
     )
     out = JS_DIR / f"{name}.egern.js"
     out.write_text(adapter, encoding="utf-8")

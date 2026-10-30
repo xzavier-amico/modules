@@ -17,7 +17,6 @@
  *                             / CompressionStream / DecompressionStream -> ctx.compress）
  */
 /* =========================== Surge 兼容层（生成） =========================== */
-const ctx$ = ctx;
 
 function surge$hasAPI(name) {
   try {
@@ -57,8 +56,8 @@ function surge$headersToObject(src) {
   return out;
 }
 
-/** polyfill 种子：只补充运行时缺失的 API（幂等）。 */
-function surge$installPolyfills() {
+/** polyfill 种子：只补充运行时缺失的 API（幂等）。c = Egern ctx。 */
+function surge$installPolyfills(c) {
   const g = globalThis;
 
   // Uint8Array.prototype.toBase64（key.js 使用；iOS 17.4+ JSC 自带，其他引擎按需补）
@@ -244,20 +243,20 @@ function surge$installPolyfills() {
           }
         };
       if (typeof g.CompressionStream !== "function") {
-        g.CompressionStream = makeShim("Compression", (d) => ctx$.compress.gzip(d));
+        g.CompressionStream = makeShim("Compression", (d) => c.compress.gzip(d));
       }
       if (typeof g.DecompressionStream !== "function") {
-        g.DecompressionStream = makeShim("Decompression", (d) => ctx$.compress.gunzip(d));
+        g.DecompressionStream = makeShim("Decompression", (d) => c.compress.gunzip(d));
       }
     }
   }
 }
 
 /** $argument：由 env 重建出的 JSON（脚本自带 `{{{` 防呆，未提供 env 时用其内部默认值）。 */
-function surge$buildArgument(mapping) {
+function surge$buildArgument(c, mapping) {
   const args = {};
   for (const [envKey, jsonKey] of Object.entries(mapping)) {
-    const raw = ctx$.env ? ctx$.env[envKey] : undefined;
+    const raw = c.env ? c.env[envKey] : undefined;
     if (raw === undefined || raw === "") continue;
     args[jsonKey] = String(raw).trim().toLowerCase() === "true" || raw === true;
   }
@@ -265,11 +264,11 @@ function surge$buildArgument(mapping) {
 }
 
 /** $persistentStore -> ctx.storage（Surge: write(value[, key]) => boolean）。 */
-function surge$persistentStoreObject() {
+function surge$persistentStoreObject(c) {
   return {
     read(key) {
       try {
-        const value = ctx$.storage.get(String(key));
+        const value = c.storage.get(String(key));
         return value == null ? undefined : String(value);
       } catch {
         return undefined;
@@ -277,7 +276,7 @@ function surge$persistentStoreObject() {
     },
     write(value, key) {
       try {
-        ctx$.storage.set(String(key == null ? "default" : key), String(value == null ? "" : value));
+        c.storage.set(String(key == null ? "default" : key), String(value == null ? "" : value));
         return true;
       } catch {
         return false;
@@ -317,12 +316,13 @@ async function surge$readBinary(stream) {
 }
 /* ========================= Surge 兼容层（生成）结束 ========================= */
 export default async function (ctx) {
-  surge$installPolyfills();
+  surge$installPolyfills(ctx);
+  const EG_SCRIPT = "key";
 
   // key.js 不接收参数。
   const $argument = "{}";
 
-  const $persistentStore = surge$persistentStoreObject();
+  const $persistentStore = surge$persistentStoreObject(ctx);
   const { future, $done } = surge$doneFuture();
 
   const $request = {
@@ -337,7 +337,14 @@ export default async function (ctx) {
     body: ctx.response.body == null ? undefined : await surge$readBinary(ctx.response.body),
   };
 
-(()=>{const e="YouTubeConfig";function t(e,t,r=!1){let n;for(const o of function(e){const t=[];let r=0;function n(){let t=0,n=1;for(let o=0;o<5;o++){if(r>=e.length)throw new Error("Truncated protobuf varint");const o=e[r++];if(t+=(127&o)*n,!(128&o)){if(t>4294967295)throw new Error("Protobuf length/tag overflow");return t}n*=128}throw new Error("Invalid protobuf varint")}for(;r<e.length;){const o=r,i=n(),l=Math.floor(i/8),s=i%8;if(!l)throw new Error("Invalid protobuf field");let c=r;if(2===s){const e=n();c=r,r+=e}else if(1===s)r+=8;else if(5===s)r+=4;else{if(0!==s)throw new Error("Unsupported protobuf wire type "+s);{let t,n=0;do{if(r>=e.length||10===n++)throw new Error("Invalid protobuf integer");if(t=e[r++],10===n&&t>1)throw new Error("Protobuf integer overflow")}while(128&t)}}if(r>e.length)throw new Error("Truncated protobuf field");t.push({no:l,wire:s,data:e.subarray(c,r),raw:e.subarray(o,r)})}return t}(e))if(o.no===t&&2===o.wire){if(!r)return o.data;if(n)return;n=o.data}return n}!function(){try{const o=$request.url.split("?")[0].split("/youtubei/v1/")[1];if("config"!==o&&"log_event"!==o||!$response.body?.length)return $done();let i=$response.body;for(const e of[1,16,7,138536474,146311580])if(i=t(i,e,!0),!i)return $done();const l=t(i,1,!0),s=t(i,2,!0);if(l?.length&&s?.length&&l.length<=4096&&s.length<=4096){const t=(n=$request,Object.entries(n.headers??{}).some(([e,t])=>"user-agent"===e.toLowerCase()&&/music/i.test(t))?"youtubeMusic":"youtube"),o=function(t=e,r=1/0){const n=$persistentStore.read(t);if("string"==typeof n&&n.length>r)return{};try{const e=JSON.parse(n||"{}");return e&&"object"==typeof e&&!Array.isArray(e)?e:{}}catch{return{}}}(),i={clientKey:l.toBase64(),encryptKey:s.toBase64()};if(o[t]?.clientKey!==i.clientKey||o[t]?.encryptKey!==i.encryptKey){const n=(r=o[t],r?[r,...Array.isArray(r.previous)?r.previous.slice(0,3):[]].filter(e=>e&&"string"==typeof e.clientKey&&"string"==typeof e.encryptKey&&e.clientKey.length>0&&e.clientKey.length<=5500&&e.encryptKey.length>0&&e.encryptKey.length<=5500):[]).filter(e=>e.clientKey!==i.clientKey||e.encryptKey!==i.encryptKey).slice(0,3).map(({clientKey:e,encryptKey:t})=>({clientKey:e,encryptKey:t}));n.length&&(i.previous=n),o[t]=i,function(t,r=e){return $persistentStore.write(JSON.stringify(t),r)}(o)||console.log("YouTube key write failed")}}$done()}catch(e){console.log("YouTube keys: "+e),$done()}var r,n}()})();
+  try {
+    (()=>{const e="YouTubeConfig";function t(e,t,r=!1){let n;for(const o of function(e){const t=[];let r=0;function n(){let t=0,n=1;for(let o=0;o<5;o++){if(r>=e.length)throw new Error("Truncated protobuf varint");const o=e[r++];if(t+=(127&o)*n,!(128&o)){if(t>4294967295)throw new Error("Protobuf length/tag overflow");return t}n*=128}throw new Error("Invalid protobuf varint")}for(;r<e.length;){const o=r,i=n(),l=Math.floor(i/8),s=i%8;if(!l)throw new Error("Invalid protobuf field");let c=r;if(2===s){const e=n();c=r,r+=e}else if(1===s)r+=8;else if(5===s)r+=4;else{if(0!==s)throw new Error("Unsupported protobuf wire type "+s);{let t,n=0;do{if(r>=e.length||10===n++)throw new Error("Invalid protobuf integer");if(t=e[r++],10===n&&t>1)throw new Error("Protobuf integer overflow")}while(128&t)}}if(r>e.length)throw new Error("Truncated protobuf field");t.push({no:l,wire:s,data:e.subarray(c,r),raw:e.subarray(o,r)})}return t}(e))if(o.no===t&&2===o.wire){if(!r)return o.data;if(n)return;n=o.data}return n}!function(){try{const o=$request.url.split("?")[0].split("/youtubei/v1/")[1];if("config"!==o&&"log_event"!==o||!$response.body?.length)return $done();let i=$response.body;for(const e of[1,16,7,138536474,146311580])if(i=t(i,e,!0),!i)return $done();const l=t(i,1,!0),s=t(i,2,!0);if(l?.length&&s?.length&&l.length<=4096&&s.length<=4096){const t=(n=$request,Object.entries(n.headers??{}).some(([e,t])=>"user-agent"===e.toLowerCase()&&/music/i.test(t))?"youtubeMusic":"youtube"),o=function(t=e,r=1/0){const n=$persistentStore.read(t);if("string"==typeof n&&n.length>r)return{};try{const e=JSON.parse(n||"{}");return e&&"object"==typeof e&&!Array.isArray(e)?e:{}}catch{return{}}}(),i={clientKey:l.toBase64(),encryptKey:s.toBase64()};if(o[t]?.clientKey!==i.clientKey||o[t]?.encryptKey!==i.encryptKey){const n=(r=o[t],r?[r,...Array.isArray(r.previous)?r.previous.slice(0,3):[]].filter(e=>e&&"string"==typeof e.clientKey&&"string"==typeof e.encryptKey&&e.clientKey.length>0&&e.clientKey.length<=5500&&e.encryptKey.length>0&&e.encryptKey.length<=5500):[]).filter(e=>e.clientKey!==i.clientKey||e.encryptKey!==i.encryptKey).slice(0,3).map(({clientKey:e,encryptKey:t})=>({clientKey:e,encryptKey:t}));n.length&&(i.previous=n),o[t]=i,function(t,r=e){return $persistentStore.write(JSON.stringify(t),r)}(o)||console.log("YouTube key write failed")}}$done()}catch(e){console.log("YouTube keys: "+e),$done()}var r,n}()})();
+  } catch (adapterError) {
+    // 原版脚本在 $done 之前异常时不让适配器悬空（否则就是 exec timeout）
+    console.log("[YouTube Enhance/" + EG_SCRIPT + "] adapter caught: " +
+      (adapterError instanceof Error ? adapterError.stack : String(adapterError)));
+    $done(undefined);
+  }
 
   const result = await future;
   if (result == null) return undefined;

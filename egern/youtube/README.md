@@ -10,6 +10,8 @@
 ├── youtube-enhance.yaml        # Egern 模块（引用主对应文件，script_url 指向 js/ 下的相对路径）
 ├── README.md                   # 本说明
 ├── build_adapters.py           # 适配器生成器（升级原版脚本后重跑 python3 build_adapters.py）
+├── icon/
+│   └── YouTube.png             # 模块图标本地备份（yaml 中的 icon 用其 GitHub raw URL）
 └── js/
     ├── request.js              # Surge 原版脚本（保留备查，勿改）
     ├── response.js

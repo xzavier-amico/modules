@@ -17,7 +17,6 @@
  *                             / CompressionStream / DecompressionStream -> ctx.compress）
  */
 /* =========================== Surge 兼容层（生成） =========================== */
-const ctx$ = ctx;
 
 function surge$hasAPI(name) {
   try {
@@ -57,8 +56,8 @@ function surge$headersToObject(src) {
   return out;
 }
 
-/** polyfill 种子：只补充运行时缺失的 API（幂等）。 */
-function surge$installPolyfills() {
+/** polyfill 种子：只补充运行时缺失的 API（幂等）。c = Egern ctx。 */
+function surge$installPolyfills(c) {
   const g = globalThis;
 
   // Uint8Array.prototype.toBase64（key.js 使用；iOS 17.4+ JSC 自带，其他引擎按需补）
@@ -244,20 +243,20 @@ function surge$installPolyfills() {
           }
         };
       if (typeof g.CompressionStream !== "function") {
-        g.CompressionStream = makeShim("Compression", (d) => ctx$.compress.gzip(d));
+        g.CompressionStream = makeShim("Compression", (d) => c.compress.gzip(d));
       }
       if (typeof g.DecompressionStream !== "function") {
-        g.DecompressionStream = makeShim("Decompression", (d) => ctx$.compress.gunzip(d));
+        g.DecompressionStream = makeShim("Decompression", (d) => c.compress.gunzip(d));
       }
     }
   }
 }
 
 /** $argument：由 env 重建出的 JSON（脚本自带 `{{{` 防呆，未提供 env 时用其内部默认值）。 */
-function surge$buildArgument(mapping) {
+function surge$buildArgument(c, mapping) {
   const args = {};
   for (const [envKey, jsonKey] of Object.entries(mapping)) {
-    const raw = ctx$.env ? ctx$.env[envKey] : undefined;
+    const raw = c.env ? c.env[envKey] : undefined;
     if (raw === undefined || raw === "") continue;
     args[jsonKey] = String(raw).trim().toLowerCase() === "true" || raw === true;
   }
@@ -265,11 +264,11 @@ function surge$buildArgument(mapping) {
 }
 
 /** $persistentStore -> ctx.storage（Surge: write(value[, key]) => boolean）。 */
-function surge$persistentStoreObject() {
+function surge$persistentStoreObject(c) {
   return {
     read(key) {
       try {
-        const value = ctx$.storage.get(String(key));
+        const value = c.storage.get(String(key));
         return value == null ? undefined : String(value);
       } catch {
         return undefined;
@@ -277,7 +276,7 @@ function surge$persistentStoreObject() {
     },
     write(value, key) {
       try {
-        ctx$.storage.set(String(key == null ? "default" : key), String(value == null ? "" : value));
+        c.storage.set(String(key == null ? "default" : key), String(value == null ? "" : value));
         return true;
       } catch {
         return false;
@@ -317,13 +316,14 @@ async function surge$readBinary(stream) {
 }
 /* ========================= Surge 兼容层（生成）结束 ========================= */
 export default async function (ctx) {
-  surge$installPolyfills();
+  surge$installPolyfills(ctx);
+  const EG_SCRIPT = "request";
 
   // 仅供 init / auto-hd 两个入口使用（request.js 内部只读取 autoHd）；
   // ad-break / log-event 入口 yaml 中不注入 env => 回落 "{}"（脚本使用内部默认）。
   const $argument = surge$buildArgument({ AUTO_HD: "autoHd" });
 
-  const $persistentStore = surge$persistentStoreObject();
+  const $persistentStore = surge$persistentStoreObject(ctx);
   const { future, $done } = surge$doneFuture();
 
   const $request = {
@@ -334,7 +334,14 @@ export default async function (ctx) {
   };
   const $response = undefined;
 
-(()=>{const e="YouTubeConfig";function t(t=e,r=1/0){const n=$persistentStore.read(t);if("string"==typeof n&&n.length>r)return{};try{const e=JSON.parse(n||"{}");return e&&"object"==typeof e&&!Array.isArray(e)?e:{}}catch{return{}}}function r(e){const t=new Uint8Array(e.reduce((e,t)=>e+t.length,0));let r=0;for(const n of e)t.set(n,r),r+=n.length;return t}function n(e,t){return e===t||e.length===t.length&&e.every((e,r)=>e===t[r])}function o(e){const t=[];do{t.push(e%128|(e>127?128:0)),e=Math.floor(e/128)}while(e);return new Uint8Array(t)}function i(e){const t=[];let r=0;function n(){let t=0,n=1;for(let o=0;o<5;o++){if(r>=e.length)throw new Error("Truncated protobuf varint");const o=e[r++];if(t+=(127&o)*n,!(128&o)){if(t>4294967295)throw new Error("Protobuf length/tag overflow");return t}n*=128}throw new Error("Invalid protobuf varint")}for(;r<e.length;){const o=r,i=n(),s=Math.floor(i/8),u=i%8;if(!s)throw new Error("Invalid protobuf field");let a=r;if(2===u){const e=n();a=r,r+=e}else if(1===u)r+=8;else if(5===u)r+=4;else{if(0!==u)throw new Error("Unsupported protobuf wire type "+u);{let t,n=0;do{if(r>=e.length||10===n++)throw new Error("Invalid protobuf integer");if(t=e[r++],10===n&&t>1)throw new Error("Protobuf integer overflow")}while(128&t)}}if(r>e.length)throw new Error("Truncated protobuf field");t.push({no:s,wire:u,data:e.subarray(a,r),raw:e.subarray(o,r)})}return t}function s(e){let t=0,r=1;for(const n of e)t+=(127&n)*r,r*=128;return t}function u(e={}){return"string"!=typeof $argument||$argument.includes("{{{")?e:{...e,...JSON.parse($argument)}}function a(e){return Object.entries(e.headers??{}).some(([e,t])=>"user-agent"===e.toLowerCase()&&/music/i.test(t))?"youtubeMusic":"youtube"}function f(e,t,r=!1){let n;for(const o of i(e))if(o.no===t&&2===o.wire){if(!r)return o.data;if(n)return;n=o.data}return n}function c(e){const t=e.replace(/[-_\s=]/g,e=>"-"===e?"+":"_"===e?"/":""),r=t.length%4==1,n=Uint8Array.fromBase64(r?t+"A":t);return r?n.subarray(0,-1):n}function h(e,t){const n=new Map(t?[[13,0],[14,2],[16,t.height],[21,t.height],[26,3],[30,0]]:[[16,4320],[26,1],[30,0]]),u=new Set,a=[];let f=!1;for(const t of i(e)){const e=0===t.wire?n.get(t.no):void 0;void 0!==e?(s(t.data)===e?a.push(t.raw):(a.push(o(8*t.no),o(e)),f=!0),u.add(t.no)):a.push(t.raw)}for(const[e,t]of n)u.has(e)||(a.push(o(8*e),o(t)),f=!0);return f?r(a):e}function l(e){const t=e.body;if(ArrayBuffer.isView(t))return new Uint8Array(t.buffer,t.byteOffset,t.byteLength);if(t?.length)throw new Error("YouTube requires binary-body-mode for request bodies");const r=Object.entries(e.headers??{}).find(([e])=>"content-length"===e.toLowerCase())?.[1];if(Number(r)>0)throw new Error("YouTube request body unavailable; requires-body must be enabled")}function g(){return{response:{status:200,headers:{"Content-Type":"application/x-protobuf"},body:new Uint8Array}}}!function(){let d;try{let y;if(d=$request.url.split("?")[0],d.endsWith("/player/ad_break"))y=g();else if(d.endsWith("/log_event"))y=function(e){const r=Object.keys(e.headers??{}).filter(e=>"x-youtube-hot-hash-data"===e.toLowerCase());if(!r.length||t()[a(e)]?.clientKey)return;const n={...e.headers};for(const e of r)delete n[e];return{headers:n}}($request);else if(d.endsWith("/initplayback")){if("GET"!==$request.method&&"HEAD"!==$request.method){const s=l($request);if(y=function(r,o){if(void 0===r||0===r.length)return;const i=t()[o],s=f(r,3),u=s&&f(s,5);if(!u?.length)return g();for(const e of(a=i)?[a,...Array.isArray(a.previous)?a.previous.slice(0,3):[]].filter(e=>e&&"string"==typeof e.clientKey&&"string"==typeof e.encryptKey&&e.clientKey.length>0&&e.clientKey.length<=5500&&e.encryptKey.length>0&&e.encryptKey.length<=5500):[])try{if(n(u,c(e.encryptKey)))return}catch{}var a;return function(r,n){if(void 0===r||void 0===n)return;const o=t();if(!Object.hasOwn(o,r))return;const i=o[r],s=n;JSON.stringify(i)===JSON.stringify(s)&&(delete o[r],function(t,r=e){$persistentStore.write(JSON.stringify(t),r)}(o))}(o,i),g()}(s,a($request)),!y&&s?.length&&!1!==u().autoHd){const e=function(e){const t=i(e),n=t.filter(e=>2===e.no&&2===e.wire);if(1!==n.length)return e;const s=n[0],u=h(s.data,void 0);return u===s.data?e:r(t.map(e=>e===s?r([o(18),o(u.length),u]):e.raw))}(s);e!==s&&(y={body:e})}}}else if(d.endsWith("/videoplayback")){const e=!1===u().autoHd?void 0:l($request);if(e?.length){const u=function(e,u){const a=i(e),c=function(e,r){try{const n=/[?&]id=([^&]+)/.exec(r);if(!n)return;const o=e.find(e=>5===e.no&&2===e.wire),u=o&&f(o.data,1);if(!u?.length)return;const a=t("YouTubeQuality",65536)?.[decodeURIComponent(n[1])];if(!function(e){const t=e;return!!(t&&"object"==typeof t&&!Array.isArray(t)&&Number.isInteger(t.height)&&t.height>0&&t.height<=2147483647&&Array.isArray(t.itags)&&t.itags.length>0&&t.itags.length<=256&&t.itags.every(e=>Number.isInteger(e)&&e>0&&e<=4294967295)&&new Set(t.itags).size===t.itags.length&&(void 0===t.premiumItags||Array.isArray(t.premiumItags)&&t.premiumItags.length<=t.itags.length&&new Set(t.premiumItags).size===t.premiumItags.length&&t.premiumItags.every(e=>t.itags.includes(e))))}(a))return;const c=[],h=[];for(const e of i(u)){if(6!==e.no||2!==e.wire)continue;const t=i(e.data).find(e=>1===e.no&&0===e.wire);if(!t)continue;const r=s(t.data);a.itags.includes(r)&&(c.push(e.data),a.premiumItags?.includes(r)&&h.push(e.data))}return c.length?{height:a.height,formats:h.length?h:c}:void 0}catch{return}}(a,u),l=a.filter(e=>17===e.no&&2===e.wire),g=c&&(l.length!==c.formats.length||l.some((e,t)=>!n(e.data,c.formats[t]))),d=[];let y=!1,p=!!g;for(const e of a)if(1===e.no&&2===e.wire){const t=h(e.data,c);t===e.data?d.push(e.raw):(d.push(o(10),o(t.length),t),p=!0),y=!0}else{if(g&&17===e.no&&2===e.wire)continue;d.push(e.raw)}if(!y){const e=h(new Uint8Array,c);d.push(o(10),o(e.length),e),p=!0}if(g)for(const e of c.formats)d.push(o(138),o(e.length),e);return p?r(d):e}(e,$request.url);u!==e&&(y={body:u})}}$done(y)}catch(e){console.log("YouTube request: "+e),d?.endsWith("/initplayback")?$done(g()):$done()}}()})();
+  try {
+    (()=>{const e="YouTubeConfig";function t(t=e,r=1/0){const n=$persistentStore.read(t);if("string"==typeof n&&n.length>r)return{};try{const e=JSON.parse(n||"{}");return e&&"object"==typeof e&&!Array.isArray(e)?e:{}}catch{return{}}}function r(e){const t=new Uint8Array(e.reduce((e,t)=>e+t.length,0));let r=0;for(const n of e)t.set(n,r),r+=n.length;return t}function n(e,t){return e===t||e.length===t.length&&e.every((e,r)=>e===t[r])}function o(e){const t=[];do{t.push(e%128|(e>127?128:0)),e=Math.floor(e/128)}while(e);return new Uint8Array(t)}function i(e){const t=[];let r=0;function n(){let t=0,n=1;for(let o=0;o<5;o++){if(r>=e.length)throw new Error("Truncated protobuf varint");const o=e[r++];if(t+=(127&o)*n,!(128&o)){if(t>4294967295)throw new Error("Protobuf length/tag overflow");return t}n*=128}throw new Error("Invalid protobuf varint")}for(;r<e.length;){const o=r,i=n(),s=Math.floor(i/8),u=i%8;if(!s)throw new Error("Invalid protobuf field");let a=r;if(2===u){const e=n();a=r,r+=e}else if(1===u)r+=8;else if(5===u)r+=4;else{if(0!==u)throw new Error("Unsupported protobuf wire type "+u);{let t,n=0;do{if(r>=e.length||10===n++)throw new Error("Invalid protobuf integer");if(t=e[r++],10===n&&t>1)throw new Error("Protobuf integer overflow")}while(128&t)}}if(r>e.length)throw new Error("Truncated protobuf field");t.push({no:s,wire:u,data:e.subarray(a,r),raw:e.subarray(o,r)})}return t}function s(e){let t=0,r=1;for(const n of e)t+=(127&n)*r,r*=128;return t}function u(e={}){return"string"!=typeof $argument||$argument.includes("{{{")?e:{...e,...JSON.parse($argument)}}function a(e){return Object.entries(e.headers??{}).some(([e,t])=>"user-agent"===e.toLowerCase()&&/music/i.test(t))?"youtubeMusic":"youtube"}function f(e,t,r=!1){let n;for(const o of i(e))if(o.no===t&&2===o.wire){if(!r)return o.data;if(n)return;n=o.data}return n}function c(e){const t=e.replace(/[-_\s=]/g,e=>"-"===e?"+":"_"===e?"/":""),r=t.length%4==1,n=Uint8Array.fromBase64(r?t+"A":t);return r?n.subarray(0,-1):n}function h(e,t){const n=new Map(t?[[13,0],[14,2],[16,t.height],[21,t.height],[26,3],[30,0]]:[[16,4320],[26,1],[30,0]]),u=new Set,a=[];let f=!1;for(const t of i(e)){const e=0===t.wire?n.get(t.no):void 0;void 0!==e?(s(t.data)===e?a.push(t.raw):(a.push(o(8*t.no),o(e)),f=!0),u.add(t.no)):a.push(t.raw)}for(const[e,t]of n)u.has(e)||(a.push(o(8*e),o(t)),f=!0);return f?r(a):e}function l(e){const t=e.body;if(ArrayBuffer.isView(t))return new Uint8Array(t.buffer,t.byteOffset,t.byteLength);if(t?.length)throw new Error("YouTube requires binary-body-mode for request bodies");const r=Object.entries(e.headers??{}).find(([e])=>"content-length"===e.toLowerCase())?.[1];if(Number(r)>0)throw new Error("YouTube request body unavailable; requires-body must be enabled")}function g(){return{response:{status:200,headers:{"Content-Type":"application/x-protobuf"},body:new Uint8Array}}}!function(){let d;try{let y;if(d=$request.url.split("?")[0],d.endsWith("/player/ad_break"))y=g();else if(d.endsWith("/log_event"))y=function(e){const r=Object.keys(e.headers??{}).filter(e=>"x-youtube-hot-hash-data"===e.toLowerCase());if(!r.length||t()[a(e)]?.clientKey)return;const n={...e.headers};for(const e of r)delete n[e];return{headers:n}}($request);else if(d.endsWith("/initplayback")){if("GET"!==$request.method&&"HEAD"!==$request.method){const s=l($request);if(y=function(r,o){if(void 0===r||0===r.length)return;const i=t()[o],s=f(r,3),u=s&&f(s,5);if(!u?.length)return g();for(const e of(a=i)?[a,...Array.isArray(a.previous)?a.previous.slice(0,3):[]].filter(e=>e&&"string"==typeof e.clientKey&&"string"==typeof e.encryptKey&&e.clientKey.length>0&&e.clientKey.length<=5500&&e.encryptKey.length>0&&e.encryptKey.length<=5500):[])try{if(n(u,c(e.encryptKey)))return}catch{}var a;return function(r,n){if(void 0===r||void 0===n)return;const o=t();if(!Object.hasOwn(o,r))return;const i=o[r],s=n;JSON.stringify(i)===JSON.stringify(s)&&(delete o[r],function(t,r=e){$persistentStore.write(JSON.stringify(t),r)}(o))}(o,i),g()}(s,a($request)),!y&&s?.length&&!1!==u().autoHd){const e=function(e){const t=i(e),n=t.filter(e=>2===e.no&&2===e.wire);if(1!==n.length)return e;const s=n[0],u=h(s.data,void 0);return u===s.data?e:r(t.map(e=>e===s?r([o(18),o(u.length),u]):e.raw))}(s);e!==s&&(y={body:e})}}}else if(d.endsWith("/videoplayback")){const e=!1===u().autoHd?void 0:l($request);if(e?.length){const u=function(e,u){const a=i(e),c=function(e,r){try{const n=/[?&]id=([^&]+)/.exec(r);if(!n)return;const o=e.find(e=>5===e.no&&2===e.wire),u=o&&f(o.data,1);if(!u?.length)return;const a=t("YouTubeQuality",65536)?.[decodeURIComponent(n[1])];if(!function(e){const t=e;return!!(t&&"object"==typeof t&&!Array.isArray(t)&&Number.isInteger(t.height)&&t.height>0&&t.height<=2147483647&&Array.isArray(t.itags)&&t.itags.length>0&&t.itags.length<=256&&t.itags.every(e=>Number.isInteger(e)&&e>0&&e<=4294967295)&&new Set(t.itags).size===t.itags.length&&(void 0===t.premiumItags||Array.isArray(t.premiumItags)&&t.premiumItags.length<=t.itags.length&&new Set(t.premiumItags).size===t.premiumItags.length&&t.premiumItags.every(e=>t.itags.includes(e))))}(a))return;const c=[],h=[];for(const e of i(u)){if(6!==e.no||2!==e.wire)continue;const t=i(e.data).find(e=>1===e.no&&0===e.wire);if(!t)continue;const r=s(t.data);a.itags.includes(r)&&(c.push(e.data),a.premiumItags?.includes(r)&&h.push(e.data))}return c.length?{height:a.height,formats:h.length?h:c}:void 0}catch{return}}(a,u),l=a.filter(e=>17===e.no&&2===e.wire),g=c&&(l.length!==c.formats.length||l.some((e,t)=>!n(e.data,c.formats[t]))),d=[];let y=!1,p=!!g;for(const e of a)if(1===e.no&&2===e.wire){const t=h(e.data,c);t===e.data?d.push(e.raw):(d.push(o(10),o(t.length),t),p=!0),y=!0}else{if(g&&17===e.no&&2===e.wire)continue;d.push(e.raw)}if(!y){const e=h(new Uint8Array,c);d.push(o(10),o(e.length),e),p=!0}if(g)for(const e of c.formats)d.push(o(138),o(e.length),e);return p?r(d):e}(e,$request.url);u!==e&&(y={body:u})}}$done(y)}catch(e){console.log("YouTube request: "+e),d?.endsWith("/initplayback")?$done(g()):$done()}}()})();
+  } catch (adapterError) {
+    // 原版脚本在 $done 之前异常时不让适配器悬空（否则就是 exec timeout）
+    console.log("[YouTube Enhance/" + EG_SCRIPT + "] adapter caught: " +
+      (adapterError instanceof Error ? adapterError.stack : String(adapterError)));
+    $done(undefined);
+  }
 
   const result = await future;
   if (result == null) return undefined;
