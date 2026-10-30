@@ -883,7 +883,7 @@
                     return g ? [g] : []
                 }
                 return []
-            }(o, n)), $done(e(n, a) ? {body: B.toBinary(n)} : void 0)
+            }(o, n)), $done(e(n, a) ? {body: B.toBinary(n)} : {})
         } catch (g) {
             console.log("YouTube response: " + g), $done({})
         }
