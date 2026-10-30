@@ -215,7 +215,7 @@
                     u !== e && (y = {body: u})
                 }
             }
-            $done(y)
+            $done(y ?? {})
         } catch (e) {
             console.log("YouTube request: " + e), d?.endsWith("/initplayback") ? $done(g()) : $done({})
         }
