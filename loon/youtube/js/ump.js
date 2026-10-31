@@ -1133,7 +1133,17 @@
             }
             if (!K.length) throw B = void 0 !== C, new Error("YouTubeConfig requires a valid stored clientKey");
             const s = function (g = {}) {
-                return "string" != typeof $argument || $argument.includes("{{{") ? g : {...g, ...JSON.parse($argument)}
+                if (typeof $argument === "string") {
+                    if ($argument.includes("{{{")) return g;
+                    try { return {...g, ...JSON.parse($argument)}; } catch { return g; }
+                }
+                if ($argument && typeof $argument === "object") {
+                    const __m = {block_upload:"blockUpload", block_shorts:"blockShorts", auto_hd:"autoHd", block_games:"blockGames", block_vertical_live:"blockVerticalLive", jump_ahead:"jumpAhead", block_store:"blockStore", block_ai:"blockAi", on_the_go:"onTheGo"};
+                    const __o = {};
+                    for (const [__k, __v] of Object.entries($argument)) __o[__m[__k] || __k] = __v;
+                    return {...g, ...__o};
+                }
+                return g
             }({blockGames: !0}), c = await hg($response.body, K, s);
             !1 !== s.autoHd && function (A) {
                 if (!A.length) return;

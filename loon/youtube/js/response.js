@@ -801,7 +801,17 @@
             const A = $request.url.split("?")[0].split("/youtubei/v1/")[1], C = Object.hasOwn(ng, A) && ng[A];
             if (!C || Number($response.status) >= 300 || !$response.body?.length || $response.body.length > 5242880) return $done({});
             const [o, e] = C, B = og(o), n = B.fromBinary($response.body), a = function (g = {}) {
-                return "string" != typeof $argument || $argument.includes("{{{") ? g : {...g, ...JSON.parse($argument)}
+                if (typeof $argument === "string") {
+                    if ($argument.includes("{{{")) return g;
+                    try { return {...g, ...JSON.parse($argument)}; } catch { return g; }
+                }
+                if ($argument && typeof $argument === "object") {
+                    const __m = {block_upload:"blockUpload", block_shorts:"blockShorts", auto_hd:"autoHd", block_games:"blockGames", block_vertical_live:"blockVerticalLive", jump_ahead:"jumpAhead", block_store:"blockStore", block_ai:"blockAi", on_the_go:"onTheGo"};
+                    const __o = {};
+                    for (const [__k, __v] of Object.entries($argument)) __o[__m[__k] || __k] = __v;
+                    return {...g, ...__o};
+                }
+                return g
             }({blockUpload: !0, blockShorts: !1});
             !1 !== a.autoHd && function (A) {
                 if (!A.length) return;
