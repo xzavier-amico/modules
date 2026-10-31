@@ -1,0 +1,361 @@
+#=======================================================================================
+# HTTPDNS Block — Egern 模块
+# 阻止常见的 HTTPDNS 服务器
+# 来源: VirgilClyne/GetSomeFries
+#=======================================================================================
+
+name: "HTTPDNS Block"
+description: "阻止常见的 HTTPDNS 服务器。"
+author: "VirgilClyne"
+homepage: "https://github.com/VirgilClyne/GetSomeFries"
+icon: "https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Reject.png"
+
+rules:
+  - domain:
+      match: "httpdns.alicdn.com"
+      policy: REJECT
+  - domain:
+      match: "httpdns-api.aliyuncs.com"
+      policy: REJECT
+  - domain:
+      match: "httpdns-sc.aliyuncs.com"
+      policy: REJECT
+  - domain:
+      match: "resolvers-cn.httpdns.aliyuncs.com"
+      policy: REJECT
+  - ip_cidr:
+      match: "203.107.1.0/24"
+      policy: REJECT
+      no_resolve: true
+  - domain:
+      match: "httpsdns.baidu.com"
+      policy: REJECT
+  - domain:
+      match: "httpdns.baidu.com"
+      policy: REJECT
+  - ip_cidr:
+      match: "180.76.76.112/32"
+      policy: REJECT
+      no_resolve: true
+  - domain:
+      match: "httpdns.baidubce.com"
+      policy: REJECT
+  - domain:
+      match: "httpdns.bcelive.com"
+      policy: REJECT
+  - ip_cidr:
+      match: "180.76.76.200/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "180.76.76.220/32"
+      policy: REJECT
+      no_resolve: true
+  - domain:
+      match: "httpdns.bilivideo.com"
+      policy: REJECT
+  - domain:
+      match: "httpdns.c.cdnhwc2.com"
+      policy: REJECT
+  - domain:
+      match: "doh.iqiyi.com"
+      policy: REJECT
+  - domain:
+      match: "dns.jd.com"
+      policy: REJECT
+  - ip_cidr:
+      match: "101.124.19.122/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr6:
+      match: "2402:db40:5100:1011::5/128"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "103.224.222.208/32"
+      policy: REJECT
+      no_resolve: true
+  - domain:
+      match: "httpdns.calorietech.com"
+      policy: REJECT
+  - domain:
+      match: "httpdns.kg.qq.com"
+      policy: REJECT
+  - domain:
+      match: "httpdns.meituan.com"
+      policy: REJECT
+  - domain:
+      match: "httpdnsmultiapi.meituan.com"
+      policy: REJECT
+  - domain:
+      match: "httpdnsmultiapivip.meituan.com"
+      policy: REJECT
+  - domain:
+      match: "dnspod.meituan.httpdns.qcloud.com"
+      policy: REJECT
+  - domain:
+      match: "dnspod.meituan.httpdns.start.qcloud.com"
+      policy: REJECT
+  - ip_cidr:
+      match: "202.90.108.13/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "202.90.110.46/32"
+      policy: REJECT
+      no_resolve: true
+  - domain:
+      match: "httpdns.immomo.com"
+      policy: REJECT
+  - domain:
+      match: "httpdns.yunxinfw.com"
+      policy: REJECT
+  - domain:
+      match: "httpdns.yunxindns.com"
+      policy: REJECT
+  - domain:
+      match: "httpdns.n.netease.com"
+      policy: REJECT
+  - domain:
+      match: "httpdns-sdk.n.netease.com"
+      policy: REJECT
+  - domain:
+      match: "httpdns.music.163.com"
+      policy: REJECT
+  - domain:
+      match: "music.httpdns.c.163.com"
+      policy: REJECT
+  - domain:
+      match: "lofter.httpdns.c.163.com"
+      policy: REJECT
+  - ip_cidr:
+      match: "59.111.239.61/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "59.111.239.62/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "115.236.121.51/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "115.236.121.195/32"
+      policy: REJECT
+      no_resolve: true
+  - domain:
+      match: "httpdns.ocloud.oppomobile.com"
+      policy: REJECT
+  - domain:
+      match: "httpdns.push.oppomobile.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "httpdns.pro"
+      policy: REJECT
+  - ip_cidr:
+      match: "119.29.29.98/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "119.29.29.99/32"
+      policy: REJECT
+      no_resolve: true
+  - domain:
+      match: "httpdns.volcengineapi.com"
+      policy: REJECT
+  - domain:
+      match: "dns.weibo.cn"
+      policy: REJECT
+  - ip_cidr:
+      match: "39.97.128.148/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "39.97.130.51/32"
+      policy: REJECT
+      no_resolve: true
+  - domain:
+      match: "aedns.weixin.qq.com"
+      policy: REJECT
+  - domain:
+      match: "dns.weixin.qq.com"
+      policy: REJECT
+  - domain:
+      match: "dns.weixin.qq.com.cn"
+      policy: REJECT
+  - ip_cidr:
+      match: "42.81.232.18/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "42.187.182.106/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "42.187.182.123/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "42.187.184.154/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "123.151.54.50/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr6:
+      match: "2402:4e00:1900:1700:0:9554:1ad9:c3a/128"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr6:
+      match: "240e:928:1400:10::25/128"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "182.254.116.117/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "182.254.118.119/32"
+      policy: REJECT
+      no_resolve: true
+  - domain:
+      match: "yuyin-httpdns.gslb.yy.com"
+      policy: REJECT
+  - ip_cidr:
+      match: "118.89.204.198/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr6:
+      match: "2402:4e00:1200:ed00:0:9089:6dac:96b6/128"
+      policy: REJECT
+      no_resolve: true
+
+url_rewrites:
+  - match: "^https?:\\/\\/110\\.76\\.8\\.150\\/squery"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/203\\.209\\.230\\.39\\/squery"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/203\\.209\\.245\\.102\\/squery"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/203\\.209\\.245\\.158\\/squery"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/203\\.209\\.247\\.95\\/squery"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/203\\.209\\.250\\.41\\/squery"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/203\\.209\\.250\\.114\\/squery"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/203\\.209\\.251\\.147\\/squery"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/2400:B180:6001::18F\\/squery"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/2400:B200:1005:3000::155\\/squery"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/2400:B200:1005:3000::1D3\\/squery"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/2400:B200:5000:B000::C8\\/squery"
+    location: "http://reject/"
+  - match: "^http:\\/\\/180\\.76\\.76\\.112\\/v4\\/resolve"
+    location: "http://reject/"
+  - match: "^http:\\/\\/180\\.76\\.76\\.220\\/v4\\/resolve"
+    location: "http://reject/"
+  - match: "^http:\\/\\/47\\.101\\.175\\.206\\/resolve"
+    location: "http://reject/"
+  - match: "^http:\\/\\/47\\.100\\.123\\.169\\/resolve"
+    location: "http://reject/"
+  - match: "^http:\\/\\/120\\.46\\.169\\.234\\/resolve"
+    location: "http://reject/"
+  - match: "^http:\\/\\/121\\.36\\.72\\.124\\/resolve"
+    location: "http://reject/"
+  - match: "^http:\\/\\/116\\.63\\.10\\.135\\/resolve"
+    location: "http://reject/"
+  - match: "^http:\\/\\/122\\.9\\.7\\.134\\/resolve"
+    location: "http://reject/"
+  - match: "^http:\\/\\/117\\.185\\.228\\.108\\/resolve"
+    location: "http://reject/"
+  - match: "^http:\\/\\/117\\.144\\.238\\.29\\/resolve"
+    location: "http://reject/"
+  - match: "^http:\\/\\/122\\.9\\.13\\.79\\/resolve"
+    location: "http://reject/"
+  - match: "^http:\\/\\/122\\.9\\.15\\.129\\/resolve"
+    location: "http://reject/"
+  - match: "^http:\\/\\/101\\.91\\.140\\.224\\/resolve"
+    location: "http://reject/"
+  - match: "^http:\\/\\/101\\.91\\.140\\.124\\/resolve"
+    location: "http://reject/"
+  - match: "^http:\\/\\/114\\.116\\.215\\.110\\/resolve"
+    location: "http://reject/"
+  - match: "^http:\\/\\/116\\.63\\.10\\.31\\/resolve"
+    location: "http://reject/"
+  - match: "^http:\\/\\/112\\.64\\.218\\.119\\/resolve"
+    location: "http://reject/"
+  - match: "^http:\\/\\/112\\.65\\.200\\.117\\/resolve"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/.+\\.zijieapi\\.com\\/get_domains\\/"
+    location: "http://reject/"
+  - match: "^https:\\/\\/dns\\.jd\\.com\\/v6\\/b"
+    location: "http://reject/"
+  - match: "^http:\\/\\/103\\.37\\.155\\.60\\/fetch"
+    location: "http://reject/"
+  - match: "^http:\\/\\/101\\.35\\.204\\.35\\/d"
+    location: "http://reject/"
+  - match: "^http:\\/\\/101\\.35\\.212\\.35\\/d"
+    location: "http://reject/"
+  - match: "^http:\\/\\/114\\.110\\.96\\.26\\/d"
+    location: "http://reject/"
+  - match: "^http:\\/\\/114\\.110\\.97\\.97\\/d"
+    location: "http://reject/"
+  - match: "^http:\\/\\/240c:409f::3:0:163\\/d"
+    location: "http://reject/"
+  - match: "^http:\\/\\/240c:409f::3:0:359\\/d"
+    location: "http://reject/"
+  - match: "^http:\\/\\/2402:4e00:1411:201:0:9964:ba21:5a41\\/d"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/119\\.29\\.29\\.29\\/d"
+    location: "http://reject/"
+  - match: "^http:\\/\\/182\\.256\\.116\\.116\\/d"
+    location: "http://reject/"
+  - match: "^http:\\/\\/api\\.weibo\\.cn\\/2\\/httpdns\\/config"
+    location: "http://reject/"
+  - match: "^http:\\/\\/api\\.weibo\\.cn\\/httpdns\\/config"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/dns\\.weixin\\.qq\\.com\\/cgi-bin\\/micromsg-bin\\/newgetdns"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/dns\\.weixin\\.qq\\.com\\.cn\\/cgi-bin\\/micromsg-bin\\/newgetdns"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/short\\.weixin\\.qq\\.com\\/cgi-bin\\/micromsg-bin\\/getcdndns"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/hkextshort\\.weixin\\.qq\\.com\\/cgi-bin\\/micromsg-bin\\/getcdndns"
+    location: "http://reject/"
+  - match: "^http:\\/\\/182\\.254\\.116\\.117\\/d"
+    location: "http://reject/"
+  - match: "^http:\\/\\/182\\.254\\.118\\.119\\/d"
+    location: "http://reject/"
+  - match: "^http:\\/\\/103\\.41\\.167\\.237\\/v2\\/resolv"
+    location: "http://reject/"
+
+map_locals:
+  - match: "^https?:\\/\\/amdc\\.alipay\\.com\\/s?query"
+    status_code: 200
+    headers:
+      Content-Type: "text/json"
+    body: '{}'
+    binary: false
+  - match: "^https?:\\/\\/amdc-sibling\\.alipay\\.com\\.cn\\/s?query"
+    status_code: 200
+    headers:
+      Content-Type: "text/json"
+    body: '{}'
+    binary: false
+
+mitm:
+  hostnames:
+    includes:
+      - "119.29.29.98"
+      - "119.29.29.99"
+      - "amdc.alipay.com"
+      - "amdc-sibling.alipay.com.cn"
+      - "dns.jd.com"
+      - "*.httpdns.pro"
