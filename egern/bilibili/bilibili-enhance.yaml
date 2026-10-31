@@ -1,0 +1,821 @@
+#=======================================================================================
+# BiliBili Biliverse — Enhanced + Global + Redirect + ADBlock (merged) — Egern 模块
+#
+# 由 Biliverse 的 4 个 Surge 模块合并转换而来：
+#   Enhanced (v0.6.2) / Global (v0.9.3) / Redirect (v0.2.25) / ADBlock (v0.7.5)
+# 脚本直接引用上游 GitHub Releases 的 bundle.js（绝对 URL），无需本地托管。
+#=======================================================================================
+
+name: "BiliBili Biliverse (Enhanced+Global+Redirect+ADBlock)"
+description: "哔哩哔哩：增强 + 全球 + 重定向 + 去广告 合并模块。"
+author: "VirgilClyne et al."
+homepage: "https://biliverse.github.io/guide/"
+icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/icon/icon.png"
+
+# ---- 参数（snake_case；Surge 原始键名通过 {{{...}}} 注入到 argument JSON）----
+compat_arguments:
+  home_switch: "true"
+  home_tab: "2036,2037,780,545,151"
+  home_tab_default: "2037"
+  home_top_left: "mine"
+  home_top: "messages"
+  home_top_more: "categories,search"
+  bottom: "home,dynamic,ogv,mall,mine"
+  region_switch: "true"
+  mine_switch: "true"
+  mine_i_pad_switch: "true"
+  storage: "PersistentStore"
+  log_level: "WARN"
+  force_host: "1"
+  locales: "CHN,HKG,TWN"
+  proxies_chn: "DIRECT"
+  proxies_hkg: "🇭🇰香港"
+  proxies_mac: "🇲🇴澳门"
+  proxies_twn: "🇹🇼台湾"
+  host_oversea_video: "upos-sz-mirrorali.bilivideo.com"
+  host_b_star: "upos-sz-mirrorali.bilivideo.com"
+  host_pcdn: "upos-sz-mirrorali.bilivideo.com"
+  host_mcdn: "proxy-tf-all-ws.bilivideo.com"
+  splash: "true"
+  feed_ad: "true"
+  feed_activity: "false"
+  feed_vertical: "false"
+  feed_block_up_live_list: ""
+  feed_story: "true"
+  feed_story_commercial: "true"
+  search_ad: "true"
+  search_tracking: "false"
+  search_hot_search: "true"
+  pgc_ad: "true"
+  xlive_ad: "true"
+  xlive_remove_tracking_callbacks: "false"
+  xlive_remove_preload_tracking: "false"
+  dynamic_hot_topics: "true"
+  dynamic_most_visited: "false"
+  dynamic_most_visited_live_only: "false"
+  dynamic_ad_card: "true"
+  dynamic_personal_ad_card: "false"
+  view_ad: "true"
+  dm_command: "false"
+  dm_colorful: "false"
+  dm_airborne: "false"
+  reply_ad: "true"
+  reply_commercial_links: "false"
+  reply_subject_description_commercial: "false"
+  privacy_tracking: "true"
+  privacy_block_bili_commercial: "false"
+  privacy_block_third_party: "false"
+  privacy_strict: "false"
+
+compat_arguments_schema:
+  home_switch:
+    name: "[首页] 启用自定义功能"
+    description: "启用后可自定义首页顶栏、标签页和底部导航栏内容。标签页由分区页的快捷访问决定。"
+    options: ["true", "false"]
+  home_tab:
+    name: "[首页] 标签页"
+    description: "这里只列出常用选项；分区页提供接近60个快捷访问选项，无法在模块参数中完整列出。请前往 BiliBili App 分区页，使用原生“快捷访问”功能自定义首页标签页。"
+    options: []
+  home_tab_default:
+    name: "[首页] 默认标签页"
+    description: "请选择启动APP时默认展示的标签页，需先将该标签页加入分区页的快捷访问。"
+    options: ["2037", "2036", "780", "545", "774", "151", "801", "2280"]
+  home_top_left:
+    name: "[首页] 顶栏（左侧）按钮（用户头像）"
+    description: "请选择顶栏（左侧）按钮（用户头像）的作用（在biliBili粉色版中无法修改）。"
+    options: ["mine", "videoshortcut"]
+  home_top:
+    name: "[首页] 顶栏（右侧）按钮"
+    description: "请选择启用的顶栏（右侧）按钮。"
+    options: []
+  home_top_more:
+    name: "[首页] 标签栏右侧按钮"
+    description: "请选择启用的首页标签栏右侧按钮。"
+    options: []
+  bottom:
+    name: "[底部] 导航栏按钮"
+    description: "请选择启用的底部导航栏按钮，最多6个。"
+    options: []
+  region_switch:
+    name: "[分区] 启用此标签页自定义功能"
+    description: "启用后可自定义分区标签页的内容。"
+    options: ["true", "false"]
+  mine_switch:
+    name: "[我的] 启用此标签页自定义功能"
+    description: "启用后可自定义我的标签页的服务内容。"
+    options: ["true", "false"]
+  mine_i_pad_switch:
+    name: "[我的 iPad版] 启用此标签页自定义功能"
+    description: "启用后可自定义iPad版我的标签页的服务内容。"
+    options: ["true", "false"]
+  storage:
+    name: "[储存] 配置类型"
+    description: "默认使用 PersistentStore，配置优先级为 database -> $argument -> PersistentStore (BoxJs)；选择 Argument 时为 database -> PersistentStore (BoxJs) -> $argument。"
+    options: ["PersistentStore", "Argument", "database"]
+  log_level:
+    name: "[调试] 日志等级"
+    description: "选择脚本日志的输出等级，低于所选等级的日志将全部输出。"
+    options: ["WARN", "OFF", "ERROR", "INFO", "DEBUG", "ALL"]
+  force_host:
+    name: "强制CDN主机名类型"
+    description: "请设置强制返回的CDN主机名类型。"
+    options: ["1", "0", "2"]
+  locales:
+    name: "启用自动识别与分流功能的地区"
+    description: "请选择启用自动识别与分流功能的地区。"
+    options: []
+  proxies_chn:
+    name: "[🇨🇳中国大陆] 代理策略名称"
+    description: "请填写此地区的代理或策略组名称。"
+    options: []
+  proxies_hkg:
+    name: "[🇭🇰中国香港] 代理策略名称"
+    description: "请填写此地区的代理或策略组名称。"
+    options: []
+  proxies_mac:
+    name: "[🇲🇴中国澳门] 代理策略名称"
+    description: "请填写此地区的代理或策略组名称。"
+    options: []
+  proxies_twn:
+    name: "[🇹🇼中国台湾] 代理策略名称"
+    description: "请填写此地区的代理或策略组名称。"
+    options: []
+  host_oversea_video:
+    name: "[主机名] 重定向 OverseaVideo CDN (港澳台)"
+    description: "请选择 OverseaVideo 要重定向的主机名。"
+    options: ["upos-sz-mirrorali.bilivideo.com", "upos-sz-mirrorcos.bilivideo.com", "upos-sz-mirrorhw.bilivideo.com", "upos-sz-mirrorhwo1.bilivideo.com", "upos-sz-mirror08c.bilivideo.com", "upos-sz-mirroraliov.bilivideo.com", "upos-sz-mirrorcosov.bilivideo.com", "upos-sz-mirrorhwov.bilivideo.com", "cn-hk-eq-01-01.bilivideo.com", "cn-hk-eq-01-03.bilivideo.com", "cn-hk-eq-01-09.bilivideo.com", "cn-hk-eq-01-10.bilivideo.com", "cn-hk-eq-01-12.bilivideo.com", "cn-hk-eq-01-13.bilivideo.com", "cn-hk-eq-01-14.bilivideo.com"]
+  host_b_star:
+    name: "[主机名] 重定向 BStar CDN (国际版)"
+    description: "请选择 BStar 要重定向的主机名。"
+    options: ["upos-sz-mirrorali.bilivideo.com", "upos-sz-mirrorcos.bilivideo.com", "upos-sz-mirrorhw.bilivideo.com", "upos-sz-mirrorhwo1.bilivideo.com", "upos-sz-mirror08c.bilivideo.com", "upos-sz-mirroraliov.bilivideo.com", "upos-sz-mirrorcosov.bilivideo.com", "upos-sz-mirrorhwov.bilivideo.com", "cn-hk-eq-01-01.bilivideo.com", "cn-hk-eq-01-03.bilivideo.com", "cn-hk-eq-01-09.bilivideo.com", "cn-hk-eq-01-10.bilivideo.com", "cn-hk-eq-01-12.bilivideo.com", "cn-hk-eq-01-13.bilivideo.com", "cn-hk-eq-01-14.bilivideo.com"]
+  host_pcdn:
+    name: "[主机名] 重定向 PCDN 主机名 (中国大陆)"
+    description: "请选择 PCDN 要重定向的主机名。"
+    options: ["upos-sz-mirrorali.bilivideo.com", "upos-sz-mirrorcos.bilivideo.com", "upos-sz-mirrorhw.bilivideo.com", "upos-sz-mirrorhwo1.bilivideo.com", "upos-sz-mirror08c.bilivideo.com", "upos-sz-mirroraliov.bilivideo.com", "upos-sz-mirrorcosov.bilivideo.com", "upos-sz-mirrorhwov.bilivideo.com", "cn-hk-eq-01-01.bilivideo.com", "cn-hk-eq-01-03.bilivideo.com", "cn-hk-eq-01-09.bilivideo.com", "cn-hk-eq-01-10.bilivideo.com", "cn-hk-eq-01-12.bilivideo.com", "cn-hk-eq-01-13.bilivideo.com", "cn-hk-eq-01-14.bilivideo.com"]
+  host_mcdn:
+    name: "[主机名] 重定向 MCDN 主机名 (中国大陆)"
+    description: "请选择 MCDN 要重定向的主机名。"
+    options: ["proxy-tf-all-ws.bilivideo.com"]
+  splash:
+    name: "[开屏] 去除广告"
+    description: "是否启用此处修改"
+    options: ["true", "false"]
+  feed_ad:
+    name: "[推荐] 去除广告"
+    description: "是否启用此处修改"
+    options: ["true", "false"]
+  feed_activity:
+    name: "[推荐] 去除“活动大图”"
+    description: "是否启用此处修改"
+    options: ["true", "false"]
+  feed_vertical:
+    name: "[推荐] 去除竖屏视频"
+    description: "是否启用此处修改"
+    options: ["true", "false"]
+  feed_block_up_live_list:
+    name: "[推荐] 屏蔽UP主直播推广"
+    description: "填写up主uid，以英文逗号隔开。"
+    options: []
+  feed_story:
+    name: "[首页] 去除短视频流广告"
+    description: "是否启用此处修改"
+    options: ["true", "false"]
+  feed_story_commercial:
+    name: "[首页] 去除Story商业按钮"
+    description: "移除Story中的“助TA必火”等商业推广按钮，不删除视频卡片。"
+    options: ["true", "false"]
+  search_ad:
+    name: "[搜索] 去除广告"
+    description: "是否启用此处修改"
+    options: ["true", "false"]
+  search_tracking:
+    name: "[搜索] 移除响应跟踪参数"
+    description: "清理SearchAll结果对象及跳转链接中的trackid、report_flow_data，不修改播放签名和预加载数据。"
+    options: ["true", "false"]
+  search_hot_search:
+    name: "[搜索] 去除“热搜”"
+    description: "是否启用此处修改"
+    options: ["true", "false"]
+  pgc_ad:
+    name: "[番剧电影] 去除广告"
+    description: "是否启用此处修改"
+    options: ["true", "false"]
+  xlive_ad:
+    name: "[直播] 去除广告"
+    description: "是否启用此处修改"
+    options: ["true", "false"]
+  xlive_remove_tracking_callbacks:
+    name: "[直播] 移除推荐回调"
+    description: "移除直播推荐卡的show_callback与click_callback；可能影响推荐状态和翻页。"
+    options: ["true", "false"]
+  xlive_remove_preload_tracking:
+    name: "[直播] 移除预载链接trackid"
+    description: "只移除直播small_card_v1.subtitle_style.link中的trackid，保留播放、清晰度和会话参数。"
+    options: ["true", "false"]
+  dynamic_hot_topics:
+    name: "[动态] 去除“热门话题”"
+    description: "是否启用此处修改"
+    options: ["true", "false"]
+  dynamic_most_visited:
+    name: "[动态] 去除“最常访问”"
+    description: "是否启用此处修改"
+    options: ["true", "false"]
+  dynamic_most_visited_live_only:
+    name: "[动态] “最常访问”仅显示直播"
+    description: "是否启用此处修改"
+    options: ["true", "false"]
+  dynamic_ad_card:
+    name: "[动态] 去除广告卡片"
+    description: "是否启用此处修改"
+    options: ["true", "false"]
+  dynamic_personal_ad_card:
+    name: "[动态] 去除个人流广告卡片"
+    description: "过滤DynAllPersonal与DynVideoPersonal中的cardType=15；当前抓包尚无广告阳性样本。"
+    options: ["true", "false"]
+  view_ad:
+    name: "[视频] 去除播放页广告"
+    description: "是否启用此处修改"
+    options: ["true", "false"]
+  dm_command:
+    name: "[弹幕] 去除交互式弹幕"
+    description: "是否启用此处修改"
+    options: ["true", "false"]
+  dm_colorful:
+    name: "[弹幕] 替换彩色弹幕"
+    description: "是否启用此处修改"
+    options: ["true", "false"]
+  dm_airborne:
+    name: "[弹幕] 空降助手"
+    description: "是否启用此处修改"
+    options: ["true", "false"]
+  reply_ad:
+    name: "[评论] 去除广告"
+    description: "是否启用此处修改"
+    options: ["true", "false"]
+  reply_commercial_links:
+    name: "[评论] 禁用普通评论商业跳转"
+    description: "保留普通评论正文与回复树，仅移除已识别商品链接的可点击映射。"
+    options: ["true", "false"]
+  reply_subject_description_commercial:
+    name: "[评论] 隐藏编辑器商品能力"
+    description: "移除SubjectDescription中的商品与商业助手按钮(type 5/8)；当前抓包中它们均为隐藏状态。"
+    options: ["true", "false"]
+  privacy_tracking:
+    name: "[隐私] 移除响应链接跟踪参数"
+    description: "清理推荐、Story 与评论跳转链接中的高置信度归因参数，保留目标和界面功能参数。"
+    options: ["true", "false"]
+  privacy_block_bili_commercial:
+    name: "[隐私] 阻止B站商业上报"
+    description: "本地成功响应conversion/mobile/v2与fees/wise，阻止相关请求上传。"
+    options: ["true", "false"]
+  privacy_block_third_party:
+    name: "[隐私] 阻止第三方广告归因"
+    description: "本地响应已确认的千问与Solar Engine广告展示、点击和归因请求。"
+    options: ["true", "false"]
+  privacy_strict:
+    name: "[隐私] 严格模式"
+    description: "同时启用响应跟踪清理、商业链接与上报阻断，并移除直播show/click callback；可能影响跳转、推荐和翻页。"
+    options: ["true", "false"]
+
+scriptings:
+  # PreferencePanes.API
+  - http_request:
+      name: "biliverse.enhanced.1"
+      match: "^https:\\/\\/(?:biliverse\\.github\\.io|app\\.bilibili\\.com)\\/api\\/(?:get|set|delete)(?:\\?.*)?$"
+      script_url: "https://github.com/NSNanoCat/PreferencePanes/releases/latest/download/api.js"
+      body_required: true
+      max_size: 33554432
+      timeout: 60
+
+  # 📺 Biliverse.Enhanced.x.resource.show.tab.v2
+  - http_response:
+      name: "biliverse.enhanced.2"
+      match: "^https?:\\/\\/app\\.bili(bili\\.com|api\\.net)\\/x\\/resource\\/show\\/tab\\/v2\\?"
+      script_url: "https://github.com/Biliverse/Enhanced/releases/download/v0.6.2/response.bundle.js"
+      body_required: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Home.Switch":{{{home_switch}}},"Home.Tab":"{{{home_tab}}}","Home.Tab_default":"{{{home_tab_default}}}","Home.Top_left":"{{{home_top_left}}}","Home.Top":"{{{home_top}}}","Home.Top_more":"{{{home_top_more}}}","Bottom":"{{{bottom}}}","Region.Switch":{{{region_switch}}},"Mine.Switch":{{{mine_switch}}},"Mine.iPad.Switch":{{{mine_i_pad_switch}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 Biliverse.Enhanced.show.v1.Mixture.RegionShortcut.request.grpc
+  - http_request:
+      name: "biliverse.enhanced.3"
+      match: "^https?:\\/\\/(grpc|app)\\.bili(bili\\.com|api\\.net)\\/bilibili\\.app\\.show\\.v1\\.Mixture\\/RegionShortcut$"
+      script_url: "https://github.com/Biliverse/Enhanced/releases/download/v0.6.2/request.bundle.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Home.Switch":{{{home_switch}}},"Home.Tab":"{{{home_tab}}}","Home.Tab_default":"{{{home_tab_default}}}","Home.Top_left":"{{{home_top_left}}}","Home.Top":"{{{home_top}}}","Home.Top_more":"{{{home_top_more}}}","Bottom":"{{{bottom}}}","Region.Switch":{{{region_switch}}},"Mine.Switch":{{{mine_switch}}},"Mine.iPad.Switch":{{{mine_i_pad_switch}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 Biliverse.Enhanced.show.v1.Mixture.RegionList.response.grpc
+  - http_response:
+      name: "biliverse.enhanced.4"
+      match: "^https?:\\/\\/(grpc|app)\\.bili(bili\\.com|api\\.net)\\/bilibili\\.app\\.show\\.v1\\.Mixture\\/RegionList$"
+      script_url: "https://github.com/Biliverse/Enhanced/releases/download/v0.6.2/response.bundle.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Home.Switch":{{{home_switch}}},"Home.Tab":"{{{home_tab}}}","Home.Tab_default":"{{{home_tab_default}}}","Home.Top_left":"{{{home_top_left}}}","Home.Top":"{{{home_top}}}","Home.Top_more":"{{{home_top_more}}}","Bottom":"{{{bottom}}}","Region.Switch":{{{region_switch}}},"Mine.Switch":{{{mine_switch}}},"Mine.iPad.Switch":{{{mine_i_pad_switch}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 Biliverse.Enhanced.x.v2.account.mine
+  - http_response:
+      name: "biliverse.enhanced.5"
+      match: "^https?:\\/\\/app\\.bili(bili\\.com|api\\.net)\\/x\\/v2\\/account\\/mine(\\/ipad)?\\?"
+      script_url: "https://github.com/Biliverse/Enhanced/releases/download/v0.6.2/response.bundle.js"
+      body_required: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Home.Switch":{{{home_switch}}},"Home.Tab":"{{{home_tab}}}","Home.Tab_default":"{{{home_tab_default}}}","Home.Top_left":"{{{home_top_left}}}","Home.Top":"{{{home_top}}}","Home.Top_more":"{{{home_top_more}}}","Bottom":"{{{bottom}}}","Region.Switch":{{{region_switch}}},"Mine.Switch":{{{mine_switch}}},"Mine.iPad.Switch":{{{mine_i_pad_switch}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 Biliverse.Enhanced.x.v2.region.index
+  - http_response:
+      name: "biliverse.enhanced.6"
+      match: "^https?:\\/\\/app\\.bili(bili\\.com|api\\.net)\\/x\\/v2\\/region\\/index\\?"
+      script_url: "https://github.com/Biliverse/Enhanced/releases/download/v0.6.2/response.bundle.js"
+      body_required: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Home.Switch":{{{home_switch}}},"Home.Tab":"{{{home_tab}}}","Home.Tab_default":"{{{home_tab_default}}}","Home.Top_left":"{{{home_top_left}}}","Home.Top":"{{{home_top}}}","Home.Top_more":"{{{home_top_more}}}","Bottom":"{{{bottom}}}","Region.Switch":{{{region_switch}}},"Mine.Switch":{{{mine_switch}}},"Mine.iPad.Switch":{{{mine_i_pad_switch}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 Biliverse.Enhanced.x.v2.channel.region.list
+  - http_response:
+      name: "biliverse.enhanced.7"
+      match: "^https?:\\/\\/app\\.bili(bili\\.com|api\\.net)\\/x\\/v2\\/channel\\/region\\/list\\?"
+      script_url: "https://github.com/Biliverse/Enhanced/releases/download/v0.6.2/response.bundle.js"
+      body_required: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Home.Switch":{{{home_switch}}},"Home.Tab":"{{{home_tab}}}","Home.Tab_default":"{{{home_tab_default}}}","Home.Top_left":"{{{home_top_left}}}","Home.Top":"{{{home_top}}}","Home.Top_more":"{{{home_top_more}}}","Bottom":"{{{bottom}}}","Region.Switch":{{{region_switch}}},"Mine.Switch":{{{mine_switch}}},"Mine.iPad.Switch":{{{mine_i_pad_switch}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Global.bangumi.play.html
+  - http_request:
+      name: "biliverse.global.8"
+      match: "^https?:\\/\\/www\\.bilibili\\.com\\/bangumi\\/play\\/(ss|ep)\\d+\\/?"
+      script_url: "https://github.com/Biliverse/Global/releases/download/v0.9.3/request.bundle.js"
+      body_required: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"ForceHost":"{{{force_host}}}","Locales":"{{{locales}}}","Proxies.CHN":"{{{proxies_chn}}}","Proxies.HKG":"{{{proxies_hkg}}}","Proxies.MAC":"{{{proxies_mac}}}","Proxies.TWN":"{{{proxies_twn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Global.viewunite.v1.View.grpc
+  - http_request:
+      name: "biliverse.global.9"
+      match: "^https?:\\/\\/(grpc|app)\\.bili(bili\\.com|api\\.net)\\/bilibili\\.app\\.viewunite\\.v1\\.View\\/View$"
+      script_url: "https://github.com/Biliverse/Global/releases/download/v0.9.3/request.bundle.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"ForceHost":"{{{force_host}}}","Locales":"{{{locales}}}","Proxies.CHN":"{{{proxies_chn}}}","Proxies.HKG":"{{{proxies_hkg}}}","Proxies.MAC":"{{{proxies_mac}}}","Proxies.TWN":"{{{proxies_twn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Global.viewunite.v1.View.grpc
+  - http_response:
+      name: "biliverse.global.10"
+      match: "^https?:\\/\\/(grpc|app)\\.bili(bili\\.com|api\\.net)\\/bilibili\\.app\\.viewunite\\.v1\\.View\\/View$"
+      script_url: "https://github.com/Biliverse/Global/releases/download/v0.9.3/response.bundle.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"ForceHost":"{{{force_host}}}","Locales":"{{{locales}}}","Proxies.CHN":"{{{proxies_chn}}}","Proxies.HKG":"{{{proxies_hkg}}}","Proxies.MAC":"{{{proxies_mac}}}","Proxies.TWN":"{{{proxies_twn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Global.season.json
+  - http_request:
+      name: "biliverse.global.11"
+      match: "^https?:\\/\\/api\\.bili(bili\\.com|api\\.net)\\/pgc\\/view\\/(v2\\/app|web|pc)\\/season\\?"
+      script_url: "https://github.com/Biliverse/Global/releases/download/v0.9.3/request.bundle.js"
+      env:
+        _compat.$argument: '{"ForceHost":"{{{force_host}}}","Locales":"{{{locales}}}","Proxies.CHN":"{{{proxies_chn}}}","Proxies.HKG":"{{{proxies_hkg}}}","Proxies.MAC":"{{{proxies_mac}}}","Proxies.TWN":"{{{proxies_twn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Global.season.json
+  - http_response:
+      name: "biliverse.global.12"
+      match: "^https?:\\/\\/api\\.bili(bili\\.com|api\\.net)\\/pgc\\/view\\/(v2\\/app|web|pc)\\/season\\?"
+      script_url: "https://github.com/Biliverse/Global/releases/download/v0.9.3/response.bundle.js"
+      body_required: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"ForceHost":"{{{force_host}}}","Locales":"{{{locales}}}","Proxies.CHN":"{{{proxies_chn}}}","Proxies.HKG":"{{{proxies_hkg}}}","Proxies.MAC":"{{{proxies_mac}}}","Proxies.TWN":"{{{proxies_twn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Global.ep.list.json
+  - http_response:
+      name: "biliverse.global.13"
+      match: "^https?:\\/\\/api\\.bili(bili\\.com|api\\.net)\\/pgc\\/view\\/(v2\\/app|web|pc)\\/ep\\/list\\?"
+      script_url: "https://github.com/Biliverse/Global/releases/download/v0.9.3/response.bundle.js"
+      body_required: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"ForceHost":"{{{force_host}}}","Locales":"{{{locales}}}","Proxies.CHN":"{{{proxies_chn}}}","Proxies.HKG":"{{{proxies_hkg}}}","Proxies.MAC":"{{{proxies_mac}}}","Proxies.TWN":"{{{proxies_twn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Global.playerunite.v1.Player.grpc
+  - http_request:
+      name: "biliverse.global.14"
+      match: "^https?:\\/\\/(grpc|app)\\.bili(bili\\.com|api\\.net)\\/bilibili\\.app\\.playerunite\\.v1\\.Player\\/PlayViewUnite$"
+      script_url: "https://github.com/Biliverse/Global/releases/download/v0.9.3/request.bundle.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"ForceHost":"{{{force_host}}}","Locales":"{{{locales}}}","Proxies.CHN":"{{{proxies_chn}}}","Proxies.HKG":"{{{proxies_hkg}}}","Proxies.MAC":"{{{proxies_mac}}}","Proxies.TWN":"{{{proxies_twn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Global.player.v2.PlayURL.grpc
+  - http_request:
+      name: "biliverse.global.15"
+      match: "^https?:\\/\\/(grpc|app)\\.bili(bili\\.com|api\\.net)\\/bilibili\\.pgc\\.gateway\\.player\\.v2\\.PlayURL\\/PlayView$"
+      script_url: "https://github.com/Biliverse/Global/releases/download/v0.9.3/request.bundle.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"ForceHost":"{{{force_host}}}","Locales":"{{{locales}}}","Proxies.CHN":"{{{proxies_chn}}}","Proxies.HKG":"{{{proxies_hkg}}}","Proxies.MAC":"{{{proxies_mac}}}","Proxies.TWN":"{{{proxies_twn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Global.player.playurl.json
+  - http_request:
+      name: "biliverse.global.16"
+      match: "^https?:\\/\\/api\\.bili(bili\\.com|api\\.net)\\/pgc\\/player\\/(api|web)\\/playurl(\\/html5)?\\?"
+      script_url: "https://github.com/Biliverse/Global/releases/download/v0.9.3/request.bundle.js"
+      env:
+        _compat.$argument: '{"ForceHost":"{{{force_host}}}","Locales":"{{{locales}}}","Proxies.CHN":"{{{proxies_chn}}}","Proxies.HKG":"{{{proxies_hkg}}}","Proxies.MAC":"{{{proxies_mac}}}","Proxies.TWN":"{{{proxies_twn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Global.player.v2.playurl.json
+  - http_request:
+      name: "biliverse.global.17"
+      match: "^https?:\\/\\/api\\.bili(bili\\.com|api\\.net)\\/pgc\\/player\\/web\\/v2\\/playurl\\?"
+      script_url: "https://github.com/Biliverse/Global/releases/download/v0.9.3/request.bundle.js"
+      env:
+        _compat.$argument: '{"ForceHost":"{{{force_host}}}","Locales":"{{{locales}}}","Proxies.CHN":"{{{proxies_chn}}}","Proxies.HKG":"{{{proxies_hkg}}}","Proxies.MAC":"{{{proxies_mac}}}","Proxies.TWN":"{{{proxies_twn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Global.search.html
+  - http_request:
+      name: "biliverse.global.18"
+      match: "^https?:\\/\\/search\\.bilibili\\.com\\/all\\?"
+      script_url: "https://github.com/Biliverse/Global/releases/download/v0.9.3/request.bundle.js"
+      env:
+        _compat.$argument: '{"ForceHost":"{{{force_host}}}","Locales":"{{{locales}}}","Proxies.CHN":"{{{proxies_chn}}}","Proxies.HKG":"{{{proxies_hkg}}}","Proxies.MAC":"{{{proxies_mac}}}","Proxies.TWN":"{{{proxies_twn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Global.search.grpc
+  - http_request:
+      name: "biliverse.global.19"
+      match: "^https?:\\/\\/(grpc|app)\\.bili(bili\\.com|api\\.net)\\/bilibili\\.polymer\\.app\\.search\\.v1\\.Search\\/(SearchAll|SearchByType)$"
+      script_url: "https://github.com/Biliverse/Global/releases/download/v0.9.3/request.bundle.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"ForceHost":"{{{force_host}}}","Locales":"{{{locales}}}","Proxies.CHN":"{{{proxies_chn}}}","Proxies.HKG":"{{{proxies_hkg}}}","Proxies.MAC":"{{{proxies_mac}}}","Proxies.TWN":"{{{proxies_twn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Global.search.app.json
+  - http_request:
+      name: "biliverse.global.20"
+      match: "^https?:\\/\\/app\\.bili(bili\\.com|api\\.net)\\/x\\/v2\\/search(\\/type)?\\?"
+      script_url: "https://github.com/Biliverse/Global/releases/download/v0.9.3/request.bundle.js"
+      env:
+        _compat.$argument: '{"ForceHost":"{{{force_host}}}","Locales":"{{{locales}}}","Proxies.CHN":"{{{proxies_chn}}}","Proxies.HKG":"{{{proxies_hkg}}}","Proxies.MAC":"{{{proxies_mac}}}","Proxies.TWN":"{{{proxies_twn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Global.search.wbi.json
+  - http_request:
+      name: "biliverse.global.21"
+      match: "^https?:\\/\\/api\\.bili(bili\\.com|api\\.net)\\/x\\/web-interface\\/wbi\\/search\\/(all\\/v2|type)\\?"
+      script_url: "https://github.com/Biliverse/Global/releases/download/v0.9.3/request.bundle.js"
+      env:
+        _compat.$argument: '{"ForceHost":"{{{force_host}}}","Locales":"{{{locales}}}","Proxies.CHN":"{{{proxies_chn}}}","Proxies.HKG":"{{{proxies_hkg}}}","Proxies.MAC":"{{{proxies_mac}}}","Proxies.TWN":"{{{proxies_twn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Global.search.pc.json
+  - http_request:
+      name: "biliverse.global.22"
+      match: "^https?:\\/\\/api\\.bili(bili\\.com|api\\.net)\\/x\\/web-interface\\/search\\/(all\\/v2|type)\\?"
+      script_url: "https://github.com/Biliverse/Global/releases/download/v0.9.3/request.bundle.js"
+      env:
+        _compat.$argument: '{"ForceHost":"{{{force_host}}}","Locales":"{{{locales}}}","Proxies.CHN":"{{{proxies_chn}}}","Proxies.HKG":"{{{proxies_hkg}}}","Proxies.MAC":"{{{proxies_mac}}}","Proxies.TWN":"{{{proxies_twn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Global.space.app.json
+  - http_request:
+      name: "biliverse.global.23"
+      match: "^https?:\\/\\/app\\.bili(bili\\.com|api\\.net)\\/x\\/v2\\/space\\?"
+      script_url: "https://github.com/Biliverse/Global/releases/download/v0.9.3/request.bundle.js"
+      env:
+        _compat.$argument: '{"ForceHost":"{{{force_host}}}","Locales":"{{{locales}}}","Proxies.CHN":"{{{proxies_chn}}}","Proxies.HKG":"{{{proxies_hkg}}}","Proxies.MAC":"{{{proxies_mac}}}","Proxies.TWN":"{{{proxies_twn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Global.space.wbi.json
+  - http_request:
+      name: "biliverse.global.24"
+      match: "^https?:\\/\\/api\\.bili(bili\\.com|api\\.net)\\/x\\/space\\/wbi\\/acc\\/info\\?"
+      script_url: "https://github.com/Biliverse/Global/releases/download/v0.9.3/request.bundle.js"
+      env:
+        _compat.$argument: '{"ForceHost":"{{{force_host}}}","Locales":"{{{locales}}}","Proxies.CHN":"{{{proxies_chn}}}","Proxies.HKG":"{{{proxies_hkg}}}","Proxies.MAC":"{{{proxies_mac}}}","Proxies.TWN":"{{{proxies_twn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Global.space.pc.json
+  - http_request:
+      name: "biliverse.global.25"
+      match: "^https?:\\/\\/api\\.bili(bili\\.com|api\\.net)\\/x\\/space\\/acc\\/info\\?"
+      script_url: "https://github.com/Biliverse/Global/releases/download/v0.9.3/request.bundle.js"
+      env:
+        _compat.$argument: '{"ForceHost":"{{{force_host}}}","Locales":"{{{locales}}}","Proxies.CHN":"{{{proxies_chn}}}","Proxies.HKG":"{{{proxies_hkg}}}","Proxies.MAC":"{{{proxies_mac}}}","Proxies.TWN":"{{{proxies_twn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Redirect.CDN.upgcxcode.m4s
+  - http_request:
+      name: "biliverse.redirect.26"
+      match: "^https?:\\/\\/.+\\.bilivideo\\.com(?::(?:80|443|4483))?\\/upgcxcode\\/"
+      script_url: "https://github.com/Biliverse/Redirect/releases/download/v0.2.25/request.bundle.js"
+      env:
+        _compat.$argument: '{"Host.OverseaVideo":"{{{host_oversea_video}}}","Host.BStar":"{{{host_b_star}}}","Host.PCDN":"{{{host_pcdn}}}","Host.MCDN":"{{{host_mcdn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Redirect.MCDN.v1.resource.m4s
+  - http_request:
+      name: "biliverse.redirect.27"
+      match: "^https?:\\/\\/[adbcefxy0-9]+\\.mcdn\\.bilivideo\\.cn(?::(?:8000|8082))?\\/v1\\/resource\\/"
+      script_url: "https://github.com/Biliverse/Redirect/releases/download/v0.2.25/request.bundle.js"
+      env:
+        _compat.$argument: '{"Host.OverseaVideo":"{{{host_oversea_video}}}","Host.BStar":"{{{host_b_star}}}","Host.PCDN":"{{{host_pcdn}}}","Host.MCDN":"{{{host_mcdn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Redirect.MCDN.upgcxcode.m4s
+  - http_request:
+      name: "biliverse.redirect.28"
+      match: "^https?:\\/\\/[adbcefxy0-9]+\\.mcdn\\.bilivideo\\.cn(?::(?:4483|9102))?\\/upgcxcode\\/"
+      script_url: "https://github.com/Biliverse/Redirect/releases/download/v0.2.25/request.bundle.js"
+      env:
+        _compat.$argument: '{"Host.OverseaVideo":"{{{host_oversea_video}}}","Host.BStar":"{{{host_b_star}}}","Host.PCDN":"{{{host_pcdn}}}","Host.MCDN":"{{{host_mcdn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Redirect.PCDN.upgcxcode.m4s
+  - http_request:
+      name: "biliverse.redirect.29"
+      match: "^https?:\\/\\/(.+):4480\\/upgcxcode\\/"
+      script_url: "https://github.com/Biliverse/Redirect/releases/download/v0.2.25/request.bundle.js"
+      env:
+        _compat.$argument: '{"Host.OverseaVideo":"{{{host_oversea_video}}}","Host.BStar":"{{{host_b_star}}}","Host.PCDN":"{{{host_pcdn}}}","Host.MCDN":"{{{host_mcdn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Redirect.Akamaized.hz.upgcxcode.m4s
+  - http_request:
+      name: "biliverse.redirect.30"
+      match: "^https?:\\/\\/upos-hz-mirrorakam\\.akamaized\\.net(?::(?:80|443|4483))?\\/upgcxcode\\/"
+      script_url: "https://github.com/Biliverse/Redirect/releases/download/v0.2.25/request.bundle.js"
+      env:
+        _compat.$argument: '{"Host.OverseaVideo":"{{{host_oversea_video}}}","Host.BStar":"{{{host_b_star}}}","Host.PCDN":"{{{host_pcdn}}}","Host.MCDN":"{{{host_mcdn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Redirect.Akamaized.sz.upgcxcode.m4s
+  - http_request:
+      name: "biliverse.redirect.31"
+      match: "^https?:\\/\\/upos-sz-mirrorakam\\.akamaized\\.net(?::(?:80|443|4483))?\\/upgcxcode\\/"
+      script_url: "https://github.com/Biliverse/Redirect/releases/download/v0.2.25/request.bundle.js"
+      env:
+        _compat.$argument: '{"Host.OverseaVideo":"{{{host_oversea_video}}}","Host.BStar":"{{{host_b_star}}}","Host.PCDN":"{{{host_pcdn}}}","Host.MCDN":"{{{host_mcdn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.Redirect.Akamaized.bstar1.upgcxcode.m4s
+  - http_request:
+      name: "biliverse.redirect.32"
+      match: "^https?:\\/\\/upos-bstar1-mirrorakam\\.akamaized\\.net(?::(?:80|443|4483))?\\/upgcxcode\\/"
+      script_url: "https://github.com/Biliverse/Redirect/releases/download/v0.2.25/request.bundle.js"
+      env:
+        _compat.$argument: '{"Host.OverseaVideo":"{{{host_oversea_video}}}","Host.BStar":"{{{host_b_star}}}","Host.PCDN":"{{{host_pcdn}}}","Host.MCDN":"{{{host_mcdn}}}","Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.ADBlock.request.json
+  - http_request:
+      name: "biliverse.adblock.33"
+      match: "^https?:\\/\\/app\\.bili(bili\\.com|api\\.net)\\/x\\/v2\\/feed\\/index\\?"
+      script_url: "https://github.com/Biliverse/ADBlock/releases/download/v0.7.5/request.bundle.js"
+      env:
+        _compat.$argument: '{"Splash":{{{splash}}},"Feed.AD":{{{feed_ad}}},"Feed.Activity":{{{feed_activity}}},"Feed.Vertical":{{{feed_vertical}}},"Feed.BlockUpLiveList":"{{{feed_block_up_live_list}}}","Feed.Story":{{{feed_story}}},"Feed.StoryCommercial":{{{feed_story_commercial}}},"Search.AD":{{{search_ad}}},"Search.Tracking":{{{search_tracking}}},"Search.HotSearch":{{{search_hot_search}}},"PGC.AD":{{{pgc_ad}}},"Xlive.AD":{{{xlive_ad}}},"Xlive.RemoveTrackingCallbacks":{{{xlive_remove_tracking_callbacks}}},"Xlive.RemovePreloadTracking":{{{xlive_remove_preload_tracking}}},"Dynamic.HotTopics":{{{dynamic_hot_topics}}},"Dynamic.MostVisited":{{{dynamic_most_visited}}},"Dynamic.MostVisitedLiveOnly":{{{dynamic_most_visited_live_only}}},"Dynamic.AdCard":{{{dynamic_ad_card}}},"Dynamic.PersonalAdCard":{{{dynamic_personal_ad_card}}},"View.AD":{{{view_ad}}},"DM.Command":{{{dm_command}}},"DM.Colorful":{{{dm_colorful}}},"DM.Airborne":{{{dm_airborne}}},"Reply.AD":{{{reply_ad}}},"Reply.CommercialLinks":{{{reply_commercial_links}}},"Reply.SubjectDescriptionCommercial":{{{reply_subject_description_commercial}}},"Privacy.Tracking":{{{privacy_tracking}}},"Privacy.BlockBiliCommercial":{{{privacy_block_bili_commercial}}},"Privacy.BlockThirdParty":{{{privacy_block_third_party}}},"Privacy.Strict":{{{privacy_strict}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.ADBlock.privacy.request
+  - http_request:
+      name: "biliverse.adblock.34"
+      match: "^https?:\\/\\/(cm\\.bilibili\\.com\\/cm\\/api\\/(conversion\\/mobile\\/v2|fees\\/wise)|adtrack\\.qianwen\\.com\\/v3\\/ad\\/(show\\/)?bilibili|tkio-redirect\\.solar-engine\\.com\\/receive\\/turl\\/)"
+      script_url: "https://github.com/Biliverse/ADBlock/releases/download/v0.7.5/request.bundle.js"
+      env:
+        _compat.$argument: '{"Splash":{{{splash}}},"Feed.AD":{{{feed_ad}}},"Feed.Activity":{{{feed_activity}}},"Feed.Vertical":{{{feed_vertical}}},"Feed.BlockUpLiveList":"{{{feed_block_up_live_list}}}","Feed.Story":{{{feed_story}}},"Feed.StoryCommercial":{{{feed_story_commercial}}},"Search.AD":{{{search_ad}}},"Search.Tracking":{{{search_tracking}}},"Search.HotSearch":{{{search_hot_search}}},"PGC.AD":{{{pgc_ad}}},"Xlive.AD":{{{xlive_ad}}},"Xlive.RemoveTrackingCallbacks":{{{xlive_remove_tracking_callbacks}}},"Xlive.RemovePreloadTracking":{{{xlive_remove_preload_tracking}}},"Dynamic.HotTopics":{{{dynamic_hot_topics}}},"Dynamic.MostVisited":{{{dynamic_most_visited}}},"Dynamic.MostVisitedLiveOnly":{{{dynamic_most_visited_live_only}}},"Dynamic.AdCard":{{{dynamic_ad_card}}},"Dynamic.PersonalAdCard":{{{dynamic_personal_ad_card}}},"View.AD":{{{view_ad}}},"DM.Command":{{{dm_command}}},"DM.Colorful":{{{dm_colorful}}},"DM.Airborne":{{{dm_airborne}}},"Reply.AD":{{{reply_ad}}},"Reply.CommercialLinks":{{{reply_commercial_links}}},"Reply.SubjectDescriptionCommercial":{{{reply_subject_description_commercial}}},"Privacy.Tracking":{{{privacy_tracking}}},"Privacy.BlockBiliCommercial":{{{privacy_block_bili_commercial}}},"Privacy.BlockThirdParty":{{{privacy_block_third_party}}},"Privacy.Strict":{{{privacy_strict}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.ADBlock.response.json
+  - http_response:
+      name: "biliverse.adblock.35"
+      match: "^https?:\\/\\/app\\.bili(bili\\.com|api\\.net)\\/x\\/v2\\/(splash\\/(brand\\/list|event\\/list2|list|show)|feed\\/index(\\/(relate\\/)?story)?|search\\/square)"
+      script_url: "https://github.com/Biliverse/ADBlock/releases/download/v0.7.5/response.bundle.js"
+      body_required: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Splash":{{{splash}}},"Feed.AD":{{{feed_ad}}},"Feed.Activity":{{{feed_activity}}},"Feed.Vertical":{{{feed_vertical}}},"Feed.BlockUpLiveList":"{{{feed_block_up_live_list}}}","Feed.Story":{{{feed_story}}},"Feed.StoryCommercial":{{{feed_story_commercial}}},"Search.AD":{{{search_ad}}},"Search.Tracking":{{{search_tracking}}},"Search.HotSearch":{{{search_hot_search}}},"PGC.AD":{{{pgc_ad}}},"Xlive.AD":{{{xlive_ad}}},"Xlive.RemoveTrackingCallbacks":{{{xlive_remove_tracking_callbacks}}},"Xlive.RemovePreloadTracking":{{{xlive_remove_preload_tracking}}},"Dynamic.HotTopics":{{{dynamic_hot_topics}}},"Dynamic.MostVisited":{{{dynamic_most_visited}}},"Dynamic.MostVisitedLiveOnly":{{{dynamic_most_visited_live_only}}},"Dynamic.AdCard":{{{dynamic_ad_card}}},"Dynamic.PersonalAdCard":{{{dynamic_personal_ad_card}}},"View.AD":{{{view_ad}}},"DM.Command":{{{dm_command}}},"DM.Colorful":{{{dm_colorful}}},"DM.Airborne":{{{dm_airborne}}},"Reply.AD":{{{reply_ad}}},"Reply.CommercialLinks":{{{reply_commercial_links}}},"Reply.SubjectDescriptionCommercial":{{{reply_subject_description_commercial}}},"Privacy.Tracking":{{{privacy_tracking}}},"Privacy.BlockBiliCommercial":{{{privacy_block_bili_commercial}}},"Privacy.BlockThirdParty":{{{privacy_block_third_party}}},"Privacy.Strict":{{{privacy_strict}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.ADBlock.response.json
+  - http_response:
+      name: "biliverse.adblock.36"
+      match: "^https?:\\/\\/api\\.bili(bili\\.com|api\\.net)\\/x\\/(web-interface\\/wbi\\/index\\/top\\/feed\\/rcmd|vip\\/ads\\/materials)\\?"
+      script_url: "https://github.com/Biliverse/ADBlock/releases/download/v0.7.5/response.bundle.js"
+      body_required: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Splash":{{{splash}}},"Feed.AD":{{{feed_ad}}},"Feed.Activity":{{{feed_activity}}},"Feed.Vertical":{{{feed_vertical}}},"Feed.BlockUpLiveList":"{{{feed_block_up_live_list}}}","Feed.Story":{{{feed_story}}},"Feed.StoryCommercial":{{{feed_story_commercial}}},"Search.AD":{{{search_ad}}},"Search.Tracking":{{{search_tracking}}},"Search.HotSearch":{{{search_hot_search}}},"PGC.AD":{{{pgc_ad}}},"Xlive.AD":{{{xlive_ad}}},"Xlive.RemoveTrackingCallbacks":{{{xlive_remove_tracking_callbacks}}},"Xlive.RemovePreloadTracking":{{{xlive_remove_preload_tracking}}},"Dynamic.HotTopics":{{{dynamic_hot_topics}}},"Dynamic.MostVisited":{{{dynamic_most_visited}}},"Dynamic.MostVisitedLiveOnly":{{{dynamic_most_visited_live_only}}},"Dynamic.AdCard":{{{dynamic_ad_card}}},"Dynamic.PersonalAdCard":{{{dynamic_personal_ad_card}}},"View.AD":{{{view_ad}}},"DM.Command":{{{dm_command}}},"DM.Colorful":{{{dm_colorful}}},"DM.Airborne":{{{dm_airborne}}},"Reply.AD":{{{reply_ad}}},"Reply.CommercialLinks":{{{reply_commercial_links}}},"Reply.SubjectDescriptionCommercial":{{{reply_subject_description_commercial}}},"Privacy.Tracking":{{{privacy_tracking}}},"Privacy.BlockBiliCommercial":{{{privacy_block_bili_commercial}}},"Privacy.BlockThirdParty":{{{privacy_block_third_party}}},"Privacy.Strict":{{{privacy_strict}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.ADBlock.response.json
+  - http_response:
+      name: "biliverse.adblock.37"
+      match: "^https?:\\/\\/api\\.bili(bili\\.com|api\\.net)\\/pgc\\/page\\/(bangumi|cinema\\/tab\\?)"
+      script_url: "https://github.com/Biliverse/ADBlock/releases/download/v0.7.5/response.bundle.js"
+      body_required: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Splash":{{{splash}}},"Feed.AD":{{{feed_ad}}},"Feed.Activity":{{{feed_activity}}},"Feed.Vertical":{{{feed_vertical}}},"Feed.BlockUpLiveList":"{{{feed_block_up_live_list}}}","Feed.Story":{{{feed_story}}},"Feed.StoryCommercial":{{{feed_story_commercial}}},"Search.AD":{{{search_ad}}},"Search.Tracking":{{{search_tracking}}},"Search.HotSearch":{{{search_hot_search}}},"PGC.AD":{{{pgc_ad}}},"Xlive.AD":{{{xlive_ad}}},"Xlive.RemoveTrackingCallbacks":{{{xlive_remove_tracking_callbacks}}},"Xlive.RemovePreloadTracking":{{{xlive_remove_preload_tracking}}},"Dynamic.HotTopics":{{{dynamic_hot_topics}}},"Dynamic.MostVisited":{{{dynamic_most_visited}}},"Dynamic.MostVisitedLiveOnly":{{{dynamic_most_visited_live_only}}},"Dynamic.AdCard":{{{dynamic_ad_card}}},"Dynamic.PersonalAdCard":{{{dynamic_personal_ad_card}}},"View.AD":{{{view_ad}}},"DM.Command":{{{dm_command}}},"DM.Colorful":{{{dm_colorful}}},"DM.Airborne":{{{dm_airborne}}},"Reply.AD":{{{reply_ad}}},"Reply.CommercialLinks":{{{reply_commercial_links}}},"Reply.SubjectDescriptionCommercial":{{{reply_subject_description_commercial}}},"Privacy.Tracking":{{{privacy_tracking}}},"Privacy.BlockBiliCommercial":{{{privacy_block_bili_commercial}}},"Privacy.BlockThirdParty":{{{privacy_block_third_party}}},"Privacy.Strict":{{{privacy_strict}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.ADBlock.response.json
+  - http_response:
+      name: "biliverse.adblock.38"
+      match: "^https?:\\/\\/api\\.live\\.bilibili\\.com\\/xlive\\/(app-room\\/v1\\/index\\/getInfoByRoom|app-interface\\/v2\\/(index\\/feed|room\\/recList))"
+      script_url: "https://github.com/Biliverse/ADBlock/releases/download/v0.7.5/response.bundle.js"
+      body_required: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Splash":{{{splash}}},"Feed.AD":{{{feed_ad}}},"Feed.Activity":{{{feed_activity}}},"Feed.Vertical":{{{feed_vertical}}},"Feed.BlockUpLiveList":"{{{feed_block_up_live_list}}}","Feed.Story":{{{feed_story}}},"Feed.StoryCommercial":{{{feed_story_commercial}}},"Search.AD":{{{search_ad}}},"Search.Tracking":{{{search_tracking}}},"Search.HotSearch":{{{search_hot_search}}},"PGC.AD":{{{pgc_ad}}},"Xlive.AD":{{{xlive_ad}}},"Xlive.RemoveTrackingCallbacks":{{{xlive_remove_tracking_callbacks}}},"Xlive.RemovePreloadTracking":{{{xlive_remove_preload_tracking}}},"Dynamic.HotTopics":{{{dynamic_hot_topics}}},"Dynamic.MostVisited":{{{dynamic_most_visited}}},"Dynamic.MostVisitedLiveOnly":{{{dynamic_most_visited_live_only}}},"Dynamic.AdCard":{{{dynamic_ad_card}}},"Dynamic.PersonalAdCard":{{{dynamic_personal_ad_card}}},"View.AD":{{{view_ad}}},"DM.Command":{{{dm_command}}},"DM.Colorful":{{{dm_colorful}}},"DM.Airborne":{{{dm_airborne}}},"Reply.AD":{{{reply_ad}}},"Reply.CommercialLinks":{{{reply_commercial_links}}},"Reply.SubjectDescriptionCommercial":{{{reply_subject_description_commercial}}},"Privacy.Tracking":{{{privacy_tracking}}},"Privacy.BlockBiliCommercial":{{{privacy_block_bili_commercial}}},"Privacy.BlockThirdParty":{{{privacy_block_third_party}}},"Privacy.Strict":{{{privacy_strict}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.ADBlock.view.response.grpc
+  - http_response:
+      name: "biliverse.adblock.39"
+      match: "^https?:\\/\\/(grpc|app)\\.bili(bili\\.com|api\\.net)\\/bilibili\\.app\\.(view\\.v1\\.View\\/(View|TFInfo|RelatesFeed|PlayerRelates|ViewProgress)|viewunite\\.v1\\.View\\/(View|RelatesFeed|AIRelateAsync|ViewProgress|PlayPause|ViewEndPage)|playerunite\\.v1\\.Player\\/PlayViewUnite)$"
+      script_url: "https://github.com/Biliverse/ADBlock/releases/download/v0.7.5/response.bundle.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Splash":{{{splash}}},"Feed.AD":{{{feed_ad}}},"Feed.Activity":{{{feed_activity}}},"Feed.Vertical":{{{feed_vertical}}},"Feed.BlockUpLiveList":"{{{feed_block_up_live_list}}}","Feed.Story":{{{feed_story}}},"Feed.StoryCommercial":{{{feed_story_commercial}}},"Search.AD":{{{search_ad}}},"Search.Tracking":{{{search_tracking}}},"Search.HotSearch":{{{search_hot_search}}},"PGC.AD":{{{pgc_ad}}},"Xlive.AD":{{{xlive_ad}}},"Xlive.RemoveTrackingCallbacks":{{{xlive_remove_tracking_callbacks}}},"Xlive.RemovePreloadTracking":{{{xlive_remove_preload_tracking}}},"Dynamic.HotTopics":{{{dynamic_hot_topics}}},"Dynamic.MostVisited":{{{dynamic_most_visited}}},"Dynamic.MostVisitedLiveOnly":{{{dynamic_most_visited_live_only}}},"Dynamic.AdCard":{{{dynamic_ad_card}}},"Dynamic.PersonalAdCard":{{{dynamic_personal_ad_card}}},"View.AD":{{{view_ad}}},"DM.Command":{{{dm_command}}},"DM.Colorful":{{{dm_colorful}}},"DM.Airborne":{{{dm_airborne}}},"Reply.AD":{{{reply_ad}}},"Reply.CommercialLinks":{{{reply_commercial_links}}},"Reply.SubjectDescriptionCommercial":{{{reply_subject_description_commercial}}},"Privacy.Tracking":{{{privacy_tracking}}},"Privacy.BlockBiliCommercial":{{{privacy_block_bili_commercial}}},"Privacy.BlockThirdParty":{{{privacy_block_third_party}}},"Privacy.Strict":{{{privacy_strict}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.ADBlock.dynamic.response.grpc
+  - http_response:
+      name: "biliverse.adblock.40"
+      match: "^https?:\\/\\/(grpc|app)\\.bili(bili\\.com|api\\.net)\\/bilibili\\.app\\.dynamic\\.v2\\.Dynamic\\/Dyn(All|Video)(Personal)?$"
+      script_url: "https://github.com/Biliverse/ADBlock/releases/download/v0.7.5/response.bundle.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Splash":{{{splash}}},"Feed.AD":{{{feed_ad}}},"Feed.Activity":{{{feed_activity}}},"Feed.Vertical":{{{feed_vertical}}},"Feed.BlockUpLiveList":"{{{feed_block_up_live_list}}}","Feed.Story":{{{feed_story}}},"Feed.StoryCommercial":{{{feed_story_commercial}}},"Search.AD":{{{search_ad}}},"Search.Tracking":{{{search_tracking}}},"Search.HotSearch":{{{search_hot_search}}},"PGC.AD":{{{pgc_ad}}},"Xlive.AD":{{{xlive_ad}}},"Xlive.RemoveTrackingCallbacks":{{{xlive_remove_tracking_callbacks}}},"Xlive.RemovePreloadTracking":{{{xlive_remove_preload_tracking}}},"Dynamic.HotTopics":{{{dynamic_hot_topics}}},"Dynamic.MostVisited":{{{dynamic_most_visited}}},"Dynamic.MostVisitedLiveOnly":{{{dynamic_most_visited_live_only}}},"Dynamic.AdCard":{{{dynamic_ad_card}}},"Dynamic.PersonalAdCard":{{{dynamic_personal_ad_card}}},"View.AD":{{{view_ad}}},"DM.Command":{{{dm_command}}},"DM.Colorful":{{{dm_colorful}}},"DM.Airborne":{{{dm_airborne}}},"Reply.AD":{{{reply_ad}}},"Reply.CommercialLinks":{{{reply_commercial_links}}},"Reply.SubjectDescriptionCommercial":{{{reply_subject_description_commercial}}},"Privacy.Tracking":{{{privacy_tracking}}},"Privacy.BlockBiliCommercial":{{{privacy_block_bili_commercial}}},"Privacy.BlockThirdParty":{{{privacy_block_third_party}}},"Privacy.Strict":{{{privacy_strict}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.ADBlock.playurl.response.grpc
+  - http_response:
+      name: "biliverse.adblock.41"
+      match: "^https?:\\/\\/(grpc|app)\\.bili(bili\\.com|api\\.net)\\/bilibili\\.app\\.playurl\\.v1\\.PlayURL\\/PlayView$"
+      script_url: "https://github.com/Biliverse/ADBlock/releases/download/v0.7.5/response.bundle.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Splash":{{{splash}}},"Feed.AD":{{{feed_ad}}},"Feed.Activity":{{{feed_activity}}},"Feed.Vertical":{{{feed_vertical}}},"Feed.BlockUpLiveList":"{{{feed_block_up_live_list}}}","Feed.Story":{{{feed_story}}},"Feed.StoryCommercial":{{{feed_story_commercial}}},"Search.AD":{{{search_ad}}},"Search.Tracking":{{{search_tracking}}},"Search.HotSearch":{{{search_hot_search}}},"PGC.AD":{{{pgc_ad}}},"Xlive.AD":{{{xlive_ad}}},"Xlive.RemoveTrackingCallbacks":{{{xlive_remove_tracking_callbacks}}},"Xlive.RemovePreloadTracking":{{{xlive_remove_preload_tracking}}},"Dynamic.HotTopics":{{{dynamic_hot_topics}}},"Dynamic.MostVisited":{{{dynamic_most_visited}}},"Dynamic.MostVisitedLiveOnly":{{{dynamic_most_visited_live_only}}},"Dynamic.AdCard":{{{dynamic_ad_card}}},"Dynamic.PersonalAdCard":{{{dynamic_personal_ad_card}}},"View.AD":{{{view_ad}}},"DM.Command":{{{dm_command}}},"DM.Colorful":{{{dm_colorful}}},"DM.Airborne":{{{dm_airborne}}},"Reply.AD":{{{reply_ad}}},"Reply.CommercialLinks":{{{reply_commercial_links}}},"Reply.SubjectDescriptionCommercial":{{{reply_subject_description_commercial}}},"Privacy.Tracking":{{{privacy_tracking}}},"Privacy.BlockBiliCommercial":{{{privacy_block_bili_commercial}}},"Privacy.BlockThirdParty":{{{privacy_block_third_party}}},"Privacy.Strict":{{{privacy_strict}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.ADBlock.search.response.grpc
+  - http_response:
+      name: "biliverse.adblock.42"
+      match: "^https?:\\/\\/(grpc|app)\\.bili(bili\\.com|api\\.net)\\/bilibili\\.polymer\\.app\\.search\\.v1\\.Search\\/SearchAll$"
+      script_url: "https://github.com/Biliverse/ADBlock/releases/download/v0.7.5/response.bundle.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Splash":{{{splash}}},"Feed.AD":{{{feed_ad}}},"Feed.Activity":{{{feed_activity}}},"Feed.Vertical":{{{feed_vertical}}},"Feed.BlockUpLiveList":"{{{feed_block_up_live_list}}}","Feed.Story":{{{feed_story}}},"Feed.StoryCommercial":{{{feed_story_commercial}}},"Search.AD":{{{search_ad}}},"Search.Tracking":{{{search_tracking}}},"Search.HotSearch":{{{search_hot_search}}},"PGC.AD":{{{pgc_ad}}},"Xlive.AD":{{{xlive_ad}}},"Xlive.RemoveTrackingCallbacks":{{{xlive_remove_tracking_callbacks}}},"Xlive.RemovePreloadTracking":{{{xlive_remove_preload_tracking}}},"Dynamic.HotTopics":{{{dynamic_hot_topics}}},"Dynamic.MostVisited":{{{dynamic_most_visited}}},"Dynamic.MostVisitedLiveOnly":{{{dynamic_most_visited_live_only}}},"Dynamic.AdCard":{{{dynamic_ad_card}}},"Dynamic.PersonalAdCard":{{{dynamic_personal_ad_card}}},"View.AD":{{{view_ad}}},"DM.Command":{{{dm_command}}},"DM.Colorful":{{{dm_colorful}}},"DM.Airborne":{{{dm_airborne}}},"Reply.AD":{{{reply_ad}}},"Reply.CommercialLinks":{{{reply_commercial_links}}},"Reply.SubjectDescriptionCommercial":{{{reply_subject_description_commercial}}},"Privacy.Tracking":{{{privacy_tracking}}},"Privacy.BlockBiliCommercial":{{{privacy_block_bili_commercial}}},"Privacy.BlockThirdParty":{{{privacy_block_third_party}}},"Privacy.Strict":{{{privacy_strict}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.ADBlock.dm.response.grpc
+  - http_response:
+      name: "biliverse.adblock.43"
+      match: "^https:\\/\\/(grpc|app)\\.bili(bili\\.com|api\\.net)\\/bilibili\\.community\\.service\\.dm\\.v1\\.DM\\/(DmView|DmSegMobile)"
+      script_url: "https://github.com/Biliverse/ADBlock/releases/download/v0.7.5/response.bundle.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Splash":{{{splash}}},"Feed.AD":{{{feed_ad}}},"Feed.Activity":{{{feed_activity}}},"Feed.Vertical":{{{feed_vertical}}},"Feed.BlockUpLiveList":"{{{feed_block_up_live_list}}}","Feed.Story":{{{feed_story}}},"Feed.StoryCommercial":{{{feed_story_commercial}}},"Search.AD":{{{search_ad}}},"Search.Tracking":{{{search_tracking}}},"Search.HotSearch":{{{search_hot_search}}},"PGC.AD":{{{pgc_ad}}},"Xlive.AD":{{{xlive_ad}}},"Xlive.RemoveTrackingCallbacks":{{{xlive_remove_tracking_callbacks}}},"Xlive.RemovePreloadTracking":{{{xlive_remove_preload_tracking}}},"Dynamic.HotTopics":{{{dynamic_hot_topics}}},"Dynamic.MostVisited":{{{dynamic_most_visited}}},"Dynamic.MostVisitedLiveOnly":{{{dynamic_most_visited_live_only}}},"Dynamic.AdCard":{{{dynamic_ad_card}}},"Dynamic.PersonalAdCard":{{{dynamic_personal_ad_card}}},"View.AD":{{{view_ad}}},"DM.Command":{{{dm_command}}},"DM.Colorful":{{{dm_colorful}}},"DM.Airborne":{{{dm_airborne}}},"Reply.AD":{{{reply_ad}}},"Reply.CommercialLinks":{{{reply_commercial_links}}},"Reply.SubjectDescriptionCommercial":{{{reply_subject_description_commercial}}},"Privacy.Tracking":{{{privacy_tracking}}},"Privacy.BlockBiliCommercial":{{{privacy_block_bili_commercial}}},"Privacy.BlockThirdParty":{{{privacy_block_third_party}}},"Privacy.Strict":{{{privacy_strict}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.ADBlock.interface.response.grpc
+  - http_response:
+      name: "biliverse.adblock.44"
+      match: "^https:\\/\\/(grpc|app)\\.bili(bili\\.com|api\\.net)\\/bilibili\\.app\\.interface\\.v1\\.Teenagers\\/ModeStatus"
+      script_url: "https://github.com/Biliverse/ADBlock/releases/download/v0.7.5/response.bundle.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Splash":{{{splash}}},"Feed.AD":{{{feed_ad}}},"Feed.Activity":{{{feed_activity}}},"Feed.Vertical":{{{feed_vertical}}},"Feed.BlockUpLiveList":"{{{feed_block_up_live_list}}}","Feed.Story":{{{feed_story}}},"Feed.StoryCommercial":{{{feed_story_commercial}}},"Search.AD":{{{search_ad}}},"Search.Tracking":{{{search_tracking}}},"Search.HotSearch":{{{search_hot_search}}},"PGC.AD":{{{pgc_ad}}},"Xlive.AD":{{{xlive_ad}}},"Xlive.RemoveTrackingCallbacks":{{{xlive_remove_tracking_callbacks}}},"Xlive.RemovePreloadTracking":{{{xlive_remove_preload_tracking}}},"Dynamic.HotTopics":{{{dynamic_hot_topics}}},"Dynamic.MostVisited":{{{dynamic_most_visited}}},"Dynamic.MostVisitedLiveOnly":{{{dynamic_most_visited_live_only}}},"Dynamic.AdCard":{{{dynamic_ad_card}}},"Dynamic.PersonalAdCard":{{{dynamic_personal_ad_card}}},"View.AD":{{{view_ad}}},"DM.Command":{{{dm_command}}},"DM.Colorful":{{{dm_colorful}}},"DM.Airborne":{{{dm_airborne}}},"Reply.AD":{{{reply_ad}}},"Reply.CommercialLinks":{{{reply_commercial_links}}},"Reply.SubjectDescriptionCommercial":{{{reply_subject_description_commercial}}},"Privacy.Tracking":{{{privacy_tracking}}},"Privacy.BlockBiliCommercial":{{{privacy_block_bili_commercial}}},"Privacy.BlockThirdParty":{{{privacy_block_third_party}}},"Privacy.Strict":{{{privacy_strict}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.ADBlock.reply.response.grpc
+  - http_response:
+      name: "biliverse.adblock.45"
+      match: "^https:\\/\\/(grpc|app)\\.bili(bili\\.com|api\\.net)\\/bilibili\\.main\\.community\\.reply\\.v1\\.Reply\\/(MainList|DetailList|ReplyInfo)$"
+      script_url: "https://github.com/Biliverse/ADBlock/releases/download/v0.7.5/response.bundle.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Splash":{{{splash}}},"Feed.AD":{{{feed_ad}}},"Feed.Activity":{{{feed_activity}}},"Feed.Vertical":{{{feed_vertical}}},"Feed.BlockUpLiveList":"{{{feed_block_up_live_list}}}","Feed.Story":{{{feed_story}}},"Feed.StoryCommercial":{{{feed_story_commercial}}},"Search.AD":{{{search_ad}}},"Search.Tracking":{{{search_tracking}}},"Search.HotSearch":{{{search_hot_search}}},"PGC.AD":{{{pgc_ad}}},"Xlive.AD":{{{xlive_ad}}},"Xlive.RemoveTrackingCallbacks":{{{xlive_remove_tracking_callbacks}}},"Xlive.RemovePreloadTracking":{{{xlive_remove_preload_tracking}}},"Dynamic.HotTopics":{{{dynamic_hot_topics}}},"Dynamic.MostVisited":{{{dynamic_most_visited}}},"Dynamic.MostVisitedLiveOnly":{{{dynamic_most_visited_live_only}}},"Dynamic.AdCard":{{{dynamic_ad_card}}},"Dynamic.PersonalAdCard":{{{dynamic_personal_ad_card}}},"View.AD":{{{view_ad}}},"DM.Command":{{{dm_command}}},"DM.Colorful":{{{dm_colorful}}},"DM.Airborne":{{{dm_airborne}}},"Reply.AD":{{{reply_ad}}},"Reply.CommercialLinks":{{{reply_commercial_links}}},"Reply.SubjectDescriptionCommercial":{{{reply_subject_description_commercial}}},"Privacy.Tracking":{{{privacy_tracking}}},"Privacy.BlockBiliCommercial":{{{privacy_block_bili_commercial}}},"Privacy.BlockThirdParty":{{{privacy_block_third_party}}},"Privacy.Strict":{{{privacy_strict}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.ADBlock.reply.v2.response.grpc
+  - http_response:
+      name: "biliverse.adblock.46"
+      match: "^https:\\/\\/(grpc|app)\\.bili(bili\\.com|api\\.net)\\/bilibili\\.main\\.community\\.reply\\.v2\\.Reply\\/SubjectDescription$"
+      script_url: "https://github.com/Biliverse/ADBlock/releases/download/v0.7.5/response.bundle.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Splash":{{{splash}}},"Feed.AD":{{{feed_ad}}},"Feed.Activity":{{{feed_activity}}},"Feed.Vertical":{{{feed_vertical}}},"Feed.BlockUpLiveList":"{{{feed_block_up_live_list}}}","Feed.Story":{{{feed_story}}},"Feed.StoryCommercial":{{{feed_story_commercial}}},"Search.AD":{{{search_ad}}},"Search.Tracking":{{{search_tracking}}},"Search.HotSearch":{{{search_hot_search}}},"PGC.AD":{{{pgc_ad}}},"Xlive.AD":{{{xlive_ad}}},"Xlive.RemoveTrackingCallbacks":{{{xlive_remove_tracking_callbacks}}},"Xlive.RemovePreloadTracking":{{{xlive_remove_preload_tracking}}},"Dynamic.HotTopics":{{{dynamic_hot_topics}}},"Dynamic.MostVisited":{{{dynamic_most_visited}}},"Dynamic.MostVisitedLiveOnly":{{{dynamic_most_visited_live_only}}},"Dynamic.AdCard":{{{dynamic_ad_card}}},"Dynamic.PersonalAdCard":{{{dynamic_personal_ad_card}}},"View.AD":{{{view_ad}}},"DM.Command":{{{dm_command}}},"DM.Colorful":{{{dm_colorful}}},"DM.Airborne":{{{dm_airborne}}},"Reply.AD":{{{reply_ad}}},"Reply.CommercialLinks":{{{reply_commercial_links}}},"Reply.SubjectDescriptionCommercial":{{{reply_subject_description_commercial}}},"Privacy.Tracking":{{{privacy_tracking}}},"Privacy.BlockBiliCommercial":{{{privacy_block_bili_commercial}}},"Privacy.BlockThirdParty":{{{privacy_block_third_party}}},"Privacy.Strict":{{{privacy_strict}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+  # 📺 BiliBili.ADBlock.pgc.response.grpc
+  - http_response:
+      name: "biliverse.adblock.47"
+      match: "^https:\\/\\/(grpc|app)\\.bili(bili\\.com|api\\.net)\\/bilibili\\.pgc\\.gateway\\.player\\.v2\\.PlayURL\\/PlayView$"
+      script_url: "https://github.com/Biliverse/ADBlock/releases/download/v0.7.5/response.bundle.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 60
+      env:
+        _compat.$argument: '{"Splash":{{{splash}}},"Feed.AD":{{{feed_ad}}},"Feed.Activity":{{{feed_activity}}},"Feed.Vertical":{{{feed_vertical}}},"Feed.BlockUpLiveList":"{{{feed_block_up_live_list}}}","Feed.Story":{{{feed_story}}},"Feed.StoryCommercial":{{{feed_story_commercial}}},"Search.AD":{{{search_ad}}},"Search.Tracking":{{{search_tracking}}},"Search.HotSearch":{{{search_hot_search}}},"PGC.AD":{{{pgc_ad}}},"Xlive.AD":{{{xlive_ad}}},"Xlive.RemoveTrackingCallbacks":{{{xlive_remove_tracking_callbacks}}},"Xlive.RemovePreloadTracking":{{{xlive_remove_preload_tracking}}},"Dynamic.HotTopics":{{{dynamic_hot_topics}}},"Dynamic.MostVisited":{{{dynamic_most_visited}}},"Dynamic.MostVisitedLiveOnly":{{{dynamic_most_visited_live_only}}},"Dynamic.AdCard":{{{dynamic_ad_card}}},"Dynamic.PersonalAdCard":{{{dynamic_personal_ad_card}}},"View.AD":{{{view_ad}}},"DM.Command":{{{dm_command}}},"DM.Colorful":{{{dm_colorful}}},"DM.Airborne":{{{dm_airborne}}},"Reply.AD":{{{reply_ad}}},"Reply.CommercialLinks":{{{reply_commercial_links}}},"Reply.SubjectDescriptionCommercial":{{{reply_subject_description_commercial}}},"Privacy.Tracking":{{{privacy_tracking}}},"Privacy.BlockBiliCommercial":{{{privacy_block_bili_commercial}}},"Privacy.BlockThirdParty":{{{privacy_block_third_party}}},"Privacy.Strict":{{{privacy_strict}}},"Storage":"{{{storage}}}","LogLevel":"{{{log_level}}}"}'
+
+# ---- URL Rewrite / body rewrite (best-effort conversion) ----
+rewrites:
+  # skipped (complex rewrite): response if ${url} ~= /^https:\/\/app\.bilibili\.com\/settings\/theme\.css(?:\?[^#]*)?$/i then respo
+  # skipped (complex rewrite): response if ${url} ~= /^https:\/\/app\.bilibili\.com\/settings\/home\.json(?:\?[^#]*)?$/i then respo
+  # skipped (complex rewrite): response if ${url} ~= /^https:\/\/app\.bilibili\.com\/settings\/(?:\?[^#]*)?$/i then response.body.m
+  # skipped (complex rewrite): response if ${url} ~= /^https:\/\/app\.bilibili\.com\/settings\/bridge\.mjs(?:\?[^#]*)?$/i then resp
+  # skipped (complex rewrite): response if ${url} ~= /^https:\/\/(?:biliverse\.github\.io|app\.bilibili\.com)\/api\/Enhanced(?:\?.*
+  # skipped (complex rewrite): response if ${url} ~= /^https:\/\/(?:biliverse\.github\.io|app\.bilibili\.com)\/api\/Global(?:\?.*)?
+  # skipped (complex rewrite): response if ${url} ~= /^https:\/\/(?:biliverse\.github\.io|app\.bilibili\.com)\/api\/Redirect(?:\?.*
+  # skipped (complex rewrite): response if ${url} ~= /^https?:\/\/(grpc\.biliapi\.net|app\.biliapi\.net|app\.bilibili\.com|app\.bil
+  # skipped (complex rewrite): response if ${url} ~= /^https:\/\/(?:biliverse\.github\.io|app\.bilibili\.com)\/api\/ADBlock(?:\?.*)
+  - match: "^https?:\\/\\/api\\.vc\\.bilibili\\.com\\/search_svr\\/v\\d\\/Search\\/recommend_words"
+    actions:
+      - respond:
+          status: 200
+          body: "{}"
+  - match: "^https?:\\/\\/api\\.vc\\.bilibili\\.com\\/topic_svr\\/v1\\/topic_svr"
+    actions:
+      - respond:
+          status: 200
+          body: "{}"
+  - match: "^https?:\\/\\/api\\.vc\\.bilibili\\.com\\/dynamic_svr\\/v1\\/dynamic_svr\\/mix_uplist"
+    actions:
+      - respond:
+          status: 200
+          body: "{}"
+  - match: "^https?:\\/\\/manga\\.bilibili\\.com\\/twirp\\/comic\\.v\\d\\.Comic\\/Flash"
+    actions:
+      - respond:
+          status: 200
+          body: "{}"
+  - match: "^https?:\\/\\/manga\\.bilibili\\.com\\/twirp\\/comic\\.v\\d\\.Comic\\/ListFlash"
+    actions:
+      - respond:
+          status: 200
+          body: "{}"
+  - match: "^https:\\/\\/api\\.live\\.bilibili\\.com\\/xlive\\/e-commerce-interface\\/v1\\/ecommerce-user\\/get_shopping_info\\?"
+    actions:
+      - respond:
+          status: 200
+          body: "{}"
+  # skipped (complex rewrite): ^https:\/\/api\.bilibili\.com\/pgc\/activity\/deliver\/material\/receive\? mock-response-body data-t
+
+body_rewrites:
+  - response_jq:
+      match: "^https:\\/\\/api\\.bilibili\\.com\\/pgc\\/view\\/v2\\/app\\/season\\?"
+      filter: 'del(.data.payment)'
+
+mitm:
+  hostnames:
+    includes:
+      - "biliverse.github.io"
+      - "app.bilibili.com"
+      - "app.biliapi.net"
+      - "grpc.biliapi.net"
+      - "www.bilibili.com"
+      - "search.bilibili.com"
+      - "api.bilibili.com"
+      - "api.global.bilibili.com"
+      - "api.biliapi.net"
+      - "manga.bilibili.com"
+      - "api.live.bilibili.com"
+      - "api.vc.bilibili.com"
+      - "app.biliapi.com"
+      - "cm.bilibili.com"
+      - "adtrack.qianwen.com"
+      - "tkio-redirect.solar-engine.com"
