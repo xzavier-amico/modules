@@ -27,8 +27,8 @@ youtube.enhance.auto-hd = type=http-request,pattern=^https?:\/\/[\w-]+\.googlevi
 youtube.enhance.log-event = type=http-request,pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/log_event(?:\?.*)?$,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/request.js
 
 [Rewrite]
-^https:\/\/www\.youtube\.com\/(pagead|pcs)\/ - reject
-^https:\/\/s\.youtube\.com\/api\/stats\/ads - reject
+request if ${url} ~= /^https:\/\/www\.youtube\.com\/(pagead|pcs)\// then reject()
+request if ${url} ~= /^https:\/\/s\.youtube\.com\/api\/stats\/ads/ then reject()
 
 [MitM]
 hostname = *.googlevideo.com, youtubei.googleapis.com, www.youtube.com, s.youtube.com
