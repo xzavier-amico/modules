@@ -135,7 +135,7 @@ DOMAIN,yuyin-httpdns.gslb.yy.com,REJECT
 IP-CIDR,118.89.204.198/32,REJECT,no-resolve
 IP-CIDR6,2402:4e00:1200:ed00:0:9089:6dac:96b6/128,REJECT,no-resolve
 
-[URL Rewrite]
+[Rewrite]
 # Alipay
 ^https?:\/\/110\.76\.8\.150\/squery - reject
 ^https?:\/\/203\.209\.230\.39\/squery - reject
@@ -224,10 +224,9 @@ IP-CIDR6,2402:4e00:1200:ed00:0:9089:6dac:96b6/128,REJECT,no-resolve
 # refer: https://github.com/lwd-temp/anti-ip-attribution/issues/24
 ^http:\/\/103\.41\.167\.237\/v2\/resolv - reject
 
-[Map Local]
-# Alipay
-^https?:\/\/amdc\.alipay\.com\/s?query data-type=text data='{}' status-code=200 header="Content-Type:text/json"
-^https?:\/\/amdc-sibling\.alipay\.com\.cn\/s?query data-type=text data='{}' status-code=200 header="Content-Type:text/json"
+
+^https?:\/\/amdc\.alipay\.com\/s?query mock-response-body data-type=text data='{}' status-code=200 header="Content-Type:text/json"
+^https?:\/\/amdc-sibling\.alipay\.com\.cn\/s?query mock-response-body data-type=text data='{}' status-code=200 header="Content-Type:text/json"
 
 [MITM]
 hostname = 119.29.29.98, 119.29.29.99, amdc.alipay.com, amdc-sibling.alipay.com.cn, dns.jd.com, *.httpdns.pro
