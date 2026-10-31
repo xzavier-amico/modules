@@ -73,15 +73,15 @@ response if ${url} ~= /^https:\/\/(?:biliverse\.github\.io|app\.bilibili\.com)\/
 response if ${url} ~= /^https?:\/\/(grpc\.biliapi\.net|app\.biliapi\.net|app\.bilibili\.com|app\.biliapi\.com)\/bilibili\.app\.interface\.v1\.Search\/DefaultWords$/ then response.body.mock("text", "AAAAAAA=", 200, true) | response.header.set("Content-Type", "application/grpc") | response.header.set("grpc-status", "0")
 response if ${url} ~= /^https:\/\/(?:biliverse\.github\.io|app\.bilibili\.com)\/api\/ADBlock(?:\?.*)?$/ then response.body.mock_file("json", "https://github.com/Biliverse/ADBlock/releases/download/v0.7.5/BiliBili.ADBlock.boxjs.json", 200) | response.header.set("X-PreferencePanes-Version", "0.7.5") | response.header.set("Cache-Control", "no-store")
 # 去除搜索中的大家都在搜
-request if ${url} ~= /^https?:\/\/api\.vc\.bilibili\.com\/search_svr\/v\d\/Search\/recommend_words/ then reject_dict()
+request if ${url} ~= /^https?:\/\/api\.vc\.bilibili\.com\/search_svr\/v\d\/Search\/recommend_words/ then reject_dict(200)
 # 去除动态中的话题
-request if ${url} ~= /^https?:\/\/api\.vc\.bilibili\.com\/topic_svr\/v1\/topic_svr/ then reject_dict()
+request if ${url} ~= /^https?:\/\/api\.vc\.bilibili\.com\/topic_svr\/v1\/topic_svr/ then reject_dict(200)
 # 去除动态中的最常访问
-request if ${url} ~= /^https?:\/\/api\.vc\.bilibili\.com\/dynamic_svr\/v1\/dynamic_svr\/mix_uplist/ then reject_dict()
+request if ${url} ~= /^https?:\/\/api\.vc\.bilibili\.com\/dynamic_svr\/v1\/dynamic_svr\/mix_uplist/ then reject_dict(200)
 # BiliBili漫画去广告
-request if ${url} ~= /^https?:\/\/manga\.bilibili\.com\/twirp\/comic\.v\d\.Comic\/Flash/ then reject_dict()
-request if ${url} ~= /^https?:\/\/manga\.bilibili\.com\/twirp\/comic\.v\d\.Comic\/ListFlash/ then reject_dict()
-request if ${url} ~= /^https:\/\/api\.live\.bilibili\.com\/xlive\/e-commerce-interface\/v1\/ecommerce-user\/get_shopping_info\?/ then reject_dict()
+request if ${url} ~= /^https?:\/\/manga\.bilibili\.com\/twirp\/comic\.v\d\.Comic\/Flash/ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/manga\.bilibili\.com\/twirp\/comic\.v\d\.Comic\/ListFlash/ then reject_dict(200)
+request if ${url} ~= /^https:\/\/api\.live\.bilibili\.com\/xlive\/e-commerce-interface\/v1\/ecommerce-user\/get_shopping_info\?/ then reject_dict(200)
 # 番剧页可能弹出的HTML广告
 ^https:\/\/api\.bilibili\.com\/pgc\/activity\/deliver\/material\/receive\? mock-response-body data-type=text status-code=200 data="{"code":0,"data":{"closeType":"close_win","container":[],"showTime":""},"message":"success"}"
 # iPad端番剧推荐列表上方广告

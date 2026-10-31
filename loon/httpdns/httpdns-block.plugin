@@ -137,92 +137,92 @@ IP-CIDR6,2402:4e00:1200:ed00:0:9089:6dac:96b6/128,REJECT,no-resolve
 
 [Rewrite]
 # Alipay
-request if ${url} ~= /^https?:\/\/110\.76\.8\.150\/squery/ then reject()
-request if ${url} ~= /^https?:\/\/203\.209\.230\.39\/squery/ then reject()
-request if ${url} ~= /^https?:\/\/203\.209\.245\.102\/squery/ then reject()
-request if ${url} ~= /^https?:\/\/203\.209\.245\.158\/squery/ then reject()
-request if ${url} ~= /^https?:\/\/203\.209\.247\.95\/squery/ then reject()
-request if ${url} ~= /^https?:\/\/203\.209\.250\.41\/squery/ then reject()
-request if ${url} ~= /^https?:\/\/203\.209\.250\.114\/squery/ then reject()
-request if ${url} ~= /^https?:\/\/203\.209\.251\.147\/squery/ then reject()
-request if ${url} ~= /^https?:\/\/2400:B180:6001::18F\/squery/ then reject()
-request if ${url} ~= /^https?:\/\/2400:B200:1005:3000::155\/squery/ then reject()
-request if ${url} ~= /^https?:\/\/2400:B200:1005:3000::1D3\/squery/ then reject()
-request if ${url} ~= /^https?:\/\/2400:B200:5000:B000::C8\/squery/ then reject()
+request if ${url} ~= /^https?:\/\/110\.76\.8\.150\/squery/ then reject(404)
+request if ${url} ~= /^https?:\/\/203\.209\.230\.39\/squery/ then reject(404)
+request if ${url} ~= /^https?:\/\/203\.209\.245\.102\/squery/ then reject(404)
+request if ${url} ~= /^https?:\/\/203\.209\.245\.158\/squery/ then reject(404)
+request if ${url} ~= /^https?:\/\/203\.209\.247\.95\/squery/ then reject(404)
+request if ${url} ~= /^https?:\/\/203\.209\.250\.41\/squery/ then reject(404)
+request if ${url} ~= /^https?:\/\/203\.209\.250\.114\/squery/ then reject(404)
+request if ${url} ~= /^https?:\/\/203\.209\.251\.147\/squery/ then reject(404)
+request if ${url} ~= /^https?:\/\/2400:B180:6001::18F\/squery/ then reject(404)
+request if ${url} ~= /^https?:\/\/2400:B200:1005:3000::155\/squery/ then reject(404)
+request if ${url} ~= /^https?:\/\/2400:B200:1005:3000::1D3\/squery/ then reject(404)
+request if ${url} ~= /^https?:\/\/2400:B200:5000:B000::C8\/squery/ then reject(404)
 
 # Baidu
-request if ${url} ~= /^http:\/\/180\.76\.76\.112\/v4\/resolve/ then reject()
-request if ${url} ~= /^http:\/\/180\.76\.76\.220\/v4\/resolve/ then reject()
+request if ${url} ~= /^http:\/\/180\.76\.76\.112\/v4\/resolve/ then reject(404)
+request if ${url} ~= /^http:\/\/180\.76\.76\.220\/v4\/resolve/ then reject(404)
 
 # Bilibili
 # KEY_EXT_P2P_HTTPDNS_BILI_IP
-request if ${url} ~= /^http:\/\/47\.101\.175\.206\/resolve/ then reject()
-request if ${url} ~= /^http:\/\/47\.100\.123\.169\/resolve/ then reject()
-request if ${url} ~= /^http:\/\/120\.46\.169\.234\/resolve/ then reject()
-request if ${url} ~= /^http:\/\/121\.36\.72\.124\/resolve/ then reject()
+request if ${url} ~= /^http:\/\/47\.101\.175\.206\/resolve/ then reject(404)
+request if ${url} ~= /^http:\/\/47\.100\.123\.169\/resolve/ then reject(404)
+request if ${url} ~= /^http:\/\/120\.46\.169\.234\/resolve/ then reject(404)
+request if ${url} ~= /^http:\/\/121\.36\.72\.124\/resolve/ then reject(404)
 # KEY_EXT_P2P_BILIDNS_CMCC_IP
-request if ${url} ~= /^http:\/\/116\.63\.10\.135\/resolve/ then reject()
-request if ${url} ~= /^http:\/\/122\.9\.7\.134\/resolve/ then reject()
-request if ${url} ~= /^http:\/\/117\.185\.228\.108\/resolve/ then reject()
-request if ${url} ~= /^http:\/\/117\.144\.238\.29\/resolve/ then reject()
+request if ${url} ~= /^http:\/\/116\.63\.10\.135\/resolve/ then reject(404)
+request if ${url} ~= /^http:\/\/122\.9\.7\.134\/resolve/ then reject(404)
+request if ${url} ~= /^http:\/\/117\.185\.228\.108\/resolve/ then reject(404)
+request if ${url} ~= /^http:\/\/117\.144\.238\.29\/resolve/ then reject(404)
 # KEY_EXT_P2P_BILIDNS_CT_IP
-request if ${url} ~= /^http:\/\/122\.9\.13\.79\/resolve/ then reject()
-request if ${url} ~= /^http:\/\/122\.9\.15\.129\/resolve/ then reject()
-request if ${url} ~= /^http:\/\/101\.91\.140\.224\/resolve/ then reject()
-request if ${url} ~= /^http:\/\/101\.91\.140\.124\/resolve/ then reject()
+request if ${url} ~= /^http:\/\/122\.9\.13\.79\/resolve/ then reject(404)
+request if ${url} ~= /^http:\/\/122\.9\.15\.129\/resolve/ then reject(404)
+request if ${url} ~= /^http:\/\/101\.91\.140\.224\/resolve/ then reject(404)
+request if ${url} ~= /^http:\/\/101\.91\.140\.124\/resolve/ then reject(404)
 # KEY_EXT_P2P_BILIDNS_CU_IP
-request if ${url} ~= /^http:\/\/114\.116\.215\.110\/resolve/ then reject()
-request if ${url} ~= /^http:\/\/116\.63\.10\.31\/resolve/ then reject()
-request if ${url} ~= /^http:\/\/112\.64\.218\.119\/resolve/ then reject()
-request if ${url} ~= /^http:\/\/112\.65\.200\.117\/resolve/ then reject()
+request if ${url} ~= /^http:\/\/114\.116\.215\.110\/resolve/ then reject(404)
+request if ${url} ~= /^http:\/\/116\.63\.10\.31\/resolve/ then reject(404)
+request if ${url} ~= /^http:\/\/112\.64\.218\.119\/resolve/ then reject(404)
+request if ${url} ~= /^http:\/\/112\.65\.200\.117\/resolve/ then reject(404)
 
 # ByteDance
-request if ${url} ~= /^https?:\/\/.+\.zijieapi\.com\/get_domains\// then reject()
+request if ${url} ~= /^https?:\/\/.+\.zijieapi\.com\/get_domains\// then reject(404)
 
 # JD
-request if ${url} ~= /^https:\/\/dns\.jd\.com\/v6\/b/ then reject()
+request if ${url} ~= /^https:\/\/dns\.jd\.com\/v6\/b/ then reject(404)
 
 # Meituan
-request if ${url} ~= /^http:\/\/103\.37\.155\.60\/fetch/ then reject()
+request if ${url} ~= /^http:\/\/103\.37\.155\.60\/fetch/ then reject(404)
 
 # Pinduoduo
-request if ${url} ~= /^http:\/\/101\.35\.204\.35\/d/ then reject()
-request if ${url} ~= /^http:\/\/101\.35\.212\.35\/d/ then reject()
-request if ${url} ~= /^http:\/\/114\.110\.96\.26\/d/ then reject()
-request if ${url} ~= /^http:\/\/114\.110\.97\.97\/d/ then reject()
-request if ${url} ~= /^http:\/\/240c:409f::3:0:163\/d/ then reject()
-request if ${url} ~= /^http:\/\/240c:409f::3:0:359\/d/ then reject()
-request if ${url} ~= /^http:\/\/2402:4e00:1411:201:0:9964:ba21:5a41\/d/ then reject()
+request if ${url} ~= /^http:\/\/101\.35\.204\.35\/d/ then reject(404)
+request if ${url} ~= /^http:\/\/101\.35\.212\.35\/d/ then reject(404)
+request if ${url} ~= /^http:\/\/114\.110\.96\.26\/d/ then reject(404)
+request if ${url} ~= /^http:\/\/114\.110\.97\.97\/d/ then reject(404)
+request if ${url} ~= /^http:\/\/240c:409f::3:0:163\/d/ then reject(404)
+request if ${url} ~= /^http:\/\/240c:409f::3:0:359\/d/ then reject(404)
+request if ${url} ~= /^http:\/\/2402:4e00:1411:201:0:9964:ba21:5a41\/d/ then reject(404)
 
 # QCloud
 # refer: https://mc.qcloudimg.com/static/qc_doc/d39d48b733835af8a2e223115ac67da7/doc-HttpDNS-Getting+Started.pdf
 # refer: https://main.qcloudimg.com/raw/document/product/pdf/379_3513_cn.pdf
 # refer: https://cloud.tencent.com/document/product/379/61200
-request if ${url} ~= /^https?:\/\/119\.29\.29\.29\/d/ then reject()
+request if ${url} ~= /^https?:\/\/119\.29\.29\.29\/d/ then reject(404)
 
 # QQmusic
-request if ${url} ~= /^http:\/\/182\.256\.116\.116\/d/ then reject()
+request if ${url} ~= /^http:\/\/182\.256\.116\.116\/d/ then reject(404)
 
 # Weibo
 # refer: https://github.com/CNSRE/HTTPDNSLib-for-iOS
-request if ${url} ~= /^http:\/\/api\.weibo\.cn\/2\/httpdns\/config/ then reject()
-request if ${url} ~= /^http:\/\/api\.weibo\.cn\/httpdns\/config/ then reject()
+request if ${url} ~= /^http:\/\/api\.weibo\.cn\/2\/httpdns\/config/ then reject(404)
+request if ${url} ~= /^http:\/\/api\.weibo\.cn\/httpdns\/config/ then reject(404)
 
 # Weixin
 # 注意: 以下域名HTTPS无法MitM，如通过此链接查询，无法处理
-request if ${url} ~= /^https?:\/\/dns\.weixin\.qq\.com\/cgi-bin\/micromsg-bin\/newgetdns/ then reject()
-request if ${url} ~= /^https?:\/\/dns\.weixin\.qq\.com\.cn\/cgi-bin\/micromsg-bin\/newgetdns/ then reject()
-request if ${url} ~= /^https?:\/\/short\.weixin\.qq\.com\/cgi-bin\/micromsg-bin\/getcdndns/ then reject()
-request if ${url} ~= /^https?:\/\/hkextshort\.weixin\.qq\.com\/cgi-bin\/micromsg-bin\/getcdndns/ then reject()
+request if ${url} ~= /^https?:\/\/dns\.weixin\.qq\.com\/cgi-bin\/micromsg-bin\/newgetdns/ then reject(404)
+request if ${url} ~= /^https?:\/\/dns\.weixin\.qq\.com\.cn\/cgi-bin\/micromsg-bin\/newgetdns/ then reject(404)
+request if ${url} ~= /^https?:\/\/short\.weixin\.qq\.com\/cgi-bin\/micromsg-bin\/getcdndns/ then reject(404)
+request if ${url} ~= /^https?:\/\/hkextshort\.weixin\.qq\.com\/cgi-bin\/micromsg-bin\/getcdndns/ then reject(404)
 
 # Wework
 # refer: https://res.mail.qq.com/zh_CN/wework_ip/latest.html
-request if ${url} ~= /^http:\/\/182\.254\.116\.117\/d/ then reject()
-request if ${url} ~= /^http:\/\/182\.254\.118\.119\/d/ then reject()
+request if ${url} ~= /^http:\/\/182\.254\.116\.117\/d/ then reject(404)
+request if ${url} ~= /^http:\/\/182\.254\.118\.119\/d/ then reject(404)
 
 # Zhihu
 # refer: https://github.com/lwd-temp/anti-ip-attribution/issues/24
-request if ${url} ~= /^http:\/\/103\.41\.167\.237\/v2\/resolv/ then reject()
+request if ${url} ~= /^http:\/\/103\.41\.167\.237\/v2\/resolv/ then reject(404)
 
 
 response if ${url} ~= /^https?:\/\/amdc\.alipay\.com\/s?query/ then response.body.mock("{}", "text/json", 200)
