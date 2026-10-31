@@ -1,0 +1,34 @@
+#!name = YouTube Enhance
+#!desc = Block ads. Enable background play, PiP, up to 4x speed and On-the-go controls.\nBased on Maasea's code (Apache-2.0).
+#!author = gholts
+#!homepage = https://github.com/gholts/surge
+#!icon = https://raw.githubusercontent.com/Yuanxsxs/QtumultX/master/Icon/Hand-Painted-icon/Social_Media/YouTube.png
+#!tag = YouTube
+#!system = iOS,iPadOS,macOS,tvOS
+
+[Argument]
+block_upload = switch,true,type=boolean,tag=Remove upload tab,desc=Remove upload tab
+block_shorts = switch,false,type=boolean,tag=Remove Shorts tab,desc=Remove Shorts tab
+auto_hd = switch,true,type=boolean,tag=Auto HD,desc=Prefer highest offered resolution; Premium bitrate when authorized
+block_games = switch,true,type=boolean,tag=Remove Playables,desc=Remove Playables on homepage
+block_vertical_live = switch,false,type=boolean,tag=Remove vertical live,desc=Remove Vertical live on homepage
+jump_ahead = switch,true,type=boolean,tag=Jump Ahead button,desc=Enable Jump Ahead button
+block_store = switch,true,type=boolean,tag=Remove creator stores,desc=Remove creator stores, product cards and overlays
+block_ai = switch,true,type=boolean,tag=Remove Ask / AI,desc=Remove Ask, AI summaries and related controls
+on_the_go = switch,true,type=boolean,tag=On-the-go controls,desc=On-the-go controls when compatible UI components are available
+
+[Script]
+youtube.enhance.ad-break = type=http-request,pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/player\/ad_break(?:\?.*)?$,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/request.js
+youtube.enhance.response = type=http-response,pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/(?:navigation\/resolve_url|browse|next|player|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch)(?:\?.*)?$,requires-body=1,max-size=-1,binary-body-mode=1,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/response.js,argument="{"blockUpload":{{{block_upload}}},"blockShorts":{{{block_shorts}}},"blockGames":{{{block_games}}},"blockVerticalLive":{{{block_vertical_live}}},"jumpAhead":{{{jump_ahead}}},"autoHd":{{{auto_hd}}},"blockStore":{{{block_store}}},"blockAi":{{{block_ai}}},"onTheGo":{{{on_the_go}}}}"
+youtube.enhance.key = type=http-response,pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/(?:config|log_event)(?:\?.*)?$,requires-body=1,max-size=-1,binary-body-mode=1,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/key.js
+youtube.enhance.ump = type=http-response,pattern=^https?:\/\/[\w-]+\.googlevideo\.com\/initplayback(?:\?.*)?$,requires-body=1,max-size=-1,binary-body-mode=1,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/ump.js,argument="{"blockGames":{{{block_games}}},"blockVerticalLive":{{{block_vertical_live}}},"jumpAhead":{{{jump_ahead}}},"autoHd":{{{auto_hd}}},"blockStore":{{{block_store}}},"blockAi":{{{block_ai}}},"onTheGo":{{{on_the_go}}}}"
+youtube.enhance.init = type=http-request,pattern=^https?:\/\/[\w-]+\.googlevideo\.com\/initplayback(?:\?.*)?$,requires-body=1,max-size=-1,binary-body-mode=1,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/request.js,argument="{"autoHd":{{{auto_hd}}}}"
+youtube.enhance.auto-hd = type=http-request,pattern=^https?:\/\/[\w-]+\.googlevideo\.com\/videoplayback(?:\?.*)?$,requires-body=1,max-size=-1,binary-body-mode=1,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/request.js,argument="{"autoHd":{{{auto_hd}}}}"
+youtube.enhance.log-event = type=http-request,pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/log_event(?:\?.*)?$,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/request.js
+
+[Rewrite]
+^https:\/\/www\.youtube\.com\/(pagead|pcs)\/ - reject
+^https:\/\/s\.youtube\.com\/api\/stats\/ads - reject
+
+[MitM]
+hostname = *.googlevideo.com, youtubei.googleapis.com, www.youtube.com, s.youtube.com
