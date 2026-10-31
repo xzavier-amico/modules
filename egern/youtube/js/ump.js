@@ -1198,7 +1198,7 @@
                         console.log("YouTube quality cache: " + g)
                     }
                 }
-            }(c.players), $done(c.body === $response.body ? void 0 : {body: c.body})
+            }(c.players), $done(c.body === $response.body ? {} : {body: c.body})
         } catch (g) {
             if (console.log(String(g)), B || "HMAC verification failed" === g?.message) try {
                 !function (g, I) {

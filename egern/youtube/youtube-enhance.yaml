@@ -108,6 +108,7 @@ scriptings:
       name: "youtube.enhance.ad-break"
       match: "^https://youtubei\\.googleapis\\.com/youtubei/v1/player/ad_break(?:\\?.*)?$"
       script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/request.js"
+      timeout: 30
 
   # youtube.enhance.response：改写 browse/next/player 等响应（9 个开关全量注入）
   # 路由 A/B 测试记录:
@@ -125,6 +126,7 @@ scriptings:
       body_required: true
       binary_body: true
       max_size: 33554432    # 32 MiB（0 的语义文档未定义，显式大值；默认 1 MiB 会截断大响应）
+      timeout: 60
       env:
         _compat.$argument: '{"blockUpload":{{{block_upload}}},"blockShorts":{{{block_shorts}}},"blockGames":{{{block_games}}},"blockVerticalLive":{{{block_vertical_live}}},"jumpAhead":{{{jump_ahead}}},"autoHd":{{{auto_hd}}},"blockStore":{{{block_store}}},"blockAi":{{{block_ai}}},"onTheGo":{{{on_the_go}}}}'
 
@@ -136,6 +138,7 @@ scriptings:
       body_required: true
       binary_body: true
       max_size: 33554432
+      timeout: 30
 
   # youtube.enhance.ump：解密/改写 initplayback 的 UMP（AES+SHA256+gzip,较重）
   # 脚本内部自带 16 MiB 解压上限；此处引擎层给 32 MiB 留出余量
@@ -146,7 +149,7 @@ scriptings:
       body_required: true
       binary_body: true
       max_size: 33554432
-      timeout: 30
+      timeout: 60
       env:
         _compat.$argument: '{"blockGames":{{{block_games}}},"blockVerticalLive":{{{block_vertical_live}}},"jumpAhead":{{{jump_ahead}}},"autoHd":{{{auto_hd}}},"blockStore":{{{block_store}}},"blockAi":{{{block_ai}}},"onTheGo":{{{on_the_go}}}}'
 
@@ -158,6 +161,7 @@ scriptings:
       body_required: true
       binary_body: true
       max_size: 33554432
+      timeout: 30
       env:
         _compat.$argument: '{"autoHd":{{{auto_hd}}}}'
 
@@ -169,6 +173,7 @@ scriptings:
       body_required: true
       binary_body: true
       max_size: 33554432
+      timeout: 30
       env:
         _compat.$argument: '{"autoHd":{{{auto_hd}}}}'
 
@@ -177,6 +182,7 @@ scriptings:
       name: "youtube.enhance.log-event"
       match: "^https://youtubei\\.googleapis\\.com/youtubei/v1/log_event(?:\\?.*)?$"
       script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/request.js"
+      timeout: 30
 
 # ---- URL Rewrite（Surge 的 - reject → respond 404 空响应）----
 rewrites:

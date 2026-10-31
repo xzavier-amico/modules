@@ -88,8 +88,9 @@ modules:
 
 ## 已知差异与注意事项
 
-- **超时**：`youtube.enhance.ump` 需在纯 JS 里对最多 16 MiB 数据做 AES+SHA256+gzip，
-  属天然重负载；yaml 已给 `timeout: 30`。若设备较慢仍超时，可继续调大（上限 600）。
+- **超时**：`youtube.enhance.response` / `youtube.enhance.ump` 较重（响应体大、AES/SHA256+gzip），
+  yaml 已分别给 `timeout: 60`；其余条目 `timeout: 30`。若设备仍超时，可继续调大（上限 600）。
+  response.js 对超大响应体（>5 MiB，如「我的」页 History 列表）会直接放行以避免超时。
 - **max_size 的语义与内部上限**：官方文档只说默认 `1048576`（1 MiB），**未定义 `0` 的含义**。
   经验上，body 超限不会报错，只会"不传给脚本"→ 脚本按放行处理（UMP/键协商静默跳过）。
   若日志出现「exceeded N bytes」类提示：N 若恰为 `1048576` 即说明写 0 回落了默认 1 MiB；

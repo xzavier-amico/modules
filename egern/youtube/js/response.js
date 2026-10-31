@@ -799,7 +799,7 @@
     !function () {
         try {
             const A = $request.url.split("?")[0].split("/youtubei/v1/")[1], C = Object.hasOwn(ng, A) && ng[A];
-            if (!C || Number($response.status) >= 300 || !$response.body?.length) return $done({});
+            if (!C || Number($response.status) >= 300 || !$response.body?.length || $response.body.length > 5242880) return $done({});
             const [o, e] = C, B = og(o), n = B.fromBinary($response.body), a = function (g = {}) {
                 return "string" != typeof $argument || $argument.includes("{{{") ? g : {...g, ...JSON.parse($argument)}
             }({blockUpload: !0, blockShorts: !1});
