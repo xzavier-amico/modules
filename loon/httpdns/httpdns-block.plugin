@@ -225,8 +225,8 @@ request if ${url} ~= /^http:\/\/182\.254\.118\.119\/d/ then reject(404)
 request if ${url} ~= /^http:\/\/103\.41\.167\.237\/v2\/resolv/ then reject(404)
 
 
-response if ${url} ~= /^https?:\/\/amdc\.alipay\.com\/s?query/ then response.body.mock("{}", "text/json", 200)
-response if ${url} ~= /^https?:\/\/amdc-sibling\.alipay\.com\.cn\/s?query/ then response.body.mock("{}", "text/json", 200)
+response if ${url} ~= /^https?:\/\/amdc\.alipay\.com\/s?query/ then response.body.mock("text/json", "{}", 200)
+response if ${url} ~= /^https?:\/\/amdc-sibling\.alipay\.com\.cn\/s?query/ then response.body.mock("text/json", "{}", 200)
 
 [MITM]
 hostname = 119.29.29.98, 119.29.29.99, amdc.alipay.com, amdc-sibling.alipay.com.cn, dns.jd.com, *.httpdns.pro
