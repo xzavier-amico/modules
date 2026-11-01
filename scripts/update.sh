@@ -246,6 +246,3 @@ else
   changed=1
 fi
 echo "===== $(date -Is) update done (changed=$changed) ====="
-PYEOF
-chmod +x /opt/modules/scripts/update.sh
-echo "created"
