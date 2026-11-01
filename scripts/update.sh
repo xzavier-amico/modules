@@ -170,14 +170,27 @@ echo "loon httpdns regenerated"
 # ---------- YouTube ----------
 echo "-- YouTube --"
 fetch "https://raw.githubusercontent.com/gholts/surge/main/modules/youtube-enhance.sgmodule" "/opt/modules/.cache/youtube/youtube-enhance.sgmodule" && changed=1
-# download scripts (only if changed; always try)
+mkdir -p /opt/modules/.cache/youtube/scripts
+yt_changed=0
 for f in request.js response.js key.js ump.js; do
-  # use user's own hosted (already patched) as baseline; upstream gholts for reference only
-  :
+  if fetch "https://raw.githubusercontent.com/gholts/surge/main/scripts/youtube/$f" "/opt/modules/.cache/youtube/scripts/$f"; then
+    yt_changed=1
+  fi
 done
-# Re-apply our $done fixes to the egern/loon JS is handled by keeping local copies; do not overwrite with upstream.
-# Sync loon js from egern (canonical patched versions)
-cp /opt/modules/egern/youtube/js/*.js /opt/modules/loon/youtube/js/ 2>/dev/null
+if [ "$yt_changed" = "1" ]; then
+  # patch for Egern/Loon compat
+  if python3 /opt/modules/scripts/patch_youtube.py /opt/modules/.cache/youtube/scripts/*.js; then
+    cp /opt/modules/.cache/youtube/scripts/*.js /opt/modules/egern/youtube/js/
+    cp /opt/modules/.cache/youtube/scripts/*.js /opt/modules/loon/youtube/js/
+    echo "youtube js patched & synced"
+    changed=1
+  else
+    echo "youtube patch FAILED; keeping old js"
+  fi
+else
+  # no upstream change; still sync egern->loon
+  cp /opt/modules/egern/youtube/js/*.js /opt/modules/loon/youtube/js/ 2>/dev/null
+fi
 
 # Convert bilibili loon scripts to new syntax
 python3 - <<'PYEOF2' >/dev/null 2>&1
