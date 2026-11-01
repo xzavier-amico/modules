@@ -241,7 +241,7 @@ cd /opt/modules
 if git diff --quiet && git diff --cached --quiet; then
   echo "no changes; skip commit"
 else
-  git add -A
+  git add egern loon scripts .gitignore
   git commit -m "auto-update: $(date +%Y-%m-%d)" && git push origin master && echo "pushed"
   changed=1
 fi
