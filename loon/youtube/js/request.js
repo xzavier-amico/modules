@@ -79,17 +79,7 @@
     }
 
     function u(e = {}) {
-        if (typeof $argument === "string") {
-            if ($argument.includes("{{{")) return e;
-            try { return {...e, ...JSON.parse($argument)}; } catch { return e; }
-        }
-        if ($argument && typeof $argument === "object") {
-            const __m = {block_upload:"blockUpload", block_shorts:"blockShorts", auto_hd:"autoHd", block_games:"blockGames", block_vertical_live:"blockVerticalLive", jump_ahead:"jumpAhead", block_store:"blockStore", block_ai:"blockAi", on_the_go:"onTheGo"};
-            const __o = {};
-            for (const [__k, __v] of Object.entries($argument)) __o[__m[__k] || __k] = __v;
-            return {...e, ...__o};
-        }
-        return e
+        return "string" != typeof $argument || $argument.includes("{{{") ? e : {...e, ...JSON.parse($argument)}
     }
 
     function a(e) {
