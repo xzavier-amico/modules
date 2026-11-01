@@ -85,7 +85,7 @@ request if ${url} ~= /^https:\/\/api\.live\.bilibili\.com\/xlive\/e-commerce-int
 # 番剧页可能弹出的HTML广告
 response if ${url} ~= /^https:\/\/api\.bilibili\.com\/pgc\/activity\/deliver\/material\/receive\?/ then response.body.mock("text", `{"code":0,"data":{"closeType":"close_win","container":[],"showTime":""},"message":"success"}`, 200)
 # iPad端番剧推荐列表上方广告
-^https:\/\/api\.bilibili\.com\/pgc\/view\/v2\/app\/season\? response-body-json-jq 'del(.data.payment)'
+response if ${url} ~= /^https:\/\/api\.bilibili\.com\/pgc\/view\/v2\/app\/season\?/ then response.json.jq("del(.data.payment)")
 
 [Script]
 request if ${url} ~= /^https:\/\/(?:biliverse\.github\.io|app\.bilibili\.com)\/api\/(?:get|set|delete)(?:\?.*)?$/ then script("https://github.com/NSNanoCat/PreferencePanes/releases/latest/download/api.js") with tag="PreferencePanes.API", requires_body=true, timeout=30
