@@ -1,0 +1,18 @@
+#!name=Spotify (Rewrite)
+#!desc=AD (纯 rewrite 版，通过 mock 服务器)
+#!category=Spotify
+#!author=app2smile, 001
+#!homepage=https://github.com/001ProMax/Surge
+#!icon=https://raw.githubusercontent.com/luestr/IconResource/main/App_icon/120px/Spotify.png
+#!tag=Spotify
+
+[Argument]
+Mock = input,"https://mock.trigram-masques-8r.workers.dev/music",type=string,tag=Mock 服务器地址,desc=用于返回修改后响应的 mock 服务器
+
+[Rewrite]
+request if ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/(?:ad-|gabo|pendragon|social)/i then reject(404)
+
+request if ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/(user-customization-service|bootstrap)/i as urlMatch then url.replace("${Mock}/${urlMatch.1}")
+
+[MitM]
+hostname = spclient.wg.spotify.com, g*-spclient.spotify.com
