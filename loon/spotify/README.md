@@ -1,10 +1,9 @@
 # Spotify 去广告 — Loon
 
-## 001ProMax/Surge 版（转换）
-`https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/spotify.plugin`
+基于 001ProMax/Surge 转换。
 
-## Kelee 版（timeout 修复）
-`https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/spotify-remove-ads.plugin`
+## 安装
+`https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/spotify.plugin`
 
 ## 说明
 - 脚本不使用 $argument/$persistentStore，参数仅作 UI。
