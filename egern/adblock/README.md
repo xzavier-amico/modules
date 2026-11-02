@@ -9,10 +9,11 @@
 `https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/adblock/adblock.yaml`
 
 ## 内容
-- Loon: [General] force-http-engine-hosts + [Rule] 64 条 + [Rewrite] 797 条 + [MITM] 707 hostnames
-- Egern: 64 rules + 795 url_rewrites + 2 map_locals + 707 mitm hostnames
+- Loon: [General] force-http-engine-hosts + [Rule] 394 条 + [Rewrite] 797 条 + [MITM] 707 hostnames
+- Egern: 394 rules + 795 url_rewrites + 2 map_locals + 707 mitm hostnames
 
 ## 说明
 - 图标：Reject.png
 - 不需要每日更新
-- HTTPDNS Block 的 rules/map_locals 已合并进来，可单独停用 httpdns-block 插件
+- HTTPDNS Block 的 rules/map_locals 已合并，可单独停用 httpdns-block 插件
+- Kelee 的 346 条 Rule 已合并（去重后 330 条新增）

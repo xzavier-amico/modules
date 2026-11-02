@@ -9,7 +9,7 @@
 
 ## 内容
 - [General] force-http-engine-hosts
-- [Rule] 64 条 (HTTPDNS)
+- [Rule] 394 条 (HTTPDNS + Kelee)
 - [Rewrite] 797 条 (blackmatrix7 + Kelee)
 - [MITM] 707 hostnames
 
