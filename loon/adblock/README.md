@@ -1,6 +1,6 @@
 # ADBlock — 通用广告拦截 (Rewrite 规则)
 
-基于 blackmatrix7/ios_rule_script 的 Advertising 插件，740 条 rewrite 规则，覆盖国内外常见广告。
+基于 blackmatrix7/ios_rule_script (Advertising) + Kelee BlockAdvertisers，744 条 rewrite 规则，覆盖国内外常见广告。
 
 ## 安装
 `https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/adblock/adblock.plugin`
