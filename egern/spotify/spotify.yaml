@@ -28,10 +28,10 @@ compat_arguments_schema:
     options: ["true", "false"]
 
 scriptings:
-  # Spotify.Crack: bootstrap/user-customization-service 响应改写
+  # Spotify.Crack: bootstrap 响应改写
   - http_response:
       name: "spotify.crack"
-      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:bootstrap|user-customization-service)"
+      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/bootstrap"
       script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_crack.js"
       body_required: true
       binary_body: true
