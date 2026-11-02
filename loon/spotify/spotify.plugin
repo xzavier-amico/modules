@@ -11,8 +11,7 @@ tab = switch,false,type=boolean,tag=移除底栏创建按钮,desc=此开关控�
 useractivity = switch,true,type=boolean,tag=启用Apple设备接力,desc=此开关控制是否使用Apple设备接力
 
 [Script]
-response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:bootstrap|user-customization-service)/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_crack.js", {${tab}, ${useractivity}}) with requires_body=true, binary_body_mode=true, tag="Spotify.Crack", timeout=30
-
+http-response ^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:bootstrap|user-customization-service), requires-body=1, binary-body-mode=1, max-size=-1, script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_crack.js, argument="{\"tab\":{{{tab}}},\"useractivity\":{{{useractivity}}}}", tag="Protobuf处理", timeout=60
 [Rewrite]
 request if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/artistview\/v1\/artist\/(.*)&platform=iphone/i as urlMatch then url.replace("https://spclient.wg.spotify.com/artistview/v1/artist/${urlMatch.1}&platform=ipad")
 
