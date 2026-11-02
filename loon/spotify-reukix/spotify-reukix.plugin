@@ -1,0 +1,23 @@
+#!name=Spotify (Reukix)
+#!desc=AD (Reukix multi-script version)
+#!category=Spotify
+#!author=app2smile, Reukix
+#!homepage=https://github.com/Reukix/ukix
+#!icon=https://raw.githubusercontent.com/luestr/IconResource/main/App_icon/120px/Spotify.png
+#!tag=Spotify
+
+[Script]
+response if ${url} ~= /^https:\/\/(spclient\.wg\.spotify\.com|.*-spclient\.spotify\.com(:443)?)\/browsita\/v.\/browse/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify-reukix/js/Spotify-search.js", {}) with requires_body=true, binary_body_mode=true, tag="Spotify-search", timeout=30
+response if ${url} ~= /^https:\/\/(spclient\.wg\.spotify\.com|.*-spclient\.spotify\.com(:443)?)\/scrollsita\/v.\/scroll\/spotify/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify-reukix/js/Spotify-scroll.js", {}) with requires_body=true, binary_body_mode=true, tag="Spotify-scroll", timeout=30
+request if ${url} ~= /^https:\/\/(.*-spclient\.spotify\.com(:443)?|spclient\.wg\.spotify\.com)\/gabo-receiver-service/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify-reukix/js/Spotify-gabo.js") with tag="Spotify-gabo", timeout=10
+response if ${url} ~= /^https:\/\/(spclient\.wg\.spotify\.com|.*-spclient\.spotify\.com(:443)?)\/(bootstrap\/v1\/bootstrap|user-customization-service\/v1\/customize)$/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify-reukix/js/Spotify-proto.js", {}) with requires_body=true, binary_body_mode=true, tag="Spotify-proto", timeout=60
+
+[Rewrite]
+request if ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/pendragon/i then reject(404)
+request if ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/pam-view-service\//i then reject(404)
+request if ${url} ~= /^https:\/\/.*37i9dQZF1EYkqdzj48dyYq/i then reject(404)
+
+request if ${url} ~= /^https:\/\/(spclient\.wg\.spotify\.com|.*-spclient\.spotify\.com(:443)?)\/user-customization-service\/v1\/customize$/i then request.header.del("if-none-match")
+
+[MitM]
+hostname = spclient.wg.spotify.com, *spclient.spotify.com
