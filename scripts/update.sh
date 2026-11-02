@@ -13,7 +13,7 @@ cd /opt/modules || exit 1
 fetch() {
   local url="$1" out="$2"
   local tmp="${out}.tmp"
-  if ! curl -sL --max-time 120 -o "$tmp" "$url"; then
+  if ! curl -sL --max-time 120 -A "Loon/3.5.1 (983)" -o "$tmp" "$url"; then
     echo "FETCH FAIL: $url"; rm -f "$tmp"; return 1
   fi
   if [ -f "$out" ] && cmp -s "$out" "$tmp"; then
@@ -39,7 +39,7 @@ for mod in Enhanced Global Redirect ADBlock; do
     ADBlock) repo=ADBlock; efile=BiliBili.ADBlock.yaml; pfile=BiliBili.ADBlock.plugin; ver=v0.7.5;;
   esac
   # try to discover latest release tag
-  latest=$(curl -sL --max-time 30 "https://api.github.com/repos/Biliverse/$repo/releases/latest" | python3 -c "import json,sys; print(json.load(sys.stdin).get('tag_name',''))" 2>/dev/null)
+  latest=$(curl -sL --max-time 30 -A "Loon/3.5.1 (983)" "https://api.github.com/repos/Biliverse/$repo/releases/latest" | python3 -c "import json,sys; print(json.load(sys.stdin).get('tag_name',''))" 2>/dev/null)
   if [ -n "$latest" ]; then ver="$latest"; fi
   eurl="https://github.com/Biliverse/$repo/releases/download/$ver/$efile"
   purl="https://github.com/Biliverse/$repo/releases/download/$ver/$pfile"
