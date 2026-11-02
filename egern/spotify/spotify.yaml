@@ -1,0 +1,60 @@
+#=======================================================================================
+# Spotify AD — Egern 模块 (001ProMax/Surge 转换)
+# 去广告 + 恢复歌手/专辑列表
+#=======================================================================================
+
+name: "Spotify AD"
+description: "Spotify 去广告，恢复歌手和专辑列表的正常展示。"
+author: "app2smile, 001"
+homepage: "https://github.com/001ProMax/Surge"
+icon: "https://raw.githubusercontent.com/luestr/IconResource/main/App_icon/120px/Spotify.png"
+
+compat_arguments:
+  tab: "true"
+  useractivity: "true"
+
+compat_arguments_desc: |
+  tab          — 移除底栏创建按钮
+  useractivity — 启用 Apple 设备接力
+
+compat_arguments_schema:
+  tab:
+    name: "移除底栏创建按钮"
+    description: "此开关控制是否移除底栏创建按钮"
+    options: ["true", "false"]
+  useractivity:
+    name: "启用Apple设备接力"
+    description: "此开关控制是否使用Apple设备接力"
+    options: ["true", "false"]
+
+scriptings:
+  # Spotify.Crack: bootstrap/user-customization-service 响应改写
+  - http_response:
+      name: "spotify.crack"
+      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:bootstrap|user-customization-service)"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_crack.js"
+      body_required: true
+      binary_body: true
+      max_size: 33554432
+      timeout: 30
+      env:
+        _compat.$argument: '{"tab":{{{tab}}},"useractivity":{{{useractivity}}}}'
+
+# URL Rewrite: artistview redirect (header mode)
+url_rewrites:
+  - match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/artistview\\/v1\\/artist\\/(.*)&platform=iphone"
+    location: "https://spclient.wg.spotify.com/artistview/v1/artist/$1&platform=ipad"
+
+# Map Local: ad-/pendragon -> empty 200
+map_locals:
+  - match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:ad-|pendragon)"
+    status_code: 200
+    headers:
+      Content-Type: text/plain
+    body: ""
+
+mitm:
+  hostnames:
+    includes:
+      - "*-spclient.spotify.com"
+      - "spclient.wg.spotify.com"
