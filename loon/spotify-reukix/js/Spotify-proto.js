@@ -16523,6 +16523,63 @@ function toUint8Array(value) {
   return null;
 }
 
+function readProtoVarint(buffer, offset) {
+  let result = 0;
+  let shift = 0;
+  let pos = offset;
+
+  while (pos < buffer.length) {
+    const byte = buffer[pos++];
+    result += (byte & 0x7f) * Math.pow(2, shift);
+
+    if ((byte & 0x80) === 0) {
+      return { value: result, length: pos - offset };
+    }
+
+    shift += 7;
+    if (shift > 49) return null;
+  }
+
+  return null;
+}
+
+// 返回顶层 protobuf 字段号集合。用于确认重编码没有丢掉服务端新增字段；
+// 如果字段集合发生变化，则放弃修改，原样放行。
+function topLevelFieldSignature(buffer) {
+  const fields = [];
+  let pos = 0;
+
+  while (pos < buffer.length) {
+    const tag = readProtoVarint(buffer, pos);
+    if (!tag) return null;
+
+    pos += tag.length;
+    const fieldNumber = Math.floor(tag.value / 8);
+    const wireType = tag.value & 7;
+    fields.push(fieldNumber);
+
+    if (wireType === 0) {
+      const value = readProtoVarint(buffer, pos);
+      if (!value) return null;
+      pos += value.length;
+    } else if (wireType === 1) {
+      pos += 8;
+    } else if (wireType === 2) {
+      const length = readProtoVarint(buffer, pos);
+      if (!length) return null;
+      pos += length.length + length.value;
+    } else if (wireType === 5) {
+      pos += 4;
+    } else {
+      return null;
+    }
+
+    if (pos > buffer.length) return null;
+  }
+
+  return [...new Set(fields)].sort((a, b) => a - b).join(",");
+}
+
 function getBootstrapPayload(message) {
   const customization =
     message &&
@@ -16576,14 +16633,17 @@ function processResponseBody(url, method, binaryBody) {
       return null;
     }
 
-    if (bootstrapResponseObj.trialsFacadeResponseV1) {
-      console.log("删除 trialsFacadeResponseV1");
-      delete bootstrapResponseObj.trialsFacadeResponseV1;
-    }
-
     processMapObj(payload.accountAttributes, payload.assignedValues || []);
     console.log("bootstrap");
-    return bootstrapResponseType.encode(bootstrapResponseObj).finish();
+
+    const encoded = bootstrapResponseType.encode(bootstrapResponseObj).finish();
+    const before = topLevelFieldSignature(binaryBody);
+    const after = topLevelFieldSignature(encoded);
+    if (!before || !after || before !== after) {
+      console.log("Spotify-proto: bootstrap 顶层字段结构变化，跳过");
+      return null;
+    }
+    return encoded;
   }
 
   if (url.includes("user-customization-service/v1/customize")) {
@@ -16598,7 +16658,15 @@ function processResponseBody(url, method, binaryBody) {
 
     processMapObj(payload.accountAttributes, payload.assignedValues || []);
     console.log("customize");
-    return ucsResponseWrapperType.encode(ucsResponseWrapperMessage).finish();
+
+    const encoded = ucsResponseWrapperType.encode(ucsResponseWrapperMessage).finish();
+    const before = topLevelFieldSignature(binaryBody);
+    const after = topLevelFieldSignature(encoded);
+    if (!before || !after || before !== after) {
+      console.log("Spotify-proto: customize 顶层字段结构变化，跳过");
+      return null;
+    }
+    return encoded;
   }
 
   console.log(`Spotify-proto: 未匹配路径 ${method} ${url}`);
