@@ -20,8 +20,8 @@ https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify-reuk
 - **Premium 解锁脚本**
   - `Spotify-proto.js`：处理 `bootstrap` 与 `user-customization-service/v1/customize` 的 protobuf 响应，写入 Premium 账号属性；保留服务端下发的实验/功能开关，不再整体覆盖 `assignedValues`。
 - **Rewrite**
-  - 拦截 `pendragon`、`pam-view-service`、广告歌单 `37i9dQZF1EYkqdzj48dyYq`。
-  - `gabo-receiver-service` 返回空 200 响应。
+  - `pendragon`、`gabo-receiver-service` 返回空 200 响应。
+  - 拦截 `pam-view-service`、广告歌单 `37i9dQZF1EYkqdzj48dyYq`。
   - 删除 `user-customization-service/v1/customize` 请求中的 `if-none-match`，避免命中缓存。
 - **Rule**
   - 拒绝 Spotify 的 QUIC 请求，确保 HTTP 流量可被 MitM 与脚本处理。
