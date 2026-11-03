@@ -16689,7 +16689,7 @@ function modifyAttributes(attributes) {
   oneYearFromNow.setUTCFullYear(oneYearFromNow.getUTCFullYear() + 1);
 
   // ISO8601 UTC string (equivalent to ISO8601DateFormatter + UTC)
-  const isoDate = oneYearFromNow.toISOString();
+  const isoDate = oneYearFromNow.toISOString().split(".")[0] + "Z";
 
   attributes["ads"] = { boolValue: false };
   attributes["ab-ad-player-targeting"] = { stringValue: "0" };
@@ -16715,33 +16715,29 @@ function modifyAttributes(attributes) {
   attributes["type"] = { stringValue: "premium" };
   attributes["unrestricted"] = { boolValue: true };
 
-  delete attributes["ad-use-adlogic"];
-  delete attributes["ad-catalogues"];
-
-  delete attributes["shuffle"]; // 移除 shuffle 属性，由 shuffle-eligible 控制
-
-  delete attributes["payment-state"];
-  delete attributes["last-premium-activation-date"];
-
-  // Modern logout prevention
-  delete attributes["on-demand-trial"];
-  delete attributes["on-demand-trial-in-progress"];
-  delete attributes["smart-shuffle"];
-
-  // Additional keys
-  delete attributes["at-signal"];
-  delete attributes["feature-set-id-masked"];
-  delete attributes["strider-key"];
-  delete attributes["is-eligible-for-trial"];
-  delete attributes["is-eligible-for-upsell"];
-  delete attributes["upsell-state"];
-  delete attributes["ad-session-persistence"];
-  delete attributes["ad-formats-preroll-video"];
-
-  for (let i = 1; i <= 100; i++) {
-    delete attributes[`is-premium-eligible-v${i}`];
-  }
-  delete attributes["is-premium-eligible"];
+  // 以下属性来自 app2smile 当前维护的 Loon 脚本，只新增/覆盖，不删除服务端字段，
+  // 避免旧版 Reukix 的 delete 列表误删新版本 Spotify 仍需要的属性。
+  attributes["smart-shuffle"] = { stringValue: "AVAILABLE" };
+  attributes["is-euterpe"] = { boolValue: true };
+  attributes["has-audiobooks-subscription"] = { boolValue: true };
+  attributes["jam-social-session"] = { stringValue: "EXPANDED" };
+  attributes["shuffle-algorithm"] = { stringValue: "RANDOM" };
+  attributes["is-thalia"] = { boolValue: true };
+  attributes["shuffle"] = { boolValue: false };
+  attributes["is-pigeon"] = { boolValue: true };
+  attributes["libspotify"] = { boolValue: true };
+  attributes["high-bitrate"] = { boolValue: true };
+  attributes["your-library-tags"] = { boolValue: true };
+  attributes["loudness-levels"] = { stringValue: "1:-5.0,0.0,3.0:-2.0" };
+  attributes["pick-and-shuffle"] = { boolValue: false };
+  attributes["offline-backup"] = { stringValue: "UNRESTRICTED" };
+  attributes["lyrics-offline"] = { boolValue: true };
+  attributes["mixing-tools"] = { stringValue: "EDIT" };
+  attributes["mobile"] = { boolValue: true };
+  attributes["com.spotify.madprops.use.ucs.product.state"] = {
+    boolValue: true,
+  };
+  attributes["com.spotify.madprops.delivered.by.ucs"] = { boolValue: true };
 
   console.log("accountAttributesMapObj processed");
 }
@@ -16816,7 +16812,11 @@ function overrideAssignedValues(target) {
 }
 
 function processMapObj(accountAttributesMapObj, assignedValuesMapObj) {
-  //modifyAssignedValues(assignedValuesMapObj);
-  overrideAssignedValues(assignedValuesMapObj);
+  // 不要整体替换 assignedValues。
+  // Reukix 原脚本会用一份固定的 OVERRIDE_ASSIGNED_VALUES 覆盖服务端返回的
+  // 全部实验/功能开关，Spotify 新增 Home、Search 所需开关后会直接导致
+  // “Something went wrong”。这里只修改账号属性，保留服务端下发的所有开关。
+  // modifyAssignedValues(assignedValuesMapObj);
+  // overrideAssignedValues(assignedValuesMapObj);
   modifyAttributes(accountAttributesMapObj);
 }
