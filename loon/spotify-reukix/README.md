@@ -18,13 +18,37 @@ https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify-reuk
 ## 包含内容
 
 - **Premium 解锁脚本**
-  - `Spotify-proto.js`：处理 `bootstrap` 与 `user-customization-service/v1/customize` 的 protobuf 响应，写入 Premium 账号属性；保留服务端下发的实验/功能开关，不再整体覆盖 `assignedValues`。
+  - `Spotify-proto.js`：处理 `bootstrap` 与 `user-customization-service/v1/customize` 的 protobuf 响应，只写入广告、随机播放、离线等客户端功能属性；保留服务端下发的 `assignedValues`、账号属性和顶层未知字段，不再强制覆盖播放授权字段。
+  - `Spotify-capabilities.js`：处理 `device-capabilities/v1/capabilities`，把设备能力标记为 Premium，用于维持 UI 和音质选项；不参与服务端播放授权。
 - **Rewrite**
   - `pendragon`、`gabo-receiver-service` 返回空 200 响应。
   - 拦截 `pam-view-service`、广告歌单 `37i9dQZF1EYkqdzj48dyYq`。
   - 删除 `user-customization-service/v1/customize` 请求中的 `if-none-match`，避免命中缓存。
 - **Rule**
   - 拒绝 Spotify 的 QUIC 请求，确保 HTTP 流量可被 MitM 与脚本处理。
+
+## 播放兼容性说明
+
+新版 Spotify 的播放授权由服务端 `playplay` 等接口决定。旧版脚本会强制写入：
+
+- `player-license` / `player-license-v2`
+- `financial-product`
+- `catalogue`
+- `streaming-rules`
+- `on-demand`
+- `high-bitrate`
+- `product-expiry`
+
+这些值会让客户端误以为自己有 Premium 播放授权，但服务端实际返回的是免费账号授权。两边不一致时，Spotify 会先尝试播放，几秒后拿不到音频密钥便自动跳到下一首（常见表现为 **3～10 秒卡断/跳歌**）。
+
+当前版本已移除这些强制播放授权字段，只保留：
+
+- 去广告：`ads=false`、广告 ID 限制
+- 随机播放：`shuffle=false`、`smart-shuffle=AVAILABLE`
+- 离线/歌词：`offline`、`offline-backup`、`lyrics-offline`
+- 账号展示：`type=premium`、`subscription-enddate`
+
+如果更新后播放正常但某些 Premium 展示项消失，这是为了避免和服务端授权冲突而做的取舍；优先保证能正常听歌。
 
 ## 关于 search / scroll 脚本
 
@@ -42,7 +66,7 @@ https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify-reuk
   - 响应体统一按 `Uint8Array`（`$response.body`）处理；
   - 移除 Quantumult X 的 `$task` / `$response.bodyBytes` 分支；
   - 使用 `$response.status`、`$done({ body })`；
-  - `Spotify-proto.js` 在解析失败或响应结构变化时原样放行，避免影响 Spotify 正常使用。
+  - `Spotify-proto.js` 在解析失败或字段结构无法安全合并时原样放行；服务端新增的顶层字段会按原始字节保留，不再因为字段变化而放弃 Premium 修改。
 - 插件规则只使用 Loon 插件允许的 `REJECT` 策略。
 
 ## 说明

@@ -16543,20 +16543,20 @@ function readProtoVarint(buffer, offset) {
   return null;
 }
 
-// 返回顶层 protobuf 字段号集合。用于确认重编码没有丢掉服务端新增字段；
-// 如果字段集合发生变化，则放弃修改，原样放行。
-function topLevelFieldSignature(buffer) {
+// 把顶层 protobuf 字段拆成 { number, wireType, raw }。
+// raw 保留原始字节，便于把 protobufjs 不认识的新字段原样拼回去。
+function collectTopLevelFields(buffer) {
   const fields = [];
   let pos = 0;
 
   while (pos < buffer.length) {
+    const start = pos;
     const tag = readProtoVarint(buffer, pos);
     if (!tag) return null;
 
     pos += tag.length;
     const fieldNumber = Math.floor(tag.value / 8);
     const wireType = tag.value & 7;
-    fields.push(fieldNumber);
 
     if (wireType === 0) {
       const value = readProtoVarint(buffer, pos);
@@ -16571,13 +16571,60 @@ function topLevelFieldSignature(buffer) {
     } else if (wireType === 5) {
       pos += 4;
     } else {
+      // 不支持 group（3/4），遇到就放弃，避免拼坏响应。
       return null;
     }
 
     if (pos > buffer.length) return null;
+    fields.push({
+      number: fieldNumber,
+      wireType,
+      raw: buffer.subarray(start, pos),
+    });
   }
 
-  return [...new Set(fields)].sort((a, b) => a - b).join(",");
+  return fields;
+}
+
+// protobufjs 解码/重编码时会把 schema 里没有的顶层字段丢掉。
+// 新版 Spotify 增加顶层字段时，不能因此放弃 Premium 修改；
+// 这里把重编码后缺失的原始字段按字节追加回去，既能继续打补丁，也不会破坏新字段。
+function mergeUnknownTopLevelFields(originalBuffer, encodedBuffer) {
+  const originalFields = collectTopLevelFields(originalBuffer);
+  const encodedFields = collectTopLevelFields(encodedBuffer);
+  if (!originalFields || !encodedFields) return null;
+
+  const encodedTypes = new Map();
+  for (const field of encodedFields) {
+    if (!encodedTypes.has(field.number)) encodedTypes.set(field.number, new Set());
+    encodedTypes.get(field.number).add(field.wireType);
+  }
+
+  const missing = [];
+  for (const field of originalFields) {
+    const types = encodedTypes.get(field.number);
+    if (!types) {
+      missing.push(field.raw);
+    } else if (!types.has(field.wireType)) {
+      // 字段号相同但 wire type 变了，说明 protobuf 定义已经对不上，放弃修改更安全。
+      return null;
+    }
+  }
+
+  if (missing.length === 0) return encodedBuffer;
+
+  console.log(`Spotify-proto: 保留 ${missing.length} 个顶层未知字段`);
+  let totalLength = encodedBuffer.length;
+  for (const raw of missing) totalLength += raw.length;
+
+  const merged = new Uint8Array(totalLength);
+  merged.set(encodedBuffer, 0);
+  let offset = encodedBuffer.length;
+  for (const raw of missing) {
+    merged.set(raw, offset);
+    offset += raw.length;
+  }
+  return merged;
 }
 
 function getBootstrapPayload(message) {
@@ -16637,13 +16684,12 @@ function processResponseBody(url, method, binaryBody) {
     console.log("bootstrap");
 
     const encoded = bootstrapResponseType.encode(bootstrapResponseObj).finish();
-    const before = topLevelFieldSignature(binaryBody);
-    const after = topLevelFieldSignature(encoded);
-    if (!before || !after || before !== after) {
-      console.log("Spotify-proto: bootstrap 顶层字段结构变化，跳过");
+    const merged = mergeUnknownTopLevelFields(binaryBody, encoded);
+    if (!merged) {
+      console.log("Spotify-proto: bootstrap 顶层字段结构无法安全合并，跳过");
       return null;
     }
-    return encoded;
+    return merged;
   }
 
   if (url.includes("user-customization-service/v1/customize")) {
@@ -16660,13 +16706,12 @@ function processResponseBody(url, method, binaryBody) {
     console.log("customize");
 
     const encoded = ucsResponseWrapperType.encode(ucsResponseWrapperMessage).finish();
-    const before = topLevelFieldSignature(binaryBody);
-    const after = topLevelFieldSignature(encoded);
-    if (!before || !after || before !== after) {
-      console.log("Spotify-proto: customize 顶层字段结构变化，跳过");
+    const merged = mergeUnknownTopLevelFields(binaryBody, encoded);
+    if (!merged) {
+      console.log("Spotify-proto: customize 顶层字段结构无法安全合并，跳过");
       return null;
     }
-    return encoded;
+    return merged;
   }
 
   console.log(`Spotify-proto: 未匹配路径 ${method} ${url}`);
@@ -16759,26 +16804,22 @@ function modifyAttributes(attributes) {
   // ISO8601 UTC string (equivalent to ISO8601DateFormatter + UTC)
   const isoDate = oneYearFromNow.toISOString().split(".")[0] + "Z";
 
+  // 广告、随机播放、离线等客户端功能属性。
+  // 注意：不要在这里强制写 player-license / financial-product / catalogue /
+  // streaming-rules / on-demand / high-bitrate / product-expiry 这类“播放授权”
+  // 属性。服务端 playplay 返回的真实账号状态和这些值冲突时，Spotify 会尝试
+  // 播放一个它实际上没有权限的码流，几秒后拿不到音频密钥就自动跳下一首。
+  // 当前 Spotify 新版出现的 3~10 秒卡断/跳歌就是这个原因。
   attributes["ads"] = { boolValue: false };
   attributes["ab-ad-player-targeting"] = { stringValue: "0" };
   attributes["allow-advertising-id-transmission"] = { boolValue: false };
   attributes["restrict-advertising-id-transmission"] = { boolValue: true };
   attributes["can_use_superbird"] = { boolValue: true };
-  attributes["catalogue"] = { stringValue: "premium" };
-  attributes["financial-product"] = { stringValue: "pr:premium,tc:0" };
-  attributes["is-eligible-premium-unboxing"] = { boolValue: true };
-  attributes["name"] = { stringValue: "Spotify Premium" };
   attributes["nft-disabled"] = { stringValue: "1" };
   attributes["offline"] = { boolValue: true }; // allow downloading
-  attributes["on-demand"] = { boolValue: true };
-  attributes["payments-initial-campaign"] = { stringValue: "default" };
-  attributes["player-license"] = { stringValue: "premium" };
-  attributes["player-license-v2"] = { stringValue: "premium" };
-  attributes["product-expiry"] = { stringValue: isoDate };
+  attributes["payments-initial-campaign"] = { stringValue: "prepaid" };
   attributes["shuffle-eligible"] = { boolValue: true };
-  attributes["social-session"] = { boolValue: true };
   attributes["social-session-free-tier"] = { boolValue: false };
-  attributes["streaming-rules"] = { stringValue: "" };
   attributes["subscription-enddate"] = { stringValue: isoDate };
   attributes["type"] = { stringValue: "premium" };
   attributes["unrestricted"] = { boolValue: true };
@@ -16789,18 +16830,13 @@ function modifyAttributes(attributes) {
   attributes["is-euterpe"] = { boolValue: true };
   attributes["has-audiobooks-subscription"] = { boolValue: true };
   attributes["jam-social-session"] = { stringValue: "EXPANDED" };
+  attributes["audio-quality"] = { stringValue: "1" };
   attributes["shuffle-algorithm"] = { stringValue: "RANDOM" };
   attributes["is-thalia"] = { boolValue: true };
   attributes["shuffle"] = { boolValue: false };
-  attributes["is-pigeon"] = { boolValue: true };
-  attributes["libspotify"] = { boolValue: true };
-  attributes["high-bitrate"] = { boolValue: true };
-  attributes["your-library-tags"] = { boolValue: true };
-  attributes["loudness-levels"] = { stringValue: "1:-5.0,0.0,3.0:-2.0" };
   attributes["pick-and-shuffle"] = { boolValue: false };
   attributes["offline-backup"] = { stringValue: "UNRESTRICTED" };
   attributes["lyrics-offline"] = { boolValue: true };
-  attributes["mixing-tools"] = { stringValue: "EDIT" };
   attributes["mobile"] = { boolValue: true };
   attributes["com.spotify.madprops.use.ucs.product.state"] = {
     boolValue: true,
