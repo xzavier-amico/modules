@@ -18,7 +18,7 @@ https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify-reuk
 ## 包含内容
 
 - **Premium 解锁脚本**
-  - `Spotify-proto.js`：处理 `bootstrap` 与 `user-customization-service/v1/customize` 的 protobuf 响应，只写入广告、随机播放、离线等客户端功能属性；保留服务端下发的 `assignedValues`、账号属性和顶层未知字段，不再强制覆盖播放授权字段。
+  - `Spotify-proto.js`：处理 `bootstrap` 与 `user-customization-service/v1/customize` 的 protobuf 响应，只写入广告、随机播放、离线等客户端功能属性；保留服务端下发的 `assignedValues`、其余账号属性和顶层未知字段，不再强制覆盖播放授权字段。
   - `Spotify-capabilities.js`：处理 `device-capabilities/v1/capabilities`，把设备能力标记为 Premium，用于维持 UI 和音质选项；不参与服务端播放授权。
 - **Rewrite**
   - `pendragon`、`gabo-receiver-service` 返回空 200 响应。
