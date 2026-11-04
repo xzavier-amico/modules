@@ -33,5 +33,18 @@
   - 加回后跳歌 → 原因就是 QUIC REJECT。
   - 加回后正常 → 再逐项加回 `type=premium` → `unrestricted` → `audio-quality`
     → capabilities → PAM/gabo 规则，每次只加一项。
-- 诊断版仍跳歌：把 MitM 缩小到 `spclient.wg.spotify.com`，再测试是否为
-  `guc3-spclient.spotify.com` 的 MitM/H2 处理导致；同时用“完全停用插件”做对照。
+- 诊断版仍跳歌：用 `spotify-reukix-diag2.plugin`，把 `guc3-spclient.spotify.com`
+  从 MitM 中排除，再测试是否为 playplay / audio-key 的 MitM/H2 处理导致；
+  同时用“完全停用插件”做对照。
+
+## 诊断版 2：排除 guc3
+
+`spotify-reukix-diag2.plugin` 只改 MitM：
+
+```
+hostname = spclient.wg.spotify.com, *-spclient.spotify.com, -guc3-spclient.spotify.com
+```
+
+这样 playplay / audio-key 走 `guc3-spclient.spotify.com` 时不再经过 Loon 解密；
+bootstrap/customize 如果走其它 shard，仍然可以打补丁。测试时先保持蜂窝 + 锁屏，
+如果还卡，再用 Wi-Fi + 亮屏做对照，区分是 Loon 还是 iOS 后台网络。
