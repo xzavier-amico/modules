@@ -10,6 +10,8 @@
   `streaming-rules`、`financial-product`、`product-expiry`。
 - 不加载 `Spotify-capabilities.js`，不修改设备能力/HiFi 声明。
 - 暂时移除 `pam-view-service`、`37i9...` 拦截和 `gabo`/`pendragon` 空响应。
+- 暂时移除 QUIC REJECT。app2smile #274 中有用户反馈，Quantumult X 里
+  `udp_drop_list = 443, STUN, QUIC` 会导致同样的跳歌，注释掉后恢复。
 
 这样客户端会按服务端下发的真实账号状态请求音频，只保留去广告效果。
 如果这个版本播放正常，说明问题出在“客户端误以为自己有 Premium 播放权限”
@@ -27,7 +29,9 @@
 
 ## 下一步
 
-- 诊断版正常：逐项加回 `type=premium` → `unrestricted` → `audio-quality` →
-  capabilities → PAM/gabo 规则，每次只加一项。
-- 诊断版仍跳歌：移除 QUIC REJECT，或把 MitM 缩小到 `spclient.wg.spotify.com`，
-  再测试是否为 `guc3-spclient.spotify.com` 的 MitM/H2 处理导致。
+- 诊断版正常：先只加回 QUIC REJECT 测试。
+  - 加回后跳歌 → 原因就是 QUIC REJECT。
+  - 加回后正常 → 再逐项加回 `type=premium` → `unrestricted` → `audio-quality`
+    → capabilities → PAM/gabo 规则，每次只加一项。
+- 诊断版仍跳歌：把 MitM 缩小到 `spclient.wg.spotify.com`，再测试是否为
+  `guc3-spclient.spotify.com` 的 MitM/H2 处理导致；同时用“完全停用插件”做对照。
