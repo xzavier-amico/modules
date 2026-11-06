@@ -17,7 +17,7 @@
 #                                                      = 1048576; "0 = 不限制"的语义官方未定义，勿依赖）
 #   argument="{"flag":...}"                         → env._compat.$argument （原样的 JSON，内嵌三花括号占位符）
 #   #!arguments / #!arguments-desc                  → compat_arguments / compat_arguments_desc
-#   模块设置页开关                                   → compat_arguments_schema
+#   模块设置页 UI                                     → compat_arguments_schema（开关/选择器/输入框）
 #   #!REQUIREMENT "'...' == 'true'"（auto_hd 门控）  → 无按参数条件启用的能力；request.js 内部
 #                                                      本就按 autoHd 自行判断，脚本常开无副作用
 #   [URL Rewrite] ... - reject                      → rewrites[].actions[].respond {status: 404}
@@ -50,55 +50,145 @@ compat_arguments:
   block_store: "true"
   block_ai: "true"
   on_the_go: "true"
+  background_play: "true"
+  pip: "true"
+  max_speed: "4"
+  hide_premium: "true"
+  prefer_premium: "true"
+  max_height: "4320"
+  block_player_ads: "true"
+  block_feed_ads: "true"
+  block_shorts_ads: "true"
+  remove_paid_promotion: "true"
+  block_ad_tracking: "true"
+  block_guide_items: ""
+  on_the_go_audio: "true"
+  on_the_go_chapters: "true"
+  strip_hot_hash: "true"
 
 compat_arguments_desc: |
-  block_upload          — 移除「上传」标签 tab
-  block_shorts          — 移除 Shorts 标签 tab
-  auto_hd               — 优先选择最高分辨率（已授权时用 Premium 高码率）
+  block_upload          — 移除侧栏中的「上传」入口
+  block_shorts          — 移除侧栏中的 Shorts 入口
+  auto_hd               — 优先选择可用的最高分辨率（已授权时用 Premium 高码率）
   block_games           — 移除首页 Playables（小游戏）
   block_vertical_live   — 移除首页竖屏直播
-  jump_ahead            — 启用 Jump Ahead 按钮
-  block_store           — 移除创作者商店/商品卡/悬浮层
-  block_ai              — 移除 Ask/AI 摘要及相关控件
+  jump_ahead            — 启用播放器中的 Jump Ahead 快进按钮
+  block_store           — 移除创作者商店、商品卡与相关悬浮层
+  block_ai              — 移除 Ask、AI 摘要及相关控件
   on_the_go             — 在兼容 UI 组件可用时启用 On-the-go 控件
+  background_play       — 启用后台播放，并在设置页强制打开后台播放
+  pip                   — 启用画中画（PiP）
+  max_speed             — 最大播放倍速：4 / 3 / 2，off 表示不修改倍速数值与上限
+  hide_premium          — 隐藏侧栏 Premium 入口和倍速菜单中的 Premium 推广
+  prefer_premium        — 自动高清时优先使用 Premium 高码率版本
+  max_height            — 自动高清允许的最高分辨率高度，默认 4320
+  block_player_ads      — 移除播放器广告位并拦截 ad_break
+  block_feed_ads        — 移除首页、搜索和推荐信息流中的广告卡片
+  block_shorts_ads      — 移除 Shorts 列表中的广告条目
+  remove_paid_promotion — 移除播放器响应中的付费推广与推广内容
+  block_ad_tracking     — 移除播放跟踪中的广告转化字段
+  block_guide_items     — 额外隐藏的侧栏 browseId，多个用英文逗号分隔
+  on_the_go_audio       — 在 On-the-go 控件中加入音频模式切换按钮
+  on_the_go_chapters    — 在 On-the-go 控件中加入章节按钮
+  strip_hot_hash        — 移除 log_event 中的热更新哈希响应头，避免配置被覆盖
 
-# ---- 模块设置页 UI（Toggle 开关）----
+# ---- 模块设置页 UI（开关 / 选择器 / 输入框）----
 compat_arguments_schema:
   block_upload:
-    name: "Remove upload tab"
-    description: "移除「上传」标签页"
+    name: "移除上传入口"
+    description: "移除侧栏中的「上传」入口"
     options: ["true", "false"]
   block_shorts:
-    name: "Remove Shorts tab"
-    description: "移除 Shorts 标签页"
+    name: "移除 Shorts 入口"
+    description: "移除侧栏中的 Shorts 入口"
     options: ["true", "false"]
   auto_hd:
-    name: "Auto HD"
+    name: "自动高清"
     description: "优先最高分辨率；已授权 Premium 时使用高码率"
     options: ["true", "false"]
   block_games:
-    name: "Remove Playables"
+    name: "屏蔽 Playables"
     description: "移除首页小游戏（Playables）"
     options: ["true", "false"]
   block_vertical_live:
-    name: "Remove vertical live"
+    name: "屏蔽竖屏直播"
     description: "移除首页竖屏直播"
     options: ["true", "false"]
   jump_ahead:
-    name: "Jump Ahead button"
-    description: "启用 Jump Ahead 按钮"
+    name: "Jump Ahead 按钮"
+    description: "启用播放器中的 Jump Ahead 快进按钮"
     options: ["true", "false"]
   block_store:
-    name: "Remove creator stores"
+    name: "屏蔽创作者商店"
     description: "移除创作者商店、商品卡片与悬浮层"
     options: ["true", "false"]
   block_ai:
-    name: "Remove Ask / AI"
+    name: "屏蔽 Ask / AI"
     description: "移除 Ask、AI 摘要及相关控件"
     options: ["true", "false"]
   on_the_go:
-    name: "On-the-go controls"
+    name: "On-the-go 控件"
     description: "在兼容 UI 组件可用时启用 On-the-go 控件"
+    options: ["true", "false"]
+  background_play:
+    name: "后台播放"
+    description: "启用后台播放，并在设置页强制打开后台播放"
+    options: ["true", "false"]
+  pip:
+    name: "画中画"
+    description: "启用画中画（PiP）"
+    options: ["true", "false"]
+  max_speed:
+    name: "最大倍速"
+    description: "可选 4 / 3 / 2 / off；off 表示不修改倍速数值与上限"
+    options: ["4", "3", "2", "off"]
+  hide_premium:
+    name: "隐藏 Premium 推广"
+    description: "隐藏侧栏 Premium 入口和倍速菜单中的 Premium 推广"
+    options: ["true", "false"]
+  prefer_premium:
+    name: "优先 Premium 码率"
+    description: "自动高清时若有 Premium 高码率版本则优先使用"
+    options: ["true", "false"]
+  max_height:
+    name: "最大分辨率"
+    description: "自动高清允许的最高分辨率（像素高度）"
+    options: ["4320", "2160", "1440", "1080", "720", "480"]
+  block_player_ads:
+    name: "屏蔽播放器广告"
+    description: "移除播放器广告位并让 ad_break 返回空响应"
+    options: ["true", "false"]
+  block_feed_ads:
+    name: "屏蔽信息流广告"
+    description: "移除首页、搜索和推荐信息流中的广告卡片"
+    options: ["true", "false"]
+  block_shorts_ads:
+    name: "屏蔽 Shorts 广告"
+    description: "移除 Shorts 列表中的广告条目"
+    options: ["true", "false"]
+  remove_paid_promotion:
+    name: "移除付费推广"
+    description: "移除播放器响应中的付费推广与推广内容字段"
+    options: ["true", "false"]
+  block_ad_tracking:
+    name: "屏蔽广告追踪"
+    description: "移除播放跟踪中的广告转化字段"
+    options: ["true", "false"]
+  block_guide_items:
+    name: "隐藏侧栏入口"
+    description: "额外隐藏的侧栏入口 browseId，多个用英文逗号分隔（例如 FEuploads,FEshorts）"
+    options: []
+  on_the_go_audio:
+    name: "On-the-go 音频模式"
+    description: "在 On-the-go 控件中加入音频模式切换按钮"
+    options: ["true", "false"]
+  on_the_go_chapters:
+    name: "On-the-go 章节"
+    description: "在 On-the-go 控件中加入章节按钮"
+    options: ["true", "false"]
+  strip_hot_hash:
+    name: "移除热更新哈希头"
+    description: "移除 log_event 中的热更新哈希响应头，避免热更新配置覆盖"
     options: ["true", "false"]
 
 # ---- 脚本（Surge [Script] 原样翻译；脚本即 js/ 下的 Surge 原版，无需包装）----
@@ -109,8 +199,10 @@ scriptings:
       match: "^https://youtubei\\.googleapis\\.com/youtubei/v1/player/ad_break(?:\\?.*)?$"
       script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/request.js"
       timeout: 30
+      env:
+        _compat.$argument: '{"blockPlayerAds":{{{block_player_ads}}}}'
 
-  # youtube.enhance.response：改写 browse/next/player 等响应（9 个开关全量注入）
+  # youtube.enhance.response：改写 browse/next/player 等响应（全部参数注入，脚本按需读取）
   # 路由 A/B 测试记录:
   #   [A] 原版全量 match（当前, 含 guide / account/get_setting）—— 保留原版全部功能
   #       （隐藏上传 tab 等), 正在验证「我的」页是否与之共存:
@@ -128,7 +220,7 @@ scriptings:
       max_size: 33554432    # 32 MiB（0 的语义文档未定义，显式大值；默认 1 MiB 会截断大响应）
       timeout: 60
       env:
-        _compat.$argument: '{"blockUpload":{{{block_upload}}},"blockShorts":{{{block_shorts}}},"blockGames":{{{block_games}}},"blockVerticalLive":{{{block_vertical_live}}},"jumpAhead":{{{jump_ahead}}},"autoHd":{{{auto_hd}}},"blockStore":{{{block_store}}},"blockAi":{{{block_ai}}},"onTheGo":{{{on_the_go}}}}'
+        _compat.$argument: '{"blockUpload":{{{block_upload}}},"blockShorts":{{{block_shorts}}},"autoHd":{{{auto_hd}}},"blockGames":{{{block_games}}},"blockVerticalLive":{{{block_vertical_live}}},"jumpAhead":{{{jump_ahead}}},"blockStore":{{{block_store}}},"blockAi":{{{block_ai}}},"onTheGo":{{{on_the_go}}},"backgroundPlay":{{{background_play}}},"pip":{{{pip}}},"maxSpeed":"{{{max_speed}}}","hidePremium":{{{hide_premium}}},"preferPremium":{{{prefer_premium}}},"maxHeight":{{{max_height}}},"blockPlayerAds":{{{block_player_ads}}},"blockFeedAds":{{{block_feed_ads}}},"blockShortsAds":{{{block_shorts_ads}}},"removePaidPromotion":{{{remove_paid_promotion}}},"blockAdTracking":{{{block_ad_tracking}}},"blockGuideItems":"{{{block_guide_items}}}","onTheGoAudio":{{{on_the_go_audio}}},"onTheGoChapters":{{{on_the_go_chapters}}},"stripHotHash":{{{strip_hot_hash}}}}'
 
   # youtube.enhance.key：从 config/log_event 提取 client/encrypt 密钥（ump 解密依赖）
   - http_response:
@@ -151,7 +243,7 @@ scriptings:
       max_size: 33554432
       timeout: 60
       env:
-        _compat.$argument: '{"blockGames":{{{block_games}}},"blockVerticalLive":{{{block_vertical_live}}},"jumpAhead":{{{jump_ahead}}},"autoHd":{{{auto_hd}}},"blockStore":{{{block_store}}},"blockAi":{{{block_ai}}},"onTheGo":{{{on_the_go}}}}'
+        _compat.$argument: '{"blockGames":{{{block_games}}},"blockVerticalLive":{{{block_vertical_live}}},"jumpAhead":{{{jump_ahead}}},"autoHd":{{{auto_hd}}},"blockStore":{{{block_store}}},"blockAi":{{{block_ai}}},"onTheGo":{{{on_the_go}}},"backgroundPlay":{{{background_play}}},"pip":{{{pip}}},"maxSpeed":"{{{max_speed}}}","hidePremium":{{{hide_premium}}},"preferPremium":{{{prefer_premium}}},"maxHeight":{{{max_height}}},"blockPlayerAds":{{{block_player_ads}}},"blockFeedAds":{{{block_feed_ads}}},"blockShortsAds":{{{block_shorts_ads}}},"removePaidPromotion":{{{remove_paid_promotion}}},"blockAdTracking":{{{block_ad_tracking}}},"blockGuideItems":"{{{block_guide_items}}}","onTheGoAudio":{{{on_the_go_audio}}},"onTheGoChapters":{{{on_the_go_chapters}}},"stripHotHash":{{{strip_hot_hash}}}}'
 
   # youtube.enhance.init：initplayback 请求改写
   - http_request:
@@ -163,7 +255,7 @@ scriptings:
       max_size: 33554432
       timeout: 30
       env:
-        _compat.$argument: '{"autoHd":{{{auto_hd}}}}'
+        _compat.$argument: '{"autoHd":{{{auto_hd}}},"preferPremium":{{{prefer_premium}}},"maxHeight":{{{max_height}}}}'
 
   # youtube.enhance.auto-hd：videoplayback 请求改写（auto_hd=false 时脚本内部自判、不改写）
   - http_request:
@@ -175,7 +267,7 @@ scriptings:
       max_size: 33554432
       timeout: 30
       env:
-        _compat.$argument: '{"autoHd":{{{auto_hd}}}}'
+        _compat.$argument: '{"autoHd":{{{auto_hd}}},"preferPremium":{{{prefer_premium}}},"maxHeight":{{{max_height}}}}'
 
   # youtube.enhance.log-event：剥除热更新 hash 响应头
   - http_request:
@@ -183,6 +275,8 @@ scriptings:
       match: "^https://youtubei\\.googleapis\\.com/youtubei/v1/log_event(?:\\?.*)?$"
       script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/request.js"
       timeout: 30
+      env:
+        _compat.$argument: '{"stripHotHash":{{{strip_hot_hash}}}}'
 
 # ---- URL Rewrite（Surge 的 - reject → respond 404 空响应）----
 rewrites:
