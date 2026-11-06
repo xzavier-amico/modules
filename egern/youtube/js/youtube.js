@@ -363,7 +363,6 @@
     on_the_go_audio: "onTheGoAudio",
     on_the_go_chapters: "onTheGoChapters",
     strip_hot_hash: "stripHotHash",
-    verbose_log: "verboseLog",
   };
 
   // Loon 传 snake_case 对象或位置数组，Egern 传 JSON 字符串，这里统一成普通对象。
@@ -386,20 +385,6 @@
     }
     return raw && "object" == typeof raw ? raw : {};
   }
-
-  const ARGUMENT = readArgument();
-
-  // 日志开关：模块参数 verbose_log，默认关闭。
-  const VERBOSE = (() => {
-    const value = ARGUMENT.verbose_log ?? ARGUMENT.verboseLog;
-    return value === true || value === "true" || value === 1 || value === "1";
-  })();
-
-  // Loon 的脚本 API 只保证 console.log 可用，console.warn 不一定存在，统一走 log。
-  const log = (message) => {
-    if (!VERBOSE) return;
-    console.log("youtube: " + message);
-  };
 
   function readOptions(defaults = {}) {
     const raw = readArgument();
@@ -1688,7 +1673,6 @@
       if (changed) setField(renderer, "overflowMenu", updated);
       return changed;
     } catch (e) {
-      log("speed menu: " + e);
       return false;
     }
   }
@@ -2029,7 +2013,7 @@
           ) || changed;
       }
     } catch (e) {
-      log("AI controls: " + e);
+      // 结构对不上就当没改，放原响应过去。
     }
     return changed;
   }
@@ -2078,7 +2062,7 @@
       try {
         changed = buildOnTheGo(root, opts) || changed;
       } catch (e) {
-        log("on-the-go: " + e);
+        // 章节数据缺失时跳过，不影响其它改写。
       }
     }
 
@@ -2269,7 +2253,6 @@
     try {
       cache = readStore(QUALITY_KEY, MAX_QUALITY_JSON);
     } catch (e) {
-      log("quality read: " + e);
       return;
     }
 
@@ -2341,7 +2324,7 @@
         next[videoId] = entry;
         dirty = true;
       } catch (e) {
-        log("quality metadata: " + e);
+        // 单条画质记录异常不影响其它记录。
       }
     }
 
@@ -2356,9 +2339,9 @@
         delete next[Object.keys(next)[0]];
         json = JSON.stringify(next);
       }
-      writeStore(next, QUALITY_KEY) || log("quality write failed");
+      writeStore(next, QUALITY_KEY);
     } catch (e) {
-      log("quality cache: " + e);
+      // 存不进去就算了，不影响本次播放。
     }
   }
 
@@ -3146,7 +3129,6 @@
       }
       $done(undefined);
     } catch (e) {
-      log("request: " + e);
       $done(path.endsWith("/initplayback") ? emptyProtobufResponse() : {});
     }
   }
@@ -3201,12 +3183,11 @@
 
           if (previous.length) entry.previous = previous;
           config[key] = entry;
-          writeStore(config) || log("key write failed");
+          writeStore(config);
         }
       }
       $done({});
     } catch (e) {
-      log("keys: " + e);
       $done({});
     }
   }
@@ -3338,7 +3319,6 @@
 
       $done(rewrite(node, options) ? { body: codec.toBinary(node) } : {});
     } catch (e) {
-      log("response: " + e);
       $done({});
     }
   }
@@ -3380,7 +3360,6 @@
       if (false !== options.autoHd) updateQualityCache(result.players, options);
       $done(result.body === body ? {} : { body: result.body });
     } catch (e) {
-      log(String(e));
       $done({ status: 200, headers: { "Content-Type": "text/plain" }, body: new Uint8Array() });
     }
   }

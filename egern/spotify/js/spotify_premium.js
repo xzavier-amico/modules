@@ -32,14 +32,17 @@
     return;
   }
   if (body.length > 4 * 1024 * 1024) {
-    log("body too large " + body.length);
     $done({});
     return;
   }
 
+  // Loon 传位置数组，Egern 传 JSON 字符串，两种都兼容。
   let opt = {};
   try {
-    opt = typeof $argument === "string" ? JSON.parse($argument || "{}") : $argument || {};
+    const raw = typeof $argument !== "undefined" ? $argument : undefined;
+    if (Array.isArray(raw)) opt = {spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2]};
+    else if (typeof raw === "string") opt = JSON.parse(raw || "{}") || {};
+    else if (raw && "object" == typeof raw) opt = raw;
   } catch (e) {
     opt = {};
   }
@@ -52,13 +55,7 @@
   }
   const adsOn = flag(opt.block_ads, true);
   const playOn = flag(opt.unlock_playback, true);
-  const verbose = flag(opt.verbose_log, false);
 
-  // Loon 的脚本 API 只保证 console.log 可用，console.warn 不一定存在，统一走 log。
-  const log = (msg) => {
-    if (!verbose) return;
-    console.log("spotify: " + msg);
-  };
 
   // ---------------------------------------------------------------- protobuf
 
@@ -639,11 +636,9 @@
   else out = patchCustomize(body) || patchBootstrap(body);
 
   if (!out || same(out, body)) {
-    log("nothing to patch");
     $done({});
     return;
   }
 
-  log(body.length + " -> " + out.length + " bytes");
   $done({ body: out });
 })();

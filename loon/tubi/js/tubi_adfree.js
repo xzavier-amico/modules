@@ -26,21 +26,19 @@
   const res = (typeof $response !== "undefined" && $response) || {};
   const url = req.url || "";
 
+  // Loon 传位置数组，Egern 传 JSON 字符串，两种都兼容。
   let opt = {};
   try {
-    opt = typeof $argument === "string" ? JSON.parse($argument || "{}") : $argument || {};
+    const raw = typeof $argument !== "undefined" ? $argument : undefined;
+    if (Array.isArray(raw)) opt = {block_ads: raw[0]};
+    else if (typeof raw === "string") opt = JSON.parse(raw || "{}") || {};
+    else if (raw && "object" == typeof raw) opt = raw;
   } catch (e) {
     opt = {};
   }
   const flag = (v, d) =>
     v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0");
 
-  const verbose = flag(opt.verbose_log, false);
-  // Loon 的脚本 API 只保证 console.log 可用，console.warn 不一定存在，统一走 log。
-  const log = (msg) => {
-    if (!verbose) return;
-    console.log("tubi: " + msg);
-  };
   const finish = (body) => {
     if (body === undefined) $done({});
     else $done({ body: body });
@@ -53,7 +51,6 @@
 
   const status = Number(res.status || res.statusCode || 0);
   if (status >= 400) {
-    log("skip status " + status);
     $done({});
     return;
   }
@@ -81,7 +78,6 @@
     return;
   }
   if (body.length > 1024 * 1024) {
-    log("body too large " + body.length);
     $done({});
     return;
   }
@@ -113,7 +109,6 @@
       } else if (typeof data.metrics.responseTime !== "number") {
         data.metrics.responseTime = 1;
       }
-      log("ads " + count + " -> 0 on " + host);
       finish(JSON.stringify(data));
       return;
     }
@@ -122,14 +117,12 @@
   // 2. VAST：保留原来的版本号，返回一个合法的空文档。
   if (/<VAST[\s>]/i.test(text)) {
     const version = (text.match(/<VAST[^>]*\bversion\s*=\s*"([^"]+)"/i) || [])[1] || "3.0";
-    log("empty VAST " + version + " on " + host);
     finish('<?xml version="1.0" encoding="UTF-8"?><VAST version="' + version + '"></VAST>');
     return;
   }
 
   // 3. VMAP：广告排期表，空表就是没有广告位。
   if (/<vmap:VMAP[\s>]|<VMAP[\s>]/i.test(text)) {
-    log("empty VMAP on " + host);
     finish(
       '<?xml version="1.0" encoding="UTF-8"?>' +
         '<vmap:VMAP xmlns:vmap="http://www.iab.net/videosuite/vmap" version="1.0"></vmap:VMAP>'
@@ -137,6 +130,5 @@
     return;
   }
 
-  log("nothing to patch on " + host);
   $done({});
 })();

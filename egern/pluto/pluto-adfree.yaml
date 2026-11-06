@@ -26,20 +26,14 @@ icon: "https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Strea
 
 compat_arguments:
   block_ads: "true"
-  verbose_log: "false"
 
 compat_arguments_desc: |
   block_ads   — 去除广告：把 boot.pluto.tv 的 serverSideAds 改成 false
-  verbose_log — 输出日志：打印 boot 请求的改写结果，排查时使用
 
 compat_arguments_schema:
   block_ads:
     name: "去除广告"
     description: "把 boot 请求的 serverSideAds 改成 false，stitcher 返回的清单里就没有广告段"
-    options: ["true", "false"]
-  verbose_log:
-    name: "输出日志"
-    description: "在日志中打印 boot 请求的改写结果，排查时使用"
     options: ["true", "false"]
 
 rules:
@@ -66,7 +60,7 @@ scriptings:
       body_required: true
       timeout: 10
       env:
-        _compat.$argument: '{"block_ads":{{{block_ads}}},"verbose_log":{{{verbose_log}}}}'
+        _compat.$argument: '{"block_ads":{{{block_ads}}}}'
 
 mitm:
   hostnames:

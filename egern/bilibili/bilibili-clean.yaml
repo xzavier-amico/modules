@@ -39,13 +39,11 @@ compat_arguments:
   block_ads: "true"
   hide_vip: "true"
   auto_quality: "true"
-  verbose_log: "false"
 
 compat_arguments_desc: |
   block_ads    — 去广告：开屏、首页、搜索、番剧页、直播推荐、番剧弹窗、详情页、评论区、暂停广告
   hide_vip     — 去会员推广：番剧页 payment 块、大会员广告素材、VIP 卡片
   auto_quality — 自动最高画质：playurl 的 qn 改成 120（4K），按账号权限生效
-  verbose_log  — 输出日志：打印改写前后的字节数，排查时使用
 
 compat_arguments_schema:
   block_ads:
@@ -59,10 +57,6 @@ compat_arguments_schema:
   auto_quality:
     name: "自动最高画质"
     description: "把 playurl 请求的 qn 改成 120（4K），服务端按账号权限返回实际最高档"
-    options: ["true", "false"]
-  verbose_log:
-    name: "输出日志"
-    description: "在日志中打印改写前后的字节数，排查时使用"
     options: ["true", "false"]
 
 rules:
@@ -94,7 +88,7 @@ scriptings:
       max_size: 16777216
       timeout: 20
       env:
-        _compat.$argument: '{"block_ads":{{{block_ads}}},"hide_vip":{{{hide_vip}}},"verbose_log":{{{verbose_log}}}}'
+        _compat.$argument: '{"block_ads":{{{block_ads}}},"hide_vip":{{{hide_vip}}}}'
 
   - http_request:
       name: "bilibili.quality"
@@ -102,7 +96,7 @@ scriptings:
       script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_quality.js"
       timeout: 10
       env:
-        _compat.$argument: '{"auto_quality":{{{auto_quality}}},"verbose_log":{{{verbose_log}}}}'
+        _compat.$argument: '{"auto_quality":{{{auto_quality}}}}'
 
   # 详情页 / 评论区 / 播放器走 gRPC（protobuf over HTTP/2），不是 JSON，
   # 用单独的脚本按字段号删，需要二进制 body。
@@ -115,7 +109,7 @@ scriptings:
       max_size: 16777216
       timeout: 20
       env:
-        _compat.$argument: '{"block_ads":{{{block_ads}}},"verbose_log":{{{verbose_log}}}}'
+        _compat.$argument: '{"block_ads":{{{block_ads}}}}'
 
 mitm:
   hostnames:

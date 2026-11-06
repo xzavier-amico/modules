@@ -16,7 +16,7 @@
   let opt = {};
   try {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
-    if (Array.isArray(raw)) opt = { auto_quality: raw[0], verbose_log: raw[1] };
+    if (Array.isArray(raw)) opt = { auto_quality: raw[0]};
     else if (typeof raw === "string") opt = JSON.parse(raw || "{}") || {};
     else if (raw && "object" == typeof raw) opt = raw;
   } catch (e) {
@@ -25,12 +25,6 @@
   const flag = (v, d) =>
     v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0");
 
-  const verbose = flag(opt.verbose_log, false);
-  // Loon 的脚本 API 只保证 console.log 可用，console.warn 不一定存在，统一走 log。
-  const log = (msg) => {
-    if (!verbose) return;
-    console.log("bilibili: " + msg);
-  };
 
   if (!flag(opt.auto_quality, true)) {
     $done({});
@@ -57,6 +51,5 @@
     $done({});
     return;
   }
-  log("qn -> 120");
   $done({ url: out });
 })();

@@ -4,7 +4,6 @@
 
 - `egern/` — Egern 模块（YAML）
 - `loon/` — Loon 插件（plugin）
-- `scripts/` — 上游同步、补丁与校验脚本
 
 ## 模块索引
 
@@ -54,27 +53,12 @@ egern/<module>/<module>.yaml     # Egern 模块
 egern/<module>/js/               # Egern 脚本
 loon/<module>/<module>.plugin    # Loon 插件
 loon/<module>/js/                # Loon 脚本
-scripts/update.sh                # 拉取上游、重新生成、提交推送
-scripts/validate.py              # 参数、占位符、JSON、JS 语法校验
 ```
 
 ## 维护
 
-```bash
-python3 scripts/validate.py      # 提交前校验
-bash scripts/update.sh           # 手动同步上游（不再定时执行）
-```
-
-`validate.py` 会检查：
-
-- Egern 的 `compat_arguments`、`compat_arguments_schema`、`compat_arguments_desc` 与 `{{{占位符}}}` 是否一致
-- Egern env 里的 JSON 参数模板是否合法、是否有重复键
-- Loon `[Argument]` 与 `script(...)` 参数对象是否一致
-- Egern / Loon 同名模块的参数集合是否一致
-- 本地 raw URL（脚本、图标）是否指向仓库中存在的文件
-- 所有 JavaScript 文件是否通过 `node --check`
-
-`update.sh` 已不再同步 YouTube 脚本：该模块已重写并合并为单文件 `js/youtube.js`，由本仓库自行维护，上游变化需要人工对比后再决定是否跟进。
+模块全部由本仓库自行维护，不跟随上游自动同步。Egern 与 Loon 两侧共用同一份脚本：
+`loon/<module>/js/` 是 `egern/<module>/js/` 的副本，改完记得同步，并跑一遍 `node --check`。
 
 ## 来源与许可
 

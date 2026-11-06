@@ -53,7 +53,6 @@
 | `remove_paid_promotion` | true | 移除播放器响应中的付费推广与推广内容字段 |
 | `block_ad_tracking` | true | 移除播放跟踪中的广告转化字段 |
 | `strip_hot_hash` | true | 移除 `log_event` 中的 `x-youtube-hot-hash-data` 响应头，避免热更新配置覆盖 |
-| `verbose_log` | false | 在 Loon 日志中打印改写前后的字节数与异常信息，排查时使用 |
 
 ### On-the-go
 
@@ -69,5 +68,4 @@
 - `on_the_go_audio`、`on_the_go_chapters` 只在 `on_the_go` 开启时生效。
 - `block_upload` / `block_shorts` 与 `block_guide_items` 都作用于侧栏；`block_shorts_feed` 只清理首页等信息流中的 Shorts 推荐货架，二者互不影响。`block_members_only` 只从列表页（首页、频道页、Shorts 货架）中移除会员专属视频，不会解锁播放；它按徽章文字（`会员专享` / `Members only` 等）匹配，极少数标题恰好同名的视频可能被误删。`block_games` / `block_store` 只清理首页或播放器内的卡片与悬浮层，不会隐藏侧栏入口，如有需要可把对应 `browseId` 填入 `block_guide_items`。
 - `[Rewrite]` 中的 `pagead/pcs` 与 `stats/ads` 两条 404 规则无法按参数条件启用；即使关闭相关广告开关，这两条静态规则仍会生效。
-- 脚本已重写并合并为单文件，不再依赖上游脚本结构，也不再参与 `update.sh` 的自动同步；上游若有大改动，需要人工对比后再决定是否跟进。
-- 排障时打开 `verbose_log`，日志统一带 `youtube:` 前缀（如 `youtube: response: ...`）。
+- 脚本已重写并合并为单文件，不依赖上游脚本结构，也不跟随上游自动同步；上游若有大改动，需要人工对比后再决定是否跟进。

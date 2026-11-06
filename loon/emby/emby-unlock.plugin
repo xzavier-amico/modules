@@ -8,10 +8,9 @@
 
 [Argument]
 unlock_playback = switch,true,type=boolean,tag=解锁完整播放,desc=把 mb3admin.com 的授权校验响应改成已注册。关闭后脚本不做任何修改。
-verbose_log = switch,false,type=boolean,tag=输出日志,desc=在 Loon 日志中打印命中的接口，排查时使用。
 
 [Script]
-response if ${url} ~= /^https?:\/\/(?:www\.)?mb3admin\.com\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/emby/js/emby_unlock.js", {${unlock_playback}, ${verbose_log}}) with tag="Emby Unlock", timeout=10
+response if ${url} ~= /^https?:\/\/(?:www\.)?mb3admin\.com\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/emby/js/emby_unlock.js", {${unlock_playback}}) with tag="Emby Unlock", timeout=10
 
 [MitM]
 hostname = mb3admin.com, www.mb3admin.com

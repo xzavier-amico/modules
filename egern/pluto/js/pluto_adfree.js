@@ -21,21 +21,19 @@
   const req = (typeof $request !== "undefined" && $request) || {};
   const url = req.url || "";
 
+  // Loon 传位置数组，Egern 传 JSON 字符串，两种都兼容。
   let opt = {};
   try {
-    opt = typeof $argument === "string" ? JSON.parse($argument || "{}") : $argument || {};
+    const raw = typeof $argument !== "undefined" ? $argument : undefined;
+    if (Array.isArray(raw)) opt = {block_ads: raw[0]};
+    else if (typeof raw === "string") opt = JSON.parse(raw || "{}") || {};
+    else if (raw && "object" == typeof raw) opt = raw;
   } catch (e) {
     opt = {};
   }
   const flag = (v, d) =>
     v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0");
 
-  const verbose = flag(opt.verbose_log, false);
-  // Loon 的脚本 API 只保证 console.log 可用，console.warn 不一定存在，统一走 log。
-  const log = (msg) => {
-    if (!verbose) return;
-    console.log("pluto: " + msg);
-  };
 
   if (!flag(opt.block_ads, true)) {
     $done({});
@@ -53,7 +51,6 @@
 
   const body = req.body;
   if (typeof body === "string" && /"serverSideAds"\s*:\s*true/i.test(body)) {
-    log("boot body -> serverSideAds=false");
     $done({
       url: out,
       body: body.replace(/("serverSideAds"\s*:\s*)true/i, "$1false"),
@@ -62,11 +59,9 @@
   }
 
   if (out === url) {
-    log("boot already serverSideAds=false");
     $done({});
     return;
   }
 
-  log("boot -> serverSideAds=false");
   $done({ url: out });
 })();

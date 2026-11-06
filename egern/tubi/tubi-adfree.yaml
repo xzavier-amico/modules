@@ -26,20 +26,14 @@ icon: "https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Tubi.
 
 compat_arguments:
   block_ads: "true"
-  verbose_log: "false"
 
 compat_arguments_desc: |
   block_ads   — 去除广告
-  verbose_log — 输出日志
 
 compat_arguments_schema:
   block_ads:
     name: "去除广告"
     description: "把广告决策接口的 ads 列表清空，并把 VAST / VMAP 换成空文档"
-    options: ["true", "false"]
-  verbose_log:
-    name: "输出日志"
-    description: "在日志中打印命中的域名与改写结果，排查时使用"
     options: ["true", "false"]
 
 rules:
@@ -74,7 +68,7 @@ scriptings:
       body_required: true
       timeout: 10
       env:
-        _compat.$argument: '{"block_ads":{{{block_ads}}},"verbose_log":{{{verbose_log}}}}'
+        _compat.$argument: '{"block_ads":{{{block_ads}}}}'
 
 mitm:
   hostnames:

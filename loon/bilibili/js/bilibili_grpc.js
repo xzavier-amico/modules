@@ -57,7 +57,7 @@
       opt = {};
     }
   } else if (Array.isArray(arg)) {
-    opt = { block_ads: arg[0], verbose_log: arg[1] };
+    opt = { block_ads: arg[0]};
   } else if (arg && typeof arg === "object") {
     opt = arg;
   }
@@ -65,12 +65,6 @@
   const flag = (v, d) =>
     v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0");
   const blockAds = flag(opt.block_ads, true);
-  const verbose = flag(opt.verbose_log, false);
-  // Loon 的脚本 API 只保证 console.log 可用，console.warn 不一定存在，统一走 log。
-  const log = (msg) => {
-    if (!verbose) return;
-    console.log("bilibili-grpc: " + msg);
-  };
 
   if (!blockAds) {
     $done({});
@@ -396,7 +390,6 @@
     }
     const ce = String(headers["content-encoding"] || headers["Content-Encoding"] || "").toLowerCase();
     if (ce && ce !== "identity") {
-      log("skip content-encoding " + ce);
       $done({});
       return;
     }
@@ -409,7 +402,6 @@
 
     const frames = parseFrames(bytes);
     if (!frames) {
-      log("bad grpc framing");
       $done({});
       return;
     }
@@ -426,7 +418,6 @@
       }
       // 只认识 0x00 和 0x01（gzip），别的 flag 一律放行。
       if (f.flag & 0x7e) {
-        log("unknown frame flag " + f.flag);
         $done({});
         return;
       }
@@ -435,7 +426,6 @@
       if (f.flag & 0x01) {
         msg = toBytes(await gunzip(msg));
         if (!msg) {
-          log("gunzip unavailable");
           $done({});
           return;
         }
@@ -455,12 +445,10 @@
       return;
     }
     const body = concat(out);
-    log(path + " " + bytes.length + " -> " + body.length);
     $done({ body: body });
   }
 
   run().catch((e) => {
-    log("error " + (e && e.message ? e.message : e));
     $done({});
   });
 })();

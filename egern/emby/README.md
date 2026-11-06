@@ -40,7 +40,6 @@ Emby 官方的功能矩阵写得很清楚：iOS 客户端免费档是 **Limited 
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
 | `unlock_playback` | true | 关闭后脚本不做任何修改 |
-| `verbose_log` | false | 打印命中的接口 |
 
 ## 注意
 

@@ -26,20 +26,14 @@ icon: "https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Emby.
 
 compat_arguments:
   unlock_playback: "true"
-  verbose_log: "false"
 
 compat_arguments_desc: |
   unlock_playback — 解锁完整播放
-  verbose_log     — 输出日志
 
 compat_arguments_schema:
   unlock_playback:
     name: "解锁完整播放"
     description: "把 mb3admin.com 的授权校验响应改成已注册。关闭后脚本不做任何修改"
-    options: ["true", "false"]
-  verbose_log:
-    name: "输出日志"
-    description: "在日志中打印命中的接口，排查时使用"
     options: ["true", "false"]
 
 scriptings:
@@ -49,7 +43,7 @@ scriptings:
       script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/emby/js/emby_unlock.js"
       timeout: 10
       env:
-        _compat.$argument: '{"unlock_playback":{{{unlock_playback}}},"verbose_log":{{{verbose_log}}}}'
+        _compat.$argument: '{"unlock_playback":{{{unlock_playback}}}}'
 
 mitm:
   hostnames:

@@ -74,7 +74,6 @@ gRPC 帧的 flag 是 1 表示消息体 gzip（帧级压缩，不是 `Content-Enc
 | `block_ads` | true | 开屏、首页、搜索、番剧页、直播推荐、番剧弹窗、详情页、评论区、暂停广告 |
 | `hide_vip` | true | 番剧页 payment 块、大会员广告素材、VIP 卡片 |
 | `auto_quality` | true | playurl 的 qn 改成 120（4K） |
-| `verbose_log` | false | 打印改写前后的字节数 |
 
 ## 注意
 

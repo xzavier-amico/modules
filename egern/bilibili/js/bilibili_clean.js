@@ -30,7 +30,7 @@
   let opt = {};
   try {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
-    if (Array.isArray(raw)) opt = { block_ads: raw[0], hide_vip: raw[1], verbose_log: raw[2] };
+    if (Array.isArray(raw)) opt = { block_ads: raw[0], hide_vip: raw[1]};
     else if (typeof raw === "string") opt = JSON.parse(raw || "{}") || {};
     else if (raw && "object" == typeof raw) opt = raw;
   } catch (e) {
@@ -41,12 +41,6 @@
 
   const blockAds = flag(opt.block_ads, true);
   const hideVip = flag(opt.hide_vip, true);
-  const verbose = flag(opt.verbose_log, false);
-  // Loon 的脚本 API 只保证 console.log 可用，console.warn 不一定存在，统一走 log。
-  const log = (msg) => {
-    if (!verbose) return;
-    console.log("bilibili: " + msg);
-  };
 
   const body = res.body;
   if (typeof body !== "string" || !body) {
@@ -127,7 +121,6 @@
       data: { closeType: "close_win", container: [], showTime: "" },
       message: "success",
     });
-    log("pgc material -> close");
     $done({ body: out });
     return;
   }
@@ -251,6 +244,5 @@
     $done({});
     return;
   }
-  log(body.length + " -> " + out.length);
   $done({ body: out });
 })();

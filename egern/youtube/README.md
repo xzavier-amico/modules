@@ -90,7 +90,6 @@ modules:
 | `remove_paid_promotion` | true | 移除播放器响应中的付费推广与推广内容字段 |
 | `block_ad_tracking` | true | 移除播放跟踪中的广告转化字段 |
 | `strip_hot_hash` | true | 移除 `log_event` 中的 `x-youtube-hot-hash-data` 响应头，避免热更新配置覆盖 |
-| `verbose_log` | false | 在日志中打印改写前后的字节数与异常信息，排查时使用 |
 
 ### On-the-go
 
@@ -107,7 +106,7 @@ modules:
 - `block_guide_items` 接收 YouTube 侧栏项对应的 `browseId`（例如 `FEuploads`、`FEshorts`）。它用于补充隐藏 `block_games` / `block_store` 等开关没有覆盖的侧栏入口。
 - `block_shorts` 只移除侧栏的 Shorts 入口，不会清理首页列表；要移除首页等信息流中的 Shorts 推荐货架，请打开 `block_shorts_feed`。
 - `block_members_only` 只从列表页（首页、频道页、Shorts 货架）中移除会员专属视频，不会解锁播放；它按徽章文字（`会员专享` / `Members only` 等）匹配，极少数标题恰好同名的视频可能被误删。
-- 脚本已重写并合并为单文件，不再依赖上游脚本结构，也不再参与 `update.sh` 的自动同步；上游若有大改动，需要人工对比后再决定是否跟进。
+- 脚本已重写并合并为单文件，不依赖上游脚本结构，也不跟随上游自动同步；上游若有大改动，需要人工对比后再决定是否跟进。
 
 ## 转换对照（Surge → Egern）
 
@@ -160,15 +159,13 @@ modules:
 
 早期转换版曾把 `guide` / `account/get_setting` 从 `match` 里摘掉来规避「我的」页打不开的问题。
 现在响应阶段是一条 match 覆盖全部路由，脚本对这两条路由分别做侧栏入口隐藏和后台播放强制开启；
-如果日后「我的」页再次异常，优先用 `verbose_log` 打开日志，看 `youtube: response: ...` 的报错定位分支。
+如果日后「我的」页再次异常，先确认这条路由的响应是否被脚本改写坏：
+临时把 `response` 规则注释掉，看页面能否恢复，再决定要修哪个分支。
 
 ## 排障（exec timeout / 不生效）
 
-1. 打开模块参数 `verbose_log`，日志会带 `youtube:` 前缀输出：
-   - `youtube: request: ...`（请求阶段异常）
-   - `youtube: response: ...` / `youtube: on-the-go: ...` / `youtube: speed menu: ...`（响应改写）
-   - `youtube: keys: ...` / `youtube: key write failed`（密钥提取）
-   - `youtube: quality ...` / UMP 解密异常（画质缓存与 UMP）
+1. 脚本不再打日志，排障时先缩小范围：把 `response` 规则临时注释掉，只留 `request`，
+   看问题是否还在；再反过来单独启用 `response`。哪半边出问题就查对应分支。
 2. 若超时条目是 `youtube.enhance.ump`：多为大视频 + 慢设备（AES/SHA256 纯 JS 计算慢），
    调大 `timeout`；若首次出现 `YouTubeConfig requires a valid stored clientKey`，
    属正常——先播放一次让 `key.js` 抓到密钥，之后 UMP 解密才会生效。

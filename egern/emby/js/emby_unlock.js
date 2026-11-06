@@ -28,21 +28,19 @@
   const res = (typeof $response !== "undefined" && $response) || {};
   const url = req.url || "";
 
+  // Loon 传位置数组，Egern 传 JSON 字符串，两种都兼容。
   let opt = {};
   try {
-    opt = typeof $argument === "string" ? JSON.parse($argument || "{}") : $argument || {};
+    const raw = typeof $argument !== "undefined" ? $argument : undefined;
+    if (Array.isArray(raw)) opt = {unlock_playback: raw[0]};
+    else if (typeof raw === "string") opt = JSON.parse(raw || "{}") || {};
+    else if (raw && "object" == typeof raw) opt = raw;
   } catch (e) {
     opt = {};
   }
   const flag = (v, d) =>
     v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0");
 
-  const verbose = flag(opt.verbose_log, false);
-  // Loon 的脚本 API 只保证 console.log 可用，console.warn 不一定存在，统一走 log。
-  const log = (msg) => {
-    if (!verbose) return;
-    console.log("emby: " + msg);
-  };
 
   if (!flag(opt.unlock_playback, true)) {
     $done({});
@@ -73,29 +71,22 @@
   }
 
   let body = null;
-  let what = "";
 
   if (lower.indexOf("/admin/service/appstore/register") >= 0) {
-    what = "appstore/register";
     body = JSON.stringify({ featId: feature, registered: true, expDate: "2099-01-01", key: "" });
   } else if (lower.indexOf("/admin/service/registration/validatedevice") >= 0) {
-    what = "validateDevice";
     body = JSON.stringify({ cacheExpirationDays: 365, message: "Device Valid", resultCode: "GOOD" });
   } else if (lower.indexOf("/admin/service/registration/getstatus") >= 0) {
-    what = "getStatus";
     body = JSON.stringify({ deviceStatus: "0", planType: "Lifetime", subscriptions: {} });
   } else if (lower.indexOf("/admin/service/registration/validate") >= 0) {
-    what = "validate";
     body = JSON.stringify({ featId: feature, registered: true, expDate: "2099-01-01", key: "" });
   }
 
   if (!body) {
-    log("no rule for " + url);
     $done({});
     return;
   }
 
-  log(what + " -> registered" + (feature ? " (" + feature + ")" : ""));
   // 真实接口对无效凭据返回 400/402，这里统一改成 200，客户端才会当成校验通过。
   $done({ status: 200, body: body });
 })();

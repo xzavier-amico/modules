@@ -28,15 +28,11 @@ compat_arguments:
   spoof_premium: "true"
   block_ads: "true"
   unlock_playback: "true"
-  lyrics_source: "lrclib"
-  verbose_log: "false"
 
 compat_arguments_desc: |
   spoof_premium   — 伪装 Premium（总开关）
   block_ads       — 去除广告
   unlock_playback — 解锁播放限制
-  lyrics_source   — 歌词来源：lrclib / auto / musixmatch / netease / qq
-  verbose_log     — 输出日志（改写字节数、歌词注入结果）
 
 compat_arguments_schema:
   spoof_premium:
@@ -51,14 +47,6 @@ compat_arguments_schema:
     name: "解锁播放限制"
     description: "移除试听时长上限、队列上限与强制随机等免费版限制"
     options: ["true", "false"]
-  verbose_log:
-    name: "输出日志"
-    description: "在日志中打印改写前后的字节数与歌词注入结果，排查时使用"
-    options: ["true", "false"]
-  lyrics_source:
-    name: "歌词来源"
-    description: "官方没有歌词时去哪个库找。lrclib 曲库全但中文偏弱；auto 依次尝试 lrclib、musixmatch、网易云、QQ 音乐"
-    options: ["lrclib", "auto", "musixmatch", "netease", "qq"]
 
 scriptings:
   - http_response:
@@ -70,32 +58,7 @@ scriptings:
       max_size: 33554432
       timeout: 30
       env:
-        _compat.$argument: '{"spoof_premium":{{{spoof_premium}}},"block_ads":{{{block_ads}}},"unlock_playback":{{{unlock_playback}}},"verbose_log":{{{verbose_log}}}}'
-
-  # spotify.lyrics：官方没有歌词时，用 LRCLIB 注入第三方逐行歌词。
-  # 官方有歌词就原样放行；任何一步失败也原样放行，不影响播放。
-  - http_response:
-      name: "spotify.lyrics"
-      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v2\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js"
-      max_size: 1048576
-      timeout: 10
-      env:
-        _compat.$argument: '{"verbose_log":{{{verbose_log}}},"lyrics_source":"{{{lyrics_source}}}"}'
-
-  # spotify.meta：把 Track 元数据里的 has_lyrics 改成 true。
-  # 没有官方歌词的歌，客户端看到 has_lyrics=false 就不去请求 color-lyrics，
-  # 代理层拦不到任何东西；先把这个开关打开，客户端才会去请求。
-  - http_response:
-      name: "spotify.meta"
-      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/metadata\\/4\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_meta.js"
-      body_required: true
-      binary_body: true
-      max_size: 4194304
-      timeout: 10
-      env:
-        _compat.$argument: '{"verbose_log":{{{verbose_log}}}}'
+        _compat.$argument: '{"spoof_premium":{{{spoof_premium}}},"block_ads":{{{block_ads}}},"unlock_playback":{{{unlock_playback}}}}'
 
 mitm:
   hostnames:
