@@ -43,6 +43,12 @@ premium、关掉广告位、移除免费版的试听时长上限与队列/随机
 
 注意：逐字歌词（syllables）没有做，只做逐行同步。
 
+**已知限制**：官方没有歌词的歌，Spotify 客户端根本不会请求 `color-lyrics` 接口
+（它从曲目元数据里就知道没有词），代理层拦不到任何请求，所以这类歌注入不了。
+实测把 `Track` 的 `has_lyrics`（字段 18）改成 true 也没能触发请求，
+客户端似乎不走 `/metadata/4/track/` 这个接口。要解决只能做客户端注入，
+参见 [EeveeSpotify](https://github.com/whoeevee/EeveeSpotifyReborn)。
+
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
 | `spoof_premium` | true | 总开关，关闭后脚本不做任何修改 |
