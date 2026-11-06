@@ -3,7 +3,7 @@
 #!category=开发工具
 #!author=xzavier-amico
 #!homepage=https://github.com/xzavier-amico/modules
-#!icon=https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Server.png
+#!icon=https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Loop.png
 #!tag=Local Reflect
 
 # 用途：把发往 10.7.0.1 的连接反射回本机。

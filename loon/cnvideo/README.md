@@ -3,16 +3,14 @@
 - Loon：`loon/cnvideo/cnvideo-adfree.plugin`
 - Egern：`egern/cnvideo/cnvideo-adfree.yaml`
 
-优酷 / 爱奇艺 / 腾讯视频：直接 REJECT 广告、广告 SDK 与遥测域名。
+优酷 / 爱奇艺 / 腾讯视频：拒绝广告 SDK 与遥测域名；优酷只保留埋点，避免起播卡住。
 纯规则模块，不需要 MITM。
 
 ## 拦了什么
 
 | App | 域名 | 用途 |
 | --- | --- | --- |
-| 优酷 | `atm.youku.com`（含 adp / count / m / val） | 广告计数与素材 |
-| 优酷 | `ad.api.3g.youku.com`、`ad.m.youku.com` | 广告接口 |
-| 优酷 | `iyes.youku.com` | 开屏广告 |
+| 优酷 | `atm.youku.com`（含 adp / count / m / val） | 广告计数 |
 | 优酷 | `ems.youku.com` | 埋点 |
 | 爱奇艺 | `cupid.iqiyi.com`（含 `t7z.cupid`） | 广告决策 |
 | 爱奇艺 | `ads.iqiyi.com` | 广告素材 |
@@ -25,6 +23,16 @@
 | 腾讯视频 | `btrace` / `info4` / `info6` / `trace.video.qq.com` | 播放埋点与广告信息 |
 | 腾讯视频 | `vd.l.qq.com`、`pingfore.qq.com`、`news.ssp.qq.com` | 广告与遥测 |
 
+## 优酷为什么只留了埋点
+
+`ad.api.3g.youku.com`、`ad.m.youku.com`、`iyes.youku.com` 一开始也做了 REJECT，
+但实测会让优酷视频直接播不了：播放器起播前会同步等广告接口，连接被拒后整次播放
+卡住，而不是跳过广告。
+
+所以这三个撤掉了，优酷只保留纯埋点域名。代价是优酷的开屏 / 贴片广告可能还会出现。
+要彻底去掉，需要抓一份广告接口的响应，改成「没有广告」的合法 JSON（类似 Tubi 的做法），
+有抓包可以再补。
+
 ## 没有拦什么
 
 `vv.video.qq.com`（播放地址）、`acs.youku.com`（优酷 API 网关）、
@@ -33,8 +41,9 @@
 
 ## 能解决什么、不能解决什么
 
-- **开屏、暂停、贴片、Feed 广告**：素材和决策请求都在上面的域名里，请求失败后客户端
-  通常直接跳过广告。
+- **爱奇艺 / 腾讯视频的开屏、暂停、贴片、Feed 广告**：素材和决策请求都在上面的域名里，
+  请求失败后客户端通常直接跳过广告。
+- **优酷**：只拦了埋点和广告计数，广告本身可能还在；原因见上一节。
 - **「我的」「设置」页的推广入口**：入口本身是 App 本地 UI 或接口下发的位置，域名拒绝
   只能让它加载不出内容，删不掉入口。要删入口需要改响应结构，目前没有可靠抓包，
   不做猜测性改写。

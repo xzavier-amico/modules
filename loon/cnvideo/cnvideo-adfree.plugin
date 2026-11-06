@@ -3,16 +3,15 @@
 #!category=ADBlock
 #!author=xzavier-amico
 #!homepage=https://github.com/xzavier-amico/modules
-#!icon=https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Reject.png
+#!icon=https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/StreamingCN.png
 #!tag=ADBlock
 
 [Rule]
 # ---------- 优酷 ----------
-# atm 系列：adp / count / m / val 都在这个后缀下
+# atm 系列：adp / count / m / val 都在这个后缀下，纯广告计数。
+# ad.api.3g.youku.com / ad.m.youku.com / iyes.youku.com 故意不拦：
+# 播放器起播前会同步等广告接口，连接直接失败会卡住整次播放（实测反馈）。
 DOMAIN-SUFFIX,atm.youku.com,REJECT
-DOMAIN,ad.api.3g.youku.com,REJECT
-DOMAIN,ad.m.youku.com,REJECT
-DOMAIN,iyes.youku.com,REJECT
 DOMAIN,ems.youku.com,REJECT
 
 # ---------- 爱奇艺 ----------

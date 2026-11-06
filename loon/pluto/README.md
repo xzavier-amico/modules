@@ -68,4 +68,4 @@ GET https://boot.pluto.tv/v4/start?...&serverSideAds=true
 - 补充实测：用 `serverSideAds=false` 的美国直播流连续采样 15 分钟，广告位仍然会拼一段
   5~25 秒的 Pluto 台标 bumper（分片名里带 `ad_bumper`），但清单里没有真正的广告片。
   所以开启模块后，原来放广告的位置可能看到一小段台标动画，这是 stitcher 的转场，不是广告。
-- 图标：Reject.png
+- 图标：Streaming.png

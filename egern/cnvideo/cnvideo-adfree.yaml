@@ -1,10 +1,13 @@
 #=======================================================================================
 # CN Video Ad-Free — Egern 模块
 #
-# 优酷 / 爱奇艺 / 腾讯视频：直接 REJECT 广告、广告 SDK 与遥测域名。
+# 优酷 / 爱奇艺 / 腾讯视频：直接 REJECT 广告 SDK 与遥测域名。
 #
-# 这三家的开屏、暂停、Feed 广告基本都从各自的广告服务或广告 SDK 取素材，
-# 域名拒绝后请求直接失败，客户端通常跳过广告继续播放。
+# 爱奇艺 / 腾讯视频的开屏、暂停、Feed 广告从各自的广告服务或广告 SDK 取素材，
+# 域名拒绝后请求失败，客户端通常跳过广告继续播放。
+#
+# 优酷只保留埋点域名：ad.api.3g.youku.com / iyes.youku.com 被硬拒后，
+# 播放器起播前同步等广告接口会卡住整次播放（实测反馈）。
 #
 # 纯规则模块，不需要 MITM，也不会和播放接口（vv.video.qq.com、acs.youku.com 等）
 # 冲突——那些域名没有列进来。
@@ -18,22 +21,15 @@ name: "CN Video Ad-Free"
 description: "优酷 / 爱奇艺 / 腾讯视频：拒绝广告、广告 SDK 与遥测域名。纯规则，不需要 MITM。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"
-icon: "https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Reject.png"
+icon: "https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/StreamingCN.png"
 
 rules:
   # ---------- 优酷 ----------
-  # atm 系列：adp / count / m / val 都在这个后缀下
+  # atm 系列：adp / count / m / val 都在这个后缀下，纯广告计数。
+  # ad.api.3g.youku.com / ad.m.youku.com / iyes.youku.com 故意不拦：
+  # 播放器起播前会同步等广告接口，连接直接失败会卡住整次播放（实测反馈）。
   - domain_suffix:
       match: "atm.youku.com"
-      policy: REJECT
-  - domain:
-      match: "ad.api.3g.youku.com"
-      policy: REJECT
-  - domain:
-      match: "ad.m.youku.com"
-      policy: REJECT
-  - domain:
-      match: "iyes.youku.com"
       policy: REJECT
   - domain:
       match: "ems.youku.com"

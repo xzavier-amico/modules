@@ -22,7 +22,7 @@ name: "Pluto TV Ad-Free"
 description: "去广告：把 boot 的 serverSideAds 改成 false，让 stitcher 不再把广告缝进 HLS；不碰视频流。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"
-icon: "https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Reject.png"
+icon: "https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Streaming.png"
 
 compat_arguments:
   block_ads: "true"
