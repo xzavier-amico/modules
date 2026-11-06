@@ -53,7 +53,17 @@
   if (typeof setTimeout === "function") setTimeout(() => finish({}), 4500);
 
   const body = toText(res.body);
-  if (Number(res.status) === 200 && body && hasLyrics(body)) {
+  const trimmed = body.trim();
+  log("命中 " + trackId + "，官方状态 " + (res.status === undefined ? "-" : res.status));
+
+  if (Number(res.status) === 200 && trimmed && trimmed.charAt(0) !== "{") {
+    // 不是 JSON 说明客户端要的是 protobuf，注入 JSON 会让它解析失败，直接放行。
+    log("官方返回非 JSON（可能是 protobuf），放行");
+    finish({});
+    return;
+  }
+
+  if (Number(res.status) === 200 && trimmed && hasLyrics(trimmed)) {
     log("官方已有歌词，放行");
     finish({});
     return;
