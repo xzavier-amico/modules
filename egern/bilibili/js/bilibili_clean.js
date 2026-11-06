@@ -6,9 +6,9 @@
 // 广告和会员推广都在 JSON 里，按结构删，不做全量重编码：
 //
 //   /x/v2/splash/*            开屏：清空 list / event_list / brand_list
-//   /x/v2/feed/index*         首页：删 card_type=ad、card_goto=ad、ad_info 非空的卡片
-//   /x/v2/search/square       搜索：同上
-//   /x/web-interface/wbi/...  网页推荐流：同上
+//   /x/v2/feed/index*         首页：只过滤 data.items 里 card_type=cm_* / card_goto=ad_* / goto=ad 的卡片
+//   /x/v2/search/square       搜索：只过滤 data 数组里的广告项
+//   /x/web-interface/wbi/...  网页推荐流：只过滤 data.item 里 goto=ad 的条目
 //   /x/vip/ads/materials      大会员广告素材：清空
 //   /pgc/view/v2/app/season   番剧页：删 data.payment（会员付费块）
 //   /pgc/page/bangumi         番剧页模块：删 module_style/type 为 ad 的模块
@@ -26,9 +26,13 @@
   const req = (typeof $request !== "undefined" && $request) || {};
   const url = res.url || req.url || "";
 
+  // Loon 传位置数组或对象，Egern 传 JSON 字符串，三种都兼容。
   let opt = {};
   try {
-    opt = typeof $argument === "string" ? JSON.parse($argument || "{}") : $argument || {};
+    const raw = typeof $argument !== "undefined" ? $argument : undefined;
+    if (Array.isArray(raw)) opt = { block_ads: raw[0], hide_vip: raw[1], verbose_log: raw[2] };
+    else if (typeof raw === "string") opt = JSON.parse(raw || "{}") || {};
+    else if (raw && "object" == typeof raw) opt = raw;
   } catch (e) {
     opt = {};
   }
@@ -82,21 +86,22 @@
   const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
   const str = (v) => (typeof v === "string" ? v.toLowerCase() : "");
 
-  const adCard = (o) => {
+  // 信息流广告的判定，和上游 Biliverse 完全一致：只认这几个标记，
+  // 不做全树遍历，避免把直播 tab、配置块这类正常对象误删。
+  const isFeedAd = (o) => {
     if (!isObj(o)) return false;
-    const ct = str(o.card_type);
-    const cg = str(o.card_goto);
-    const go = str(o.goto);
-    if (ct === "ad" || ct.indexOf("ad_") === 0 || ct.indexOf("ad-") === 0 || ct.indexOf("cm_") === 0) return true;
-    if (cg === "ad" || cg.indexOf("ad_") === 0 || go === "ad") return true;
-    // ad_info 只在确实是对象且非空时才算广告；字符串形式的空值不能当标记，
-    // 否则会把直播房间信息这类带 ad_info:"" 的正常对象整块删掉。
-    if (isObj(o.ad_info) && Object.keys(o.ad_info).length > 0) return true;
-    if (o.is_ad === true || o.is_ad === 1 || o.is_ad === "1") return true;
-    return false;
+    const ct = "string" == typeof o.card_type ? o.card_type : "";
+    const cg = "string" == typeof o.card_goto ? o.card_goto : "";
+    return ct.indexOf("cm_") === 0 || cg.indexOf("ad_") === 0 || o.goto === "ad" || o.is_ad === true;
   };
 
-  // 直播卡片的广告标记，和上游保持一致：is_ad / show_ad_icon / ad_transparent_content。
+  const keepNotAd = (arr) => {
+    if (!Array.isArray(arr)) return null;
+    const kept = arr.filter((item) => !isFeedAd(item));
+    return kept.length === arr.length ? null : kept;
+  };
+
+  // 直播卡片的广告标记：is_ad / show_ad_icon / ad_transparent_content。
   const truthyFlag = (v) => v === true || v === 1 || v === "1";
   const isLiveCardAd = (o) => {
     if (!isObj(o)) return false;
@@ -105,35 +110,6 @@
       "string" == typeof mark ? mark.trim().length > 0 : isObj(mark) ? Object.keys(mark).length > 0 : Boolean(mark);
     return truthyFlag(o.is_ad) || truthyFlag(o.show_ad_icon) || transparent;
   };
-
-  const vipCard = (o) => {
-    if (!isObj(o)) return false;
-    const ct = str(o.card_type);
-    const cg = str(o.card_goto);
-    const go = str(o.goto);
-    return ct === "vip" || cg === "vip" || go === "vip" || ct.indexOf("vip_") === 0;
-  };
-
-  const dropItem = (o) => (blockAds && adCard(o)) || (hideVip && vipCard(o));
-
-  // 只过滤数组元素，不改对象键，避免把正常字段删掉。
-  function walk(node) {
-    if (Array.isArray(node)) {
-      const out = [];
-      for (const item of node) {
-        if (isObj(item) && dropItem(item)) {
-          changed = true;
-          continue;
-        }
-        out.push(walk(item));
-      }
-      return out;
-    }
-    if (isObj(node)) {
-      for (const key of Object.keys(node)) node[key] = walk(node[key]);
-    }
-    return node;
-  }
 
   const clearArray = (obj, key) => {
     if (isObj(obj) && Array.isArray(obj[key]) && obj[key].length) {
@@ -220,9 +196,31 @@
     }
   }
 
-  // 其余接口：递归删广告卡 / 会员卡。
-  if (!isLive && (blockAds || hideVip)) {
-    data = walk(data);
+  // 首页 / 推荐：只过滤 data.items，和上游一致。
+  if (blockAds && path.indexOf("/x/v2/feed/index") >= 0) {
+    const kept = keepNotAd(data.data?.items);
+    if (kept) {
+      data.data.items = kept;
+      changed = true;
+    }
+  }
+
+  // 网页版推荐流：只过滤 data.item 里 goto=ad 的条目。
+  if (blockAds && path.indexOf("/x/web-interface/wbi/index/top/feed/rcmd") >= 0) {
+    const kept = keepNotAd(data.data?.item);
+    if (kept) {
+      data.data.item = kept;
+      changed = true;
+    }
+  }
+
+  // 搜索广场：data 本身就是数组，只过滤广告项。
+  if (blockAds && path.indexOf("/x/v2/search/square") >= 0) {
+    const kept = keepNotAd(data.data);
+    if (kept) {
+      data.data = kept;
+      changed = true;
+    }
   }
 
   // 番剧页的广告模块（module_style / module_type / type 为 ad）。

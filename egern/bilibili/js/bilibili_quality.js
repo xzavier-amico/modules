@@ -12,9 +12,13 @@
   const req = (typeof $request !== "undefined" && $request) || {};
   const url = req.url || "";
 
+  // Loon 传位置数组或对象，Egern 传 JSON 字符串，三种都兼容。
   let opt = {};
   try {
-    opt = typeof $argument === "string" ? JSON.parse($argument || "{}") : $argument || {};
+    const raw = typeof $argument !== "undefined" ? $argument : undefined;
+    if (Array.isArray(raw)) opt = { auto_quality: raw[0], verbose_log: raw[1] };
+    else if (typeof raw === "string") opt = JSON.parse(raw || "{}") || {};
+    else if (raw && "object" == typeof raw) opt = raw;
   } catch (e) {
     opt = {};
   }
