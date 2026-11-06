@@ -11,7 +11,7 @@
 #   /x/vip/ads/materials      大会员广告素材
 #   /pgc/view/v2/app/season   番剧页 payment 块
 #   /pgc/page/*               番剧页广告模块
-#   /xlive/...                直播推荐
+#   /xlive/...                直播：首页/推荐只删广告卡，房间页只删 banner 与购物位
 #   /pgc/activity/.../receive 番剧弹窗广告
 #
 # 详情页、评论区、播放器状态走 gRPC（protobuf），JSON 脚本碰不到，单独用

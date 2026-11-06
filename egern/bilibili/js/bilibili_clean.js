@@ -12,7 +12,9 @@
 //   /x/vip/ads/materials      大会员广告素材：清空
 //   /pgc/view/v2/app/season   番剧页：删 data.payment（会员付费块）
 //   /pgc/page/bangumi         番剧页模块：删 module_style/type 为 ad 的模块
-//   /xlive/...                直播推荐：删广告卡
+//   /xlive/app-interface/v2/index/feed  直播首页：只删 small_card_v1 里的广告卡
+//   /xlive/app-interface/v2/room/recList 直播推荐：同上
+//   /xlive/app-room/v1/index/getInfoByRoom 房间页：只删 banner / 购物位，不碰房间信息
 //   /pgc/activity/.../receive 番剧弹窗广告：返回关闭
 //
 // 只处理上面这些接口，形状对不上就原样放行，最差是不生效，不会把播放改坏。
@@ -85,11 +87,23 @@
     const ct = str(o.card_type);
     const cg = str(o.card_goto);
     const go = str(o.goto);
-    if (ct === "ad" || ct.indexOf("ad_") === 0 || ct.indexOf("ad-") === 0) return true;
-    if (cg === "ad" || go === "ad") return true;
-    if (o.ad_info && (typeof o.ad_info !== "object" || Object.keys(o.ad_info).length > 0)) return true;
-    if (o.is_ad === true || o.is_ad === 1) return true;
+    if (ct === "ad" || ct.indexOf("ad_") === 0 || ct.indexOf("ad-") === 0 || ct.indexOf("cm_") === 0) return true;
+    if (cg === "ad" || cg.indexOf("ad_") === 0 || go === "ad") return true;
+    // ad_info 只在确实是对象且非空时才算广告；字符串形式的空值不能当标记，
+    // 否则会把直播房间信息这类带 ad_info:"" 的正常对象整块删掉。
+    if (isObj(o.ad_info) && Object.keys(o.ad_info).length > 0) return true;
+    if (o.is_ad === true || o.is_ad === 1 || o.is_ad === "1") return true;
     return false;
+  };
+
+  // 直播卡片的广告标记，和上游保持一致：is_ad / show_ad_icon / ad_transparent_content。
+  const truthyFlag = (v) => v === true || v === 1 || v === "1";
+  const isLiveCardAd = (o) => {
+    if (!isObj(o)) return false;
+    const mark = o.ad_transparent_content;
+    const transparent =
+      "string" == typeof mark ? mark.trim().length > 0 : isObj(mark) ? Object.keys(mark).length > 0 : Boolean(mark);
+    return truthyFlag(o.is_ad) || truthyFlag(o.show_ad_icon) || transparent;
   };
 
   const vipCard = (o) => {
@@ -168,8 +182,46 @@
     changed = true;
   }
 
+  // 直播：只按上游的三个接口定点处理。通用 walk 会顺着对象树把
+  // room_info / playurl_info 里带广告字段的正常对象也删掉，导致直播打不开。
+  const isLive = path.indexOf("/xlive/") >= 0;
+  if (isLive && blockAds) {
+    const d = isObj(data.data) ? data.data : {};
+    if (path.indexOf("/xlive/app-interface/v2/index/feed") >= 0 && Array.isArray(d.card_list)) {
+      const kept = d.card_list.filter((card) => !isLiveCardAd(card?.card_data?.small_card_v1));
+      if (kept.length !== d.card_list.length) {
+        d.card_list = kept;
+        changed = true;
+      }
+    } else if (path.indexOf("/xlive/app-interface/v2/room/recList") >= 0 && Array.isArray(d.list)) {
+      const kept = d.list.filter((card) => !isLiveCardAd(card));
+      if (kept.length !== d.list.length) {
+        d.list = kept;
+        changed = true;
+      }
+    } else if (path.indexOf("/xlive/app-room/v1/index/getInfoByRoom") >= 0) {
+      // 房间页只删 banner 和购物位，其余一律不碰。
+      if ("activity_banner_info" in d) {
+        delete d.activity_banner_info;
+        changed = true;
+      }
+      if (isObj(d.shopping_info) && 0 !== d.shopping_info.is_show) {
+        d.shopping_info = { is_show: 0 };
+        changed = true;
+      }
+      const outer = d.new_tab_info?.outer_list;
+      if (Array.isArray(outer)) {
+        const kept = outer.filter((item) => 33 !== item?.biz_id);
+        if (kept.length !== outer.length) {
+          d.new_tab_info.outer_list = kept;
+          changed = true;
+        }
+      }
+    }
+  }
+
   // 其余接口：递归删广告卡 / 会员卡。
-  if (blockAds || hideVip) {
+  if (!isLive && (blockAds || hideVip)) {
     data = walk(data);
   }
 
