@@ -12,21 +12,37 @@ premium、关掉广告位、移除免费版的试听时长上限与队列/随机
 
 `js/spotify_lyrics.js` 处理 `color-lyrics/v2/track/{id}`：
 
-- 官方返回了非空 `lyrics.lines` → 原样放行，不动官方歌词；
-- 官方 404 / 空歌词 → 用 `open.spotify.com/oembed` 取歌名与歌手，查
-  [LRCLIB](https://lrclib.net) 的 `syncedLyrics`，转换成 Spotify 的
-  `LINE_SYNCED` JSON 返回（`provider` 标为 LRCLIB）；
-- LRCLIB 没有逐行歌词时退到 `plainLyrics`（`UNSYNCED`）；
-- 任何一步失败或超过 4.5 秒，都原样放行，不影响播放。
+- 官方返回了非空歌词 → 原样放行，不动官方歌词；
+- 官方 404 / 空歌词 → 用 `open.spotify.com/oembed` 取歌名与歌手，去配置的歌词源找；
+- 找到逐行歌词就按客户端的格式回写，`provider` 标成对应来源；
+- 只有纯文本时退到 `UNSYNCED`；
+- 任何一步失败或超过 6.5 秒，都原样放行，不影响播放。
 
-注意：LRCLIB 是社区曲库，华语/小众曲目可能查不到；逐字歌词（syllables）没有做，
-只做逐行同步。
+两种响应格式都支持：旧版客户端要 JSON，新版客户端要 protobuf
+（`0a c2 09 08 01 12 1b …`，字段定义取自 EeveeSpotify 的 `lyrics.proto`：
+`Response.data=1`、`LyricsData.timeSynchronized=1 / lines=2 / providedBy=5`、
+`LyricsLine.offsetMs=1 / content=2`）。脚本按响应内容自动判断，不用手动切。
+
+歌词源：
+
+| 值 | 说明 |
+| --- | --- |
+| `lrclib` | 默认。[LRCLIB](https://lrclib.net) 社区曲库，覆盖广，中文偏弱 |
+| `auto` | 依次尝试 lrclib → musixmatch → 网易云 → QQ 音乐 |
+| `musixmatch` | 沿用 EeveeSpotify 的做法：固定 app_id 换匿名 token，再取逐行字幕 |
+| `netease` | 网易云，中文曲库最好 |
+| `qq` | QQ 音乐，中文曲库好，接口返回明文 LRC |
+
+网易云和 QQ 音乐不需要 token；Musixmatch 的匿名 token 每次请求前现取，会多一次往返。
+
+注意：逐字歌词（syllables）没有做，只做逐行同步。
 
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
 | `spoof_premium` | true | 总开关，关闭后脚本不做任何修改 |
 | `block_ads` | true | 广告属性 + 广告/推广位远程配置 |
 | `unlock_playback` | true | 试听时长、队列上限、强制随机等限制 |
+| `lyrics_source` | lrclib | 歌词来源，见上表 |
 | `verbose_log` | false | 打印改写前后的字节数与歌词注入结果 |
 
 注意：

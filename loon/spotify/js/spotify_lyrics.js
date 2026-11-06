@@ -20,7 +20,7 @@
   let opt = {};
   try {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
-    if (Array.isArray(raw)) opt = { verbose_log: raw[0] };
+    if (Array.isArray(raw)) opt = { verbose_log: raw[0], lyrics_source: raw[1] };
     else if (typeof raw === "string") opt = JSON.parse(raw || "{}") || {};
     else if (raw && "object" == typeof raw) opt = raw;
   } catch (e) {
@@ -55,6 +55,7 @@
 
   const USER_AGENT = "xzavier-modules/1.0 (https://github.com/xzavier-amico/modules)";
   const utf8 = new TextDecoder("utf-8");
+  const encoder = new TextEncoder();
 
   let settled = false;
   const finish = (value) => {
@@ -63,24 +64,33 @@
     $done(value);
   };
 
-  // 外部接口慢的时候不要拖住 App，超过 4.5 秒就按「没有歌词」放行。
-  if (typeof setTimeout === "function") setTimeout(() => finish({}), 4500);
+  // 外部接口慢的时候不要拖住 App，超过 6.5 秒就按「没有歌词」放行。
+  if (typeof setTimeout === "function") setTimeout(() => finish({}), 6500);
 
   const rawBody = res.body;
   const body = toText(rawBody);
   const trimmed = body.trim();
+
+  // 新版客户端要的是 protobuf（响应体以 0a 开头的一棵 message 树），旧版要 JSON。
+  // 判断依据：URL 带 format=protobuf，或者 200 响应体既不是 JSON 也不为空。
+  const rawBytes = toBytes(rawBody);
+  const wantsProto = /[?&]format=protobuf/i.test(url);
+  const protoMode = trimmed.charAt(0) !== "{" && (wantsProto || trimmed.length > 0);
+
   log("命中 " + trackId + "，状态 " + (res.status === undefined ? "-" : res.status) + "，url=" + url);
-  notify("命中，状态 " + (res.status === undefined ? "-" : res.status));
+  notify("命中，状态 " + (res.status === undefined ? "-" : res.status) + (protoMode ? "，protobuf" : "，json"));
 
-  if (Number(res.status) === 200 && trimmed && trimmed.charAt(0) !== "{") {
-    // 不是 JSON 说明客户端要的是 protobuf，注入 JSON 会让它解析失败，直接放行。
-    log("官方返回非 JSON（可能是 protobuf），放行，前 24 字节: " + hexHead(rawBody));
-    notify("放行：非 JSON，前 24 字节 " + hexHead(rawBody));
-    finish({});
-    return;
-  }
-
-  if (Number(res.status) === 200 && trimmed && hasLyrics(trimmed)) {
+  if (protoMode) {
+    const count = Number(res.status) === 200 ? protoLineCount(rawBytes) : 0;
+    if (count > 0) {
+      log("官方已有歌词（protobuf " + count + " 行），放行");
+      notify("放行：官方已有歌词（protobuf " + count + " 行）");
+      finish({});
+      return;
+    }
+    log("官方没有歌词（protobuf），准备注入；前 24 字节: " + hexHead(rawBody));
+    notify("protobuf 无歌词，开始找第三方歌词");
+  } else if (Number(res.status) === 200 && trimmed && hasLyrics(trimmed)) {
     log("官方已有歌词，放行");
     notify("放行：官方已有歌词");
     finish({});
@@ -98,47 +108,200 @@
 
     const title = String(meta.title);
     const artist = String(meta.author_name || "").split(",")[0].trim();
-    const query =
-      "track_name=" + encodeURIComponent(title) + (artist ? "&artist_name=" + encodeURIComponent(artist) : "");
+    const order = sourceOrder();
+    log("歌词源顺序: " + order.join(" -> ") + "，曲目 " + title + " / " + artist);
+    notify("查找 " + title + "（" + order.join(" → ") + "）");
 
-    // /api/get 只认精确的曲名+歌手，命中时可能只有纯文本没有时间轴。
-    // 所以先收下纯文本当备选，再去 /api/search 捞一版带时间轴的，都找不到才退回纯文本。
-    // 精确记录里的时长顺便当锚点：同一首歌在 LRCLIB 里常有好几个版本（Video Edit、
-    // Extended Mix），时长差太多的那版时间轴对不上，宁可选时长接近的。
-    let fallback = null;
-    let anchor = NaN;
-    const take = (record) => {
-      const payload = buildPayload(record);
-      if (!payload) return false;
-      if (payload.lyrics.syncType === "LINE_SYNCED") {
-        emit(payload, title, artist);
-        return true;
+    runSource(order, 0, title, artist, (record) => {
+      if (!record) {
+        log("所有歌词源都没有找到 " + title);
+        notify("失败：所有歌词源都没有 " + title);
+        finish({});
+        return;
       }
-      if (!fallback) fallback = payload;
-      return false;
-    };
+      const payload = buildPayload(record);
+      if (!payload) {
+        log("歌词源返回了空内容");
+        notify("失败：歌词源返回空内容");
+        finish({});
+        return;
+      }
+      emit(payload, title, artist);
+    });
+  });
 
+  // ---- 歌词源 -----------------------------------------------------------
+
+  function sourceOrder() {
+    const wanted = String(opt.lyrics_source || "lrclib").toLowerCase();
+    if (wanted === "auto") return ["lrclib", "musixmatch", "netease", "qq"];
+    if (wanted === "lrclib" || wanted === "musixmatch" || wanted === "netease" || wanted === "qq") return [wanted];
+    return ["lrclib"];
+  }
+
+  function runSource(order, index, title, artist, done) {
+    if (index >= order.length) {
+      done(null);
+      return;
+    }
+    const name = order[index];
+    lookup(name, title, artist, (record) => {
+      if (record) {
+        log(name + " 命中");
+        done(record);
+        return;
+      }
+      log(name + " 没有命中，换下一个");
+      runSource(order, index + 1, title, artist, done);
+    });
+  }
+
+  function lookup(name, title, artist, cb) {
+    if (name === "lrclib") return lookupLrclib(title, artist, cb);
+    if (name === "netease") return lookupNetease(title, artist, cb);
+    if (name === "qq") return lookupQq(title, artist, cb);
+    if (name === "musixmatch") return lookupMusixmatch(title, artist, cb);
+    cb(null);
+  }
+
+  // LRCLIB：/api/get 只认精确的曲名+歌手，命中时可能只有纯文本没有时间轴，
+  // 所以拿它的时长当锚点，再去 /api/search 挑一版时长接近、带时间轴的。
+  function lookupLrclib(title, artist, cb) {
+    const query = "track_name=" + encodeURIComponent(title) + (artist ? "&artist_name=" + encodeURIComponent(artist) : "");
     httpGetJson("https://lrclib.net/api/get?" + query, (record) => {
+      let anchor = NaN;
       if (record && "object" == typeof record && Number.isFinite(Number(record.duration))) {
         anchor = Number(record.duration);
       }
-      if (take(record)) return;
+      if (record && isSynced(record)) {
+        cb(withProvider(record, "LRCLIB"));
+        return;
+      }
 
       httpGetJson("https://lrclib.net/api/search?" + query, (list) => {
         const picked = pickRecord(list, title, anchor);
-        if (picked && take(picked)) return;
-
-        if (fallback) {
-          log("只有纯文本歌词，退回无时间轴模式");
-          emit(fallback, title, artist);
+        if (picked) {
+          cb(withProvider(picked, "LRCLIB"));
           return;
         }
-        log("LRCLIB 没有找到 " + title);
-        notify("失败：LRCLIB 没有 " + title);
-        finish({});
+        cb(record && hasAnyLyrics(record) ? withProvider(record, "LRCLIB") : null);
       });
     });
-  });
+  }
+
+  // 网易云：搜索接口不需要 token，中文曲库覆盖最好。
+  function lookupNetease(title, artist, cb) {
+    const query = encodeURIComponent(title + (artist ? " " + artist : ""));
+    const headers = { Referer: "https://music.163.com/" };
+    httpGetJson("https://music.163.com/api/search/get?s=" + query + "&type=1&limit=5&offset=0", (data) => {
+      const songs = data && data.result && data.result.songs;
+      const picked = pickSong(songs, title, (item) => item.name, (item) => (item.artists || []).map((a) => a.name).join(" "));
+      if (!picked) {
+        cb(null);
+        return;
+      }
+      httpGetJson("https://music.163.com/api/song/lyric?id=" + picked.id + "&lv=-1&kv=-1&tv=-1", (lyric) => {
+        const text = lyric && lyric.lrc && lyric.lrc.lyric;
+        if (!text) {
+          cb(null);
+          return;
+        }
+        cb({ provider: "NetEase", providerId: String(picked.id), syncedLyrics: text });
+      }, headers);
+    }, headers);
+  }
+
+  // QQ 音乐：搜索拿 songmid，再用 nobase64=1 取明文 LRC。
+  function lookupQq(title, artist, cb) {
+    const query = encodeURIComponent(title + (artist ? " " + artist : ""));
+    const headers = { Referer: "https://y.qq.com/" };
+    httpGetJson("https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=" + query + "&format=json&n=5&p=1", (data) => {
+      const list = data && data.data && data.data.song && data.data.song.list;
+      const picked = pickSong(list, title, (item) => item.songname, (item) => (item.singer || []).map((s) => s.name).join(" "));
+      if (!picked) {
+        cb(null);
+        return;
+      }
+      httpGetJson(
+        "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=" + picked.songmid + "&format=json&nobase64=1&g_tk=5381",
+        (lyric) => {
+          const text = lyric && lyric.lyric;
+          if (!text) {
+            cb(null);
+            return;
+          }
+          cb({ provider: "QQ Music", providerId: String(picked.songmid), syncedLyrics: text });
+        },
+        headers,
+      );
+    }, headers);
+  }
+
+  // Musixmatch：沿用 EeveeSpotify 的做法，先用固定 app_id 换匿名 token，
+  // 再调 macro.subtitles.get 拿逐行字幕。
+  function lookupMusixmatch(title, artist, cb) {
+    const APP_ID = "mac-ios-v2.0";
+    httpGetJson("https://apic.musixmatch.com/ws/1.1/token.get?app_id=" + APP_ID, (token) => {
+      const userToken = token && token.message && token.message.body && token.message.body.user_token;
+      if (!userToken) {
+        cb(null);
+        return;
+      }
+      const target =
+        "https://apic.musixmatch.com/ws/1.1/macro.subtitles.get?format=json&app_id=" + APP_ID +
+        "&usertoken=" + userToken +
+        "&q_track=" + encodeURIComponent(title) +
+        (artist ? "&q_artist=" + encodeURIComponent(artist) : "") +
+        "&user_language=zh";
+      httpGetJson(target, (data) => {
+        const calls = data && data.message && data.message.body && data.message.body.macro_calls;
+        const sub = calls && calls["track.subtitles.get"] && calls["track.subtitles.get"].message;
+        const list = sub && sub.body && sub.body.subtitle_list;
+        const first = Array.isArray(list) ? list[0] : null;
+        const body = first && first.subtitle && first.subtitle.subtitle_body;
+        if (!body) {
+          cb(null);
+          return;
+        }
+        cb({ provider: "Musixmatch", providerId: String(first.subtitle.subtitle_id || ""), syncedLyrics: body });
+      });
+    });
+  }
+
+  function withProvider(record, name) {
+    const out = {};
+    for (const key in record) {
+      if (Object.prototype.hasOwnProperty.call(record, key)) out[key] = record[key];
+    }
+    out.provider = name;
+    return out;
+  }
+
+  function isSynced(record) {
+    return Boolean(record && "string" == typeof record.syncedLyrics && record.syncedLyrics.trim());
+  }
+
+  function hasAnyLyrics(record) {
+    return Boolean(
+      record &&
+        ((typeof record.syncedLyrics === "string" && record.syncedLyrics.trim()) ||
+          (typeof record.plainLyrics === "string" && record.plainLyrics.trim())),
+    );
+  }
+
+  function pickSong(list, title, nameOf, artistOf) {
+    if (!Array.isArray(list) || !list.length) return null;
+    const wanted = normalize(title);
+    let fallback = null;
+    for (let i = 0; i < list.length; i += 1) {
+      const item = list[i];
+      if (!item) continue;
+      if (!fallback) fallback = item;
+      const name = normalize(nameOf(item));
+      if (name === wanted || name.indexOf(wanted) === 0) return item;
+    }
+    return fallback;
+  }
 
   // ---- 工具函数 ---------------------------------------------------------
 
@@ -147,6 +310,12 @@
     if (value instanceof ArrayBuffer) return utf8.decode(new Uint8Array(value));
     if (value && ArrayBuffer.isView(value)) return utf8.decode(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
     return "";
+  }
+
+  function toBytes(value) {
+    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+    if (value && ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    return new Uint8Array(0);
   }
 
   // 排查用：把响应体开头几个字节打成十六进制，好判断是 protobuf、gzip 还是别的。
@@ -170,7 +339,7 @@
     }
   }
 
-  function httpGetJson(target, callback) {
+  function httpGetJson(target, callback, extraHeaders) {
     let done = false;
     const reply = (value) => {
       if (done) return;
@@ -178,11 +347,17 @@
       callback(value);
     };
     try {
+      const headers = { "User-Agent": USER_AGENT, Accept: "application/json" };
+      if (extraHeaders) {
+        for (const key in extraHeaders) {
+          if (Object.prototype.hasOwnProperty.call(extraHeaders, key)) headers[key] = extraHeaders[key];
+        }
+      }
       $httpClient.get(
         {
           url: target,
-          headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
-          timeout: 3000,
+          headers: headers,
+          timeout: 2500,
         },
         (error, response, data) => {
           if (error || !response || Number(response.status) >= 400 || !data) {
@@ -205,11 +380,132 @@
     const kind = payload.lyrics.syncType === "LINE_SYNCED" ? "同步" : "纯文本";
     log("注入 " + title + " / " + artist + "（" + kind + " " + payload.lyrics.lines.length + " 行）");
     notify("注入 " + kind + " " + payload.lyrics.lines.length + " 行 · " + title);
+
+    if (protoMode) {
+      const bytes = encodeProto(payload.lyrics.lines, payload.lyrics.syncType, payload.lyrics.provider);
+      finish({ status: 200, headers: { "Content-Type": "application/x-protobuf" }, body: bytes.buffer });
+      return;
+    }
+
     finish({
       status: 200,
       headers: { "Content-Type": "application/json; charset=utf-8" },
       body: JSON.stringify(payload),
     });
+  }
+
+  // ---- protobuf ---------------------------------------------------------
+  //
+  // 结构来自 EeveeSpotify 的 lyrics.proto（SwiftProtobuf 生成代码）：
+  //   message Response   { LyricsData data = 1; LyricsColors colors = 2; }
+  //   message LyricsData { bool timeSynchronized = 1; repeated LyricsLine lines = 2;
+  //                        string providedBy = 5; LyricsTranslation translation = 9;
+  //                        LyricsRestriction restriction = 14; }
+  //   message LyricsLine { int32 offsetMs = 1; string content = 2; }
+  //   message LyricsColors { uint32 backgroundColor = 1; uint32 lineColor = 2; uint32 activeLineColor = 3; }
+  //
+  // 和真实响应 0a c2 09 08 01 12 1b 08 b2 3c 12 16 … 对得上：
+  // 0a=Response.data，c2 09=长度 1218，08 01=timeSynchronized=true，
+  // 12 1b=第一条 line，08 b2 3c=offsetMs 7730，12 16=content 长度 22。
+  // colors 不写：客户端对缺失的 colors 有默认主题，写错反而会把字刷成看不见的颜色。
+
+  function encodeProto(lines, syncType, provider) {
+    const lineOut = [];
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      const content = encoder.encode(String(line.words || ""));
+      const body = pbUint(1, Number(line.startTimeMs) || 0).concat(pbBytes(2, content));
+      lineOut.push.apply(lineOut, pbBytes(2, body));
+    }
+    const lyrics = pbUint(1, syncType === "LINE_SYNCED" ? 1 : 0)
+      .concat(lineOut)
+      .concat(pbBytes(5, encoder.encode(provider || "LRCLIB")));
+    return new Uint8Array(pbBytes(1, lyrics));
+  }
+
+  function protoLineCount(bytes) {
+    if (!bytes || !bytes.length) return 0;
+    try {
+      const top = pbFields(bytes);
+      for (let i = 0; i < top.length; i += 1) {
+        const field = top[i];
+        if (field.field !== 1 || field.wire !== 2) continue;
+        const inner = pbFields(field.bytes);
+        let count = 0;
+        for (let j = 0; j < inner.length; j += 1) {
+          if (inner[j].field === 2 && inner[j].wire === 2 && inner[j].bytes && inner[j].bytes.length) count += 1;
+        }
+        return count;
+      }
+    } catch (e) {
+      return 0;
+    }
+    return 0;
+  }
+
+  function pbFields(bytes) {
+    const out = [];
+    let pos = 0;
+    while (pos < bytes.length) {
+      const key = pbReadVarint(bytes, pos);
+      if (key.next < 0) break;
+      const field = Math.floor(key.value / 8);
+      const wire = key.value % 8;
+      if (wire === 0) {
+        const value = pbReadVarint(bytes, key.next);
+        if (value.next < 0) break;
+        out.push({ field: field, wire: 0, value: value.value });
+        pos = value.next;
+      } else if (wire === 2) {
+        const len = pbReadVarint(bytes, key.next);
+        if (len.next < 0) break;
+        out.push({ field: field, wire: 2, bytes: bytes.subarray(len.next, len.next + len.value) });
+        pos = len.next + len.value;
+      } else if (wire === 5) {
+        pos = key.next + 4;
+      } else if (wire === 1) {
+        pos = key.next + 8;
+      } else {
+        break;
+      }
+    }
+    return out;
+  }
+
+  function pbReadVarint(bytes, pos) {
+    let value = 0;
+    let shift = 0;
+    while (pos < bytes.length) {
+      const byte = bytes[pos];
+      value += (byte & 0x7f) * Math.pow(2, shift);
+      pos += 1;
+      if ((byte & 0x80) === 0) return { value: value, next: pos };
+      shift += 7;
+      if (shift > 56) break;
+    }
+    return { value: 0, next: -1 };
+  }
+
+  function pbWriteVarint(value) {
+    const out = [];
+    let rest = Math.max(0, Math.floor(value));
+    while (rest >= 128) {
+      out.push((rest % 128) | 128);
+      rest = Math.floor(rest / 128);
+    }
+    out.push(rest);
+    return out;
+  }
+
+  function pbUint(field, value) {
+    return pbWriteVarint(field * 8).concat(pbWriteVarint(value));
+  }
+
+  function pbBytes(field, bytes) {
+    const head = pbWriteVarint(field * 8 + 2).concat(pbWriteVarint(bytes.length));
+    const tail = [];
+    for (let i = 0; i < bytes.length; i += 1) tail.push(bytes[i]);
+    return head.concat(tail);
   }
 
   function buildPayload(record) {
@@ -233,13 +529,15 @@
   }
 
   function makePayload(syncType, lines, record) {
+    const provider = record.provider || "LRCLIB";
+    const id = record.providerId !== undefined ? record.providerId : record.id;
     return {
       lyrics: {
         syncType: syncType,
         lines: lines,
-        provider: "LRCLIB",
-        providerLyricsId: record.id ? String(record.id) : "",
-        providerDisplayName: "LRCLIB",
+        provider: provider,
+        providerLyricsId: id === undefined || id === null ? "" : String(id),
+        providerDisplayName: provider,
         syncLyricsUri: "",
         isDirty: false,
         live: false,

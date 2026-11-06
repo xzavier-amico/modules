@@ -10,11 +10,12 @@
 spoof_premium = switch,true,type=boolean,tag=伪装 Premium,desc=把账号状态改写为 premium。关闭后本插件不做任何修改。
 block_ads = switch,true,type=boolean,tag=去除广告,desc=关闭广告相关开关，并移除广告与推广位的远程配置。
 unlock_playback = switch,true,type=boolean,tag=解锁播放限制,desc=移除试听时长上限、队列上限与强制随机等免费版限制。
+lyrics_source = select,lrclib,auto,musixmatch,netease,qq,type=string,tag=歌词来源,desc=官方没有歌词时去哪个库找。lrclib 曲库全但中文偏弱；auto 依次尝试 lrclib、musixmatch、网易云、QQ 音乐。
 verbose_log = switch,false,type=boolean,tag=输出日志,desc=在 Loon 日志中打印改写前后的字节数与歌词注入结果，排查时使用。
 
 [Script]
 response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:bootstrap|user-customization-service)/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_premium.js", {${spoof_premium}, ${block_ads}, ${unlock_playback}, ${verbose_log}}) with requires_body=true, binary_body_mode=true, tag="Spotify Premium", timeout=30
-response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/color-lyrics\/v2\/track\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_lyrics.js", {${verbose_log}}) with requires_body=true, binary_body_mode=true, tag="spotify.lyrics", timeout=10
+response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/color-lyrics\/v2\/track\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_lyrics.js", {${verbose_log}, ${lyrics_source}}) with requires_body=true, binary_body_mode=true, tag="spotify.lyrics", timeout=10
 
 [MitM]
 hostname = *-spclient.spotify.com, spclient.wg.spotify.com

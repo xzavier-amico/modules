@@ -28,12 +28,14 @@ compat_arguments:
   spoof_premium: "true"
   block_ads: "true"
   unlock_playback: "true"
+  lyrics_source: "lrclib"
   verbose_log: "false"
 
 compat_arguments_desc: |
   spoof_premium   — 伪装 Premium（总开关）
   block_ads       — 去除广告
   unlock_playback — 解锁播放限制
+  lyrics_source   — 歌词来源：lrclib / auto / musixmatch / netease / qq
   verbose_log     — 输出日志（改写字节数、歌词注入结果）
 
 compat_arguments_schema:
@@ -53,6 +55,10 @@ compat_arguments_schema:
     name: "输出日志"
     description: "在日志中打印改写前后的字节数与歌词注入结果，排查时使用"
     options: ["true", "false"]
+  lyrics_source:
+    name: "歌词来源"
+    description: "官方没有歌词时去哪个库找。lrclib 曲库全但中文偏弱；auto 依次尝试 lrclib、musixmatch、网易云、QQ 音乐"
+    options: ["lrclib", "auto", "musixmatch", "netease", "qq"]
 
 scriptings:
   - http_response:
@@ -77,7 +83,7 @@ scriptings:
       max_size: 1048576
       timeout: 10
       env:
-        _compat.$argument: '{"verbose_log":{{{verbose_log}}}}'
+        _compat.$argument: '{"verbose_log":{{{verbose_log}}},"lyrics_source":"{{{lyrics_source}}}"}'
 
 mitm:
   hostnames:
