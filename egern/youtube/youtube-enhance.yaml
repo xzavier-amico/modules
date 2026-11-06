@@ -26,15 +26,15 @@
 #
 # 注意:
 #   - 需在 Egern 中安装并信任 CA 证书并开启 MITM（HTTPS 改写必需）。
-#   - 各脚本共用持久化键 "YouTubeConfig"（client/encrypt）与 "YouTubeQuality"（分辨率缓存），
-#     key.js → ump.js 之间有数据依赖，请勿单独删改。
+#   - 脚本内部共用持久化键 "YouTubeConfig"（client/encrypt）与 "YouTubeQuality"（分辨率缓存），
+#     密钥提取与 UMP 解密有先后依赖，第一次播放后才会生效。
 #=======================================================================================
 
 name: "YouTube Enhance"
 description: "去广告 + 后台播放 + PiP + 最高 4x 倍速 + On-the-go 控件。\n脚本已重写并合并为单文件；原始逻辑来自 Maasea 的代码 (Apache-2.0)。"
 author: "xzavier-amico"
-homepage: "https://github.com/gholts/surge"
-manual: "https://raw.githubusercontent.com/gholts/surge/main/modules/youtube-enhance.sgmodule"
+homepage: "https://github.com/xzavier-amico/modules"
+manual: "https://github.com/xzavier-amico/modules/blob/master/egern/youtube/README.md"
 # 图标改用本仓库托管的同一张图（Yuanxsxs 原图的本地备份，不依赖上游是否删图）；
 # 想换回原图可改: https://raw.githubusercontent.com/Yuanxsxs/QtumultX/master/Icon/Hand-Painted-icon/Social_Media/YouTube.png
 # 或改回内置符号图标: icon: "play.rectangle.fill"

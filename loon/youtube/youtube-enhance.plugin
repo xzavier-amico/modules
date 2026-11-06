@@ -1,8 +1,8 @@
 #!name = YouTube Enhance
 #!desc = 屏蔽广告，启用后台播放、画中画、最高 4 倍速与 On-the-go 控件。\n脚本已重写并合并为单文件；原始逻辑来自 Maasea 的代码 (Apache-2.0)。
 #!author = xzavier-amico
-#!homepage = https://github.com/gholts/surge
-#!icon = https://raw.githubusercontent.com/Yuanxsxs/QtumultX/master/Icon/Hand-Painted-icon/Social_Media/YouTube.png
+#!homepage = https://github.com/xzavier-amico/modules
+#!icon = https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/icon/YouTube.png
 #!tag = YouTube
 #!system = iOS,iPadOS,macOS,tvOS
 
