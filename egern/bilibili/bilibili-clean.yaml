@@ -1,0 +1,104 @@
+#=======================================================================================
+# BiliBili Clean — Egern 模块
+#
+# 精简版：去广告、去会员推广、去遥测、自动最高画质。
+#
+# 广告 / 会员推广在 JSON 响应里按结构删：
+#   /x/v2/splash/*            开屏
+#   /x/v2/feed/index*         首页推荐
+#   /x/v2/search/square       搜索
+#   /x/web-interface/wbi/...  网页推荐流
+#   /x/vip/ads/materials      大会员广告素材
+#   /pgc/view/v2/app/season   番剧页 payment 块
+#   /pgc/page/*               番剧页广告模块
+#   /xlive/...                直播推荐
+#   /pgc/activity/.../receive 番剧弹窗广告
+#
+# 遥测：data.bilibili.com、cm.bilibili.com 与两个第三方广告归因域名直接 REJECT，
+# 另外拦掉 api.bilibili.com/x/report/click/*。
+#
+# 画质：playurl 请求里的 qn 统一改成 120（4K）并补 fourk=1，服务端按账号权限
+# 返回实际可用的最高档。
+#=======================================================================================
+
+name: "BiliBili Clean"
+description: "去广告、去会员推广、去遥测，播放请求自动要最高画质。只改 JSON 结构，不碰视频流。"
+author: "xzavier-amico"
+homepage: "https://github.com/xzavier-amico/modules"
+icon: "https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/bilibili.png"
+
+compat_arguments:
+  block_ads: "true"
+  hide_vip: "true"
+  auto_quality: "true"
+  verbose_log: "false"
+
+compat_arguments_desc: |
+  block_ads    — 去广告：开屏、首页、搜索、番剧页、直播推荐、番剧弹窗
+  hide_vip     — 去会员推广：番剧页 payment 块、大会员广告素材、VIP 卡片
+  auto_quality — 自动最高画质：playurl 的 qn 改成 120（4K），按账号权限生效
+  verbose_log  — 输出日志：打印改写前后的字节数，排查时使用
+
+compat_arguments_schema:
+  block_ads:
+    name: "去广告"
+    description: "删除开屏、首页推荐、搜索、番剧页、直播推荐和番剧弹窗里的广告"
+    options: ["true", "false"]
+  hide_vip:
+    name: "去会员推广"
+    description: "删除番剧页 payment 块、大会员广告素材和 VIP 卡片"
+    options: ["true", "false"]
+  auto_quality:
+    name: "自动最高画质"
+    description: "把 playurl 请求的 qn 改成 120（4K），服务端按账号权限返回实际最高档"
+    options: ["true", "false"]
+  verbose_log:
+    name: "输出日志"
+    description: "在日志中打印改写前后的字节数，排查时使用"
+    options: ["true", "false"]
+
+rules:
+  # 遥测与广告
+  - domain:
+      match: "data.bilibili.com"
+      policy: REJECT
+  - domain:
+      match: "cm.bilibili.com"
+      policy: REJECT
+  - domain:
+      match: "adtrack.qianwen.com"
+      policy: REJECT
+  - domain:
+      match: "tkio-redirect.solar-engine.com"
+      policy: REJECT
+
+url_rewrites:
+  # 点击埋点
+  - match: "^https?:\\/\\/api\\.bilibili\\.com\\/x\\/report\\/click\\/"
+    location: "http://reject/"
+
+scriptings:
+  - http_response:
+      name: "bilibili.clean"
+      match: "^https?:\\/\\/(?:app\\.bilibili\\.com|api\\.bilibili\\.com|api\\.live\\.bilibili\\.com)\\/(?:x\\/v2\\/splash\\/|x\\/v2\\/feed\\/index|x\\/v2\\/search\\/square|x\\/web-interface\\/wbi\\/index\\/top\\/feed\\/rcmd|x\\/vip\\/ads\\/materials|pgc\\/view\\/v2\\/app\\/season|pgc\\/page\\/|pgc\\/activity\\/deliver\\/material\\/receive|xlive\\/(?:app-interface\\/v2\\/(?:index\\/feed|room\\/recList)|app-room\\/v1\\/index\\/getInfoByRoom))"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_clean.js"
+      body_required: true
+      max_size: 16777216
+      timeout: 20
+      env:
+        _compat.$argument: '{"block_ads":{{{block_ads}}},"hide_vip":{{{hide_vip}}},"verbose_log":{{{verbose_log}}}}'
+
+  - http_request:
+      name: "bilibili.quality"
+      match: "^https?:\\/\\/(?:api|app)\\.bilibili\\.com\\/.*playurl"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_quality.js"
+      timeout: 10
+      env:
+        _compat.$argument: '{"auto_quality":{{{auto_quality}}},"verbose_log":{{{verbose_log}}}}'
+
+mitm:
+  hostnames:
+    includes:
+      - "app.bilibili.com"
+      - "api.bilibili.com"
+      - "api.live.bilibili.com"

@@ -15,7 +15,7 @@
 | Tubi Ad-Free | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/tubi/tubi-adfree.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/tubi/tubi-adfree.plugin) | 去广告：广告接口返回空列表 / 空 VAST，视频流不动，不触发反广告拦截 |
 | Pluto TV Ad-Free | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/pluto-adfree.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/pluto/pluto-adfree.plugin) | 去广告：把 boot 的 serverSideAds 改成 false，stitcher 不再把广告缝进 HLS |
 | Emby Unlock | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/emby/emby-unlock.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/emby/emby-unlock.plugin) | 解锁 Emby iOS 客户端的完整播放：mock mb3admin.com 授权校验；不含服务器端 Premiere |
-| BiliBili Biliverse | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/bilibili-enhance.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/bilibili-enhance.plugin) | 增强 + 全球 + 重定向 + 去广告 合并模块 |
+| BiliBili Clean | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/bilibili-clean.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/bilibili-clean.plugin) | 去广告、去会员推广、去遥测；playurl 自动要最高画质 |
 | ADBlock | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/adblock/adblock.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/adblock/adblock.plugin) | 常见国内外广告 URL 重写拦截 |
 | HTTPDNS Block | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/httpdns/httpdns-block.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/httpdns/httpdns-block.plugin) | 阻止常见的 HTTPDNS 服务器 |
 
@@ -79,7 +79,7 @@ bash scripts/update.sh           # 手动同步上游（不再定时执行）
 ## 来源与许可
 
 - YouTube Enhance：原始代码来自 [Maasea](https://github.com/Maasea)（Apache-2.0），经 [gholts/surge](https://github.com/gholts/surge) 转换，本仓库由 xzavier-amico 维护并扩展。
-- BiliBili Biliverse：[VirgilClyne](https://github.com/VirgilClyne) / [Biliverse](https://github.com/Biliverse)。
+- BiliBili Clean：接口路径参考社区抓包（Biliverse / app2smile），脚本与规则为本仓库重写。
 - Spotify Premium：字段号与属性/规则表来自 [whoeevee/EeveeSpotifyReborn](https://github.com/whoeevee/EeveeSpotifyReborn) 与 [skopevoj/spoti.pw](https://github.com/skopevoj/spoti.pw)（v0.21.1，GPL-3.0），本仓库重写为 Loon / Egern 脚本，按 GPL-3.0 分发。
 - Tubi Ad-Free：广告链路参考 Tubi 自家开源的 [Tubitv/TubiPlayer](https://github.com/Tubitv/TubiPlayer)（MIT）与 Tubi Web 播放器脚本，本仓库自行实现为 Loon / Egern 脚本。
 - Pluto TV Ad-Free：做法来自对 `boot.pluto.tv` 查询参数与 stitcher 会话 JWT 的实测，本仓库自行实现。
