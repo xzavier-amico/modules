@@ -13,7 +13,8 @@
   "use strict";
 
   const req = (typeof $request !== "undefined" && $request) || {};
-  const res = (typeof $response !== "undefined" && $response) || {};
+  const hasResponse = typeof $response !== "undefined" && !!$response;
+  const res = hasResponse ? $response : {};
   const url = res.url || req.url || "";
 
   // Loon 传位置数组或对象，Egern 传 JSON 字符串。
@@ -61,11 +62,16 @@
   const finish = (value) => {
     if (settled) return;
     settled = true;
+    // 请求阶段要短路的话，必须包成 response 字段，Loon/Surge 都是这个约定。
+    if (!hasResponse && value && value.status !== undefined) {
+      $done({ response: value });
+      return;
+    }
     $done(value);
   };
 
-  // 外部接口慢的时候不要拖住 App，超过 6.5 秒就按「没有歌词」放行。
-  if (typeof setTimeout === "function") setTimeout(() => finish({}), 6500);
+  // 外部接口慢的时候不要拖住 App，超过 8 秒就按「没有歌词」放行。
+  if (typeof setTimeout === "function") setTimeout(() => finish({}), 8000);
 
   const rawBody = res.body;
   const body = toText(rawBody);
@@ -77,7 +83,15 @@
   // 拿不到 body 时只能看 URL 上的 format 参数；没有这个参数就按新版算。
   const rawBytes = toBytes(rawBody);
   const wantsProto = /[?&]format=protobuf/i.test(url);
-  const protoMode = wantsProto || (hasBody ? trimmed.charAt(0) !== "{" : true);
+  const protoMode = hasBody ? wantsProto || trimmed.charAt(0) !== "{" : wantsProto || !/[?&]format=json/i.test(url);
+
+  // 请求阶段：先探一下官方有没有歌词，没有才去找第三方。
+  // 之所以不在响应阶段做，是因为没有歌词时官方返回 404 且 body 为空，
+  // 响应脚本在那种情况下根本不会被执行（实测一条通知都收不到）。
+  if (!hasResponse) {
+    runRequestPhase();
+    return;
+  }
 
   log("命中 " + trackId + "，状态 " + res.status + "，body " + (hasBody ? trimmed.length + " 字节" : "为空") + "，url=" + url);
   notify("命中，状态 " + res.status + "，" + (hasBody ? "有 body" : "无 body") + (protoMode ? "，protobuf" : "，json"));
@@ -110,38 +124,119 @@
     notify("官方歌词为空，开始找第三方歌词");
   }
 
-  const oembedUrl = "https://open.spotify.com/oembed?url=" + encodeURIComponent("https://open.spotify.com/track/" + trackId);
-  httpGetJson(oembedUrl, (meta) => {
-    if (!meta || !meta.title) {
-      log("oembed 没有返回元数据");
-      notify("失败：拿不到曲目元数据");
+  resolveLyrics((payload, title, artist) => {
+    if (!payload) {
       finish({});
       return;
     }
-
-    const title = String(meta.title);
-    const artist = String(meta.author_name || "").split(",")[0].trim();
-    const order = sourceOrder();
-    log("歌词源顺序: " + order.join(" -> ") + "，曲目 " + title + " / " + artist);
-    notify("查找 " + title + "（" + order.join(" → ") + "）");
-
-    runSource(order, 0, title, artist, (record) => {
-      if (!record) {
-        log("所有歌词源都没有找到 " + title);
-        notify("失败：所有歌词源都没有 " + title);
-        finish({});
-        return;
-      }
-      const payload = buildPayload(record);
-      if (!payload) {
-        log("歌词源返回了空内容");
-        notify("失败：歌词源返回空内容");
-        finish({});
-        return;
-      }
-      emit(payload, title, artist);
-    });
+    emit(payload, title, artist);
   });
+
+  // ---- 请求阶段 ---------------------------------------------------------
+
+  function runRequestPhase() {
+    if (isProbeRequest()) {
+      // 自己发出去的探测请求，直接放行，避免递归。
+      $done({});
+      return;
+    }
+
+    notify("请求 " + trackId + "，先探官方有没有歌词");
+    probeOfficial((hasOfficial) => {
+      if (hasOfficial === null) {
+        log("探测失败，放行");
+        notify("探测失败，放行");
+        $done({});
+        return;
+      }
+      if (hasOfficial) {
+        log("官方有歌词，放行");
+        notify("官方有歌词，放行");
+        $done({});
+        return;
+      }
+      log("官方没有歌词，开始找第三方");
+      notify("官方没有歌词，开始找第三方");
+      resolveLyrics((payload, title, artist) => {
+        if (!payload) {
+          $done({});
+          return;
+        }
+        emit(payload, title, artist);
+      });
+    });
+  }
+
+  function isProbeRequest() {
+    const headers = req.headers || {};
+    for (const key in headers) {
+      if (!Object.prototype.hasOwnProperty.call(headers, key)) continue;
+      if (key.toLowerCase() === "x-xz-lyrics-probe") return true;
+    }
+    return false;
+  }
+
+  // 原样重放一次官方请求，只看状态码：200 说明官方有歌词。
+  function probeOfficial(cb) {
+    const headers = {};
+    const source = req.headers || {};
+    for (const key in source) {
+      if (Object.prototype.hasOwnProperty.call(source, key)) headers[key] = source[key];
+    }
+    headers["x-xz-lyrics-probe"] = "1";
+
+    try {
+      $httpClient.get({ url: url, headers: headers, timeout: 3000 }, (error, response) => {
+        if (error || !response) {
+          cb(null);
+          return;
+        }
+        const code = Number(response.status) || 0;
+        // 200 = 官方有歌词；404/204 = 明确没有；其他状态说不准，一律当未知处理。
+        if (code === 200) cb(true);
+        else if (code === 404 || code === 204) cb(false);
+        else cb(null);
+      });
+    } catch (e) {
+      cb(null);
+    }
+  }
+
+  // 取曲目元数据 -> 按配置的歌词源找 -> 回调 payload
+  function resolveLyrics(cb) {
+    const oembedUrl = "https://open.spotify.com/oembed?url=" + encodeURIComponent("https://open.spotify.com/track/" + trackId);
+    httpGetJson(oembedUrl, (meta) => {
+      if (!meta || !meta.title) {
+        log("oembed 没有返回元数据");
+        notify("失败：拿不到曲目元数据");
+        cb(null);
+        return;
+      }
+
+      const title = String(meta.title);
+      const artist = String(meta.author_name || "").split(",")[0].trim();
+      const order = sourceOrder();
+      log("歌词源顺序: " + order.join(" -> ") + "，曲目 " + title + " / " + artist);
+      notify("查找 " + title + "（" + order.join(" → ") + "）");
+
+      runSource(order, 0, title, artist, (record) => {
+        if (!record) {
+          log("所有歌词源都没有找到 " + title);
+          notify("失败：所有歌词源都没有 " + title);
+          cb(null);
+          return;
+        }
+        const payload = buildPayload(record);
+        if (!payload) {
+          log("歌词源返回了空内容");
+          notify("失败：歌词源返回空内容");
+          cb(null);
+          return;
+        }
+        cb(payload, title, artist);
+      });
+    });
+  }
 
   // ---- 歌词源 -----------------------------------------------------------
 
