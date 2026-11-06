@@ -28,12 +28,10 @@
   }
   const flag = (v, d) => (v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0"));
   const verbose = flag(opt.verbose_log, false);
-  // 用 warn 级别输出：info 一多就刷没了，warn 在日志里更好找。
+  // Loon 的脚本 API 只保证 console.log 可用，console.warn 不一定存在，统一走 log。
   const log = (msg) => {
     if (!verbose) return;
-    const line = "spotify-lyrics: " + msg;
-    if ("function" == typeof console.warn) console.warn(line);
-    else console.log(line);
+    console.log("spotify-lyrics: " + msg);
   };
 
   const match = /\/color-lyrics\/v2\/track\/([A-Za-z0-9]+)/.exec(url);
@@ -60,6 +58,16 @@
   const body = toText(rawBody);
   const trimmed = body.trim();
   log("命中 " + trackId + "，状态 " + (res.status === undefined ? "-" : res.status) + "，url=" + url);
+
+  // 排查用：开了 verbose_log 就发一条系统通知。日志面板不一定能刷到脚本输出，
+  // 通知是最直接的「脚本到底跑没跑」的证据；顺带带上版本号，方便判断脚本是不是最新的。
+  if (verbose && typeof $notification !== "undefined" && $notification && "function" == typeof $notification.post) {
+    try {
+      $notification.post("Spotify 歌词 v3", trackId, "状态 " + (res.status === undefined ? "-" : res.status));
+    } catch (e) {
+      // 通知失败不影响主流程
+    }
+  }
 
   if (Number(res.status) === 200 && trimmed && trimmed.charAt(0) !== "{") {
     // 不是 JSON 说明客户端要的是 protobuf，注入 JSON 会让它解析失败，直接放行。

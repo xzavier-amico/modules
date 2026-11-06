@@ -395,12 +395,10 @@
     return value === true || value === "true" || value === 1 || value === "1";
   })();
 
-  // 用 warn 级别输出：info 一多就刷没了，warn 在日志里更好找。
+  // Loon 的脚本 API 只保证 console.log 可用，console.warn 不一定存在，统一走 log。
   const log = (message) => {
     if (!VERBOSE) return;
-    const line = "youtube: " + message;
-    if ("function" == typeof console.warn) console.warn(line);
-    else console.log(line);
+    console.log("youtube: " + message);
   };
 
   function readOptions(defaults = {}) {
