@@ -31,7 +31,7 @@
 
 name: "YouTube Enhance"
 description: "去广告 + 后台播放 + PiP + 最高 4x 倍速 + On-the-go 控件。\n基于 Maasea 的代码 (Apache-2.0)，由 Surge 模块 youtube-enhance.sgmodule 转换。"
-author: "gholts"
+author: "Maasea, gholts, xzavier-amico"
 homepage: "https://github.com/gholts/surge"
 manual: "https://raw.githubusercontent.com/gholts/surge/main/modules/youtube-enhance.sgmodule"
 # 图标改用本仓库托管的同一张图（Yuanxsxs 原图的本地备份，不依赖上游是否删图）；
@@ -72,7 +72,7 @@ compat_arguments_desc: |
   block_upload          — 移除侧栏中的「上传」入口
   block_shorts          — 移除侧栏中的 Shorts 入口
   block_shorts_feed     — 移除首页列表中的 Shorts 推荐货架
-  block_members_only    — 移除信息流中需要频道会员才能观看的视频
+  block_members_only    — 移除首页、频道页等列表中需要频道会员才能观看的视频
   auto_hd               — 优先选择可用的最高分辨率（已授权时用 Premium 高码率）
   block_games           — 移除首页 Playables（小游戏）
   block_vertical_live   — 移除首页竖屏直播
@@ -112,7 +112,7 @@ compat_arguments_schema:
     options: ["true", "false"]
   block_members_only:
     name: "过滤会员专属视频"
-    description: "移除信息流中需要频道会员才能观看的视频"
+    description: "移除首页、频道页等列表中需要频道会员才能观看的视频"
     options: ["true", "false"]
   auto_hd:
     name: "自动高清"

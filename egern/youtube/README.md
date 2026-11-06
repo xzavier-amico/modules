@@ -62,7 +62,7 @@ modules:
 | `block_upload` | true | 移除侧栏中的「上传」入口 |
 | `block_shorts` | false | 移除侧栏中的 Shorts 入口 |
 | `block_shorts_feed` | false | 移除首页列表中的 Shorts 推荐货架 |
-| `block_members_only` | false | 移除信息流中需要频道会员才能观看的视频 |
+| `block_members_only` | false | 移除首页、频道页等列表中需要频道会员才能观看的视频 |
 | `block_games` | true | 移除首页 Playables（小游戏） |
 | `block_vertical_live` | false | 移除首页竖屏直播 |
 | `block_store` | true | 移除创作者商店、商品卡片与相关悬浮层 |
@@ -107,7 +107,7 @@ modules:
 - `on_the_go_audio`、`on_the_go_chapters` 只在 `on_the_go` 开启时生效。
 - `block_guide_items` 接收 YouTube 侧栏项对应的 `browseId`（例如 `FEuploads`、`FEshorts`）。它用于补充隐藏 `block_games` / `block_store` 等开关没有覆盖的侧栏入口。
 - `block_shorts` 只移除侧栏的 Shorts 入口，不会清理首页列表；要移除首页等信息流中的 Shorts 推荐货架，请打开 `block_shorts_feed`。
-- `block_members_only` 只从信息流中移除会员专属视频，不会解锁播放；它按徽章文字（`会员专享` / `Members only` 等）匹配，极少数标题恰好同名的视频可能被误删。
+- `block_members_only` 只从列表页（首页、频道页、Shorts 货架）中移除会员专属视频，不会解锁播放；它按徽章文字（`会员专享` / `Members only` 等）匹配，极少数标题恰好同名的视频可能被误删。
 - 这些参数由 `scripts/patch_youtube.py` 在上游脚本基础上打补丁实现；补丁采用精确匹配并带断言，上游脚本结构变化时会失败并保留旧脚本。
 
 ## 转换对照（Surge → Egern）

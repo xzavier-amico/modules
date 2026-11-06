@@ -1,6 +1,6 @@
 #!name = YouTube Enhance
 #!desc = 屏蔽广告，启用后台播放、画中画、最高 4 倍速与 On-the-go 控件。\n基于 Maasea 的代码 (Apache-2.0)。
-#!author = gholts
+#!author = Maasea, gholts, xzavier-amico
 #!homepage = https://github.com/gholts/surge
 #!icon = https://raw.githubusercontent.com/Yuanxsxs/QtumultX/master/Icon/Hand-Painted-icon/Social_Media/YouTube.png
 #!tag = YouTube
@@ -10,7 +10,7 @@
 block_upload = switch,true,type=boolean,tag=移除上传入口,desc=移除侧栏中的「上传」入口。
 block_shorts = switch,false,type=boolean,tag=移除 Shorts 入口,desc=移除侧栏中的 Shorts 入口。
 block_shorts_feed = switch,false,type=boolean,tag=屏蔽首页 Shorts,desc=移除首页列表中的 Shorts 推荐货架。
-block_members_only = switch,false,type=boolean,tag=过滤会员专属视频,desc=移除信息流中需要频道会员才能观看的视频。
+block_members_only = switch,false,type=boolean,tag=过滤会员专属视频,desc=移除首页、频道页等列表中需要频道会员才能观看的视频。
 auto_hd = switch,true,type=boolean,tag=自动高清,desc=优先选择可用的最高分辨率；已授权 Premium 时使用高码率。
 block_games = switch,true,type=boolean,tag=屏蔽 Playables,desc=移除首页的 Playables 小游戏。
 block_vertical_live = switch,false,type=boolean,tag=屏蔽竖屏直播,desc=移除首页的竖屏直播内容。

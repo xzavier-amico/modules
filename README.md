@@ -62,7 +62,7 @@ scripts/validate.py              # 参数、占位符、JSON、JS 语法校验
 
 ```bash
 python3 scripts/validate.py      # 提交前校验
-bash scripts/update.sh           # 同步上游（由本机定时任务调用）
+bash scripts/update.sh           # 手动同步上游（不再定时执行）
 ```
 
 `validate.py` 会检查：
@@ -78,7 +78,7 @@ bash scripts/update.sh           # 同步上游（由本机定时任务调用）
 
 ## 来源与许可
 
-- YouTube Enhance：基于 [gholts/surge](https://github.com/gholts/surge)，原始代码来自 Maasea（Apache-2.0）。
+- YouTube Enhance：原始代码来自 [Maasea](https://github.com/Maasea)（Apache-2.0），经 [gholts/surge](https://github.com/gholts/surge) 转换，本仓库由 xzavier-amico 维护并扩展。
 - BiliBili Biliverse：[VirgilClyne](https://github.com/VirgilClyne) / [Biliverse](https://github.com/Biliverse)。
 - Spotify：app2smile、[001ProMax](https://github.com/001ProMax)、[Reukix](https://github.com/Reukix)。
 - ADBlock：[blackmatrix7/ios_rule_script](https://github.com/blackmatrix7/ios_rule_script)。

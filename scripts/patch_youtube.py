@@ -50,10 +50,10 @@ ARG_KEYS = {
 # The protobuf field numbers for the new lockup metadata are not modelled, so
 # walk the raw bytes and compare complete string fields against known labels.
 MEMBERS_ONLY_HELPER = (
+    'const YL=["Members only","会员专享","會員專享","メンバー限定","멤버 전용","BADGE_MEMBERS_ONLY"];'
     'function ytmob(g){try{const b=g&&g[_]&&g[_].bytes;if(!b||!b.length)return!1;'
-    'const L=["Members only","会员专享","會員專享","メンバー限定","멤버 전용","BADGE_MEMBERS_ONLY"],'
-    'D=new TextDecoder("utf-8",{fatal:!0});'
-    'function w(b,d){if(d>8)return!1;let p=0;while(p<b.length){let t=0,s=0,c;'
+    'const L=YL,D=new TextDecoder("utf-8",{fatal:!0});'
+    'function w(b,d){if(d>14)return!1;let p=0;while(p<b.length){let t=0,s=0,c;'
     'do{if(p>=b.length)return!1;c=b[p++];t+=(c&127)*2**s;s+=7;if(s>35)return!1}while(c&128);'
     'const n=Math.floor(t/8),q=t%8;'
     'if(q===0){do{if(p>=b.length)return!1;c=b[p++]}while(c&128)}'
@@ -63,6 +63,35 @@ MEMBERS_ONLY_HELPER = (
     'try{if(L.includes(D.decode(u)))return!0}catch{}'
     'if(w(u,d+1))return!0;p+=l}'
     'else return!1}return!1}return w(b,0)}catch{return!1}}'
+    # A card holds one video, a shelf or section holds many. Counting the
+    # distinct /vi/<id>/ thumbnail ids and the members-only badge occurrences
+    # tells them apart: the object is dropped only when every video it holds is
+    # members-only, so a mixed shelf never loses its normal entries.
+    'function ytall(g){try{const b=g&&g[_]&&g[_].bytes;if(!b||!b.length)return!1;'
+    'const s=new TextDecoder("utf-8").decode(b),m=s.match(/\\/vi\\/[A-Za-z0-9_-]{11}\\//g);'
+    'if(!m)return!1;const u=new Set;for(const x of m)u.add(x.slice(4,15));'
+    'let c=0,k;for(const l of YL)for(k=-1;(k=s.indexOf(l,k+1))>=0;)c++;'
+    'return c>=u.size}catch{return!1}}'
+)
+
+# Channel pages and the home feed answer with a two-column browse tree whose
+# renderers are not modelled upstream. Only the path down to the item list is
+# added: BrowseContent -> twoColumnBrowseResultsRenderer -> tabs -> tabRenderer
+# -> richGridRenderer -> richItemContents. The items themselves stay unmodelled
+# so their original bytes survive for the badge scan in ytmob().
+BROWSE_SCHEMA_OLD = (
+    'BrowseContent:[[58173949,"singleColumnResultsRenderer","SingleColumnResultsRenderer"],'
+    '[153515154,"elementRenderer","ElementRenderer"],'
+    '[49399797,"sectionListRenderer","SectionListRenderer"]],'
+)
+BROWSE_SCHEMA_NEW = (
+    'BrowseContent:[[58173949,"singleColumnResultsRenderer","SingleColumnResultsRenderer"],'
+    '[52123031,"twoColumnBrowseResultsRenderer","TwoColumnBrowseResultsRenderer"],'
+    '[255072793,"richGridRenderer","RichGridRenderer"],'
+    '[153515154,"elementRenderer","ElementRenderer"],'
+    '[49399797,"sectionListRenderer","SectionListRenderer"]],'
+    'TwoColumnBrowseResultsRenderer:[[3,"tabs","BrowseTabSupportedRenderer",!0]],'
+    'RichGridRenderer:[[1,"richItemContents","RichItemContent",!0]],'
 )
 
 
@@ -208,6 +237,27 @@ def patch_response(t):
     )
 
     # ---- members-only feed items (badge text scan, opt-in) ----
+    t = sub(
+        t,
+        'new Set(["Browse","BrowseContent",',
+        'new Set(["Browse","BrowseContent","TwoColumnBrowseResultsRenderer","RichGridRenderer",',
+        "response browse type whitelist",
+        '"TwoColumnBrowseResultsRenderer","RichGridRenderer"',
+    )
+    t = sub(
+        t,
+        BROWSE_SCHEMA_OLD,
+        BROWSE_SCHEMA_NEW,
+        "response two-column browse schema",
+        'TwoColumnBrowseResultsRenderer:[[3,"tabs"',
+    )
+    t = sub(
+        t,
+        'return function g(I,E=!1){if(!I||"object"!=typeof I||ArrayBuffer.isView(I))return 0;if(!1!==blockShortsFeedOpt&&I.reelShelfRenderer)return 2;',
+        'return function g(I,E=!1){if(!I||"object"!=typeof I||ArrayBuffer.isView(I))return 0;if(E&&!1!==blockMembersOnlyOpt&&ytmob(I)&&ytall(I))return 1;if(!1!==blockShortsFeedOpt&&I.reelShelfRenderer)return 2;',
+        "response members-only browse items",
+        "if(E&&!1!==blockMembersOnlyOpt&&ytmob(I)&&ytall(I))return 1;",
+    )
     t = sub(
         t,
         "function Bg(g){",
@@ -408,6 +458,27 @@ def patch_ump(t):
     )
 
     # ---- members-only feed items (badge text scan, opt-in) ----
+    t = sub(
+        t,
+        'new Set(["BrowseContent",',
+        'new Set(["BrowseContent","TwoColumnBrowseResultsRenderer","RichGridRenderer",',
+        "ump browse type whitelist",
+        '"TwoColumnBrowseResultsRenderer","RichGridRenderer"',
+    )
+    t = sub(
+        t,
+        BROWSE_SCHEMA_OLD,
+        BROWSE_SCHEMA_NEW,
+        "ump two-column browse schema",
+        'TwoColumnBrowseResultsRenderer:[[3,"tabs"',
+    )
+    t = sub(
+        t,
+        'return function g(I,E=!1){if(!I||"object"!=typeof I||ArrayBuffer.isView(I))return 0;if(!1!==blockShortsFeedOpt&&I.reelShelfRenderer)return 2;',
+        'return function g(I,E=!1){if(!I||"object"!=typeof I||ArrayBuffer.isView(I))return 0;if(E&&!1!==blockMembersOnlyOpt&&ytmob(I)&&ytall(I))return 1;if(!1!==blockShortsFeedOpt&&I.reelShelfRenderer)return 2;',
+        "ump members-only browse items",
+        "if(E&&!1!==blockMembersOnlyOpt&&ytmob(I)&&ytall(I))return 1;",
+    )
     t = sub(
         t,
         "function tg(g){",
