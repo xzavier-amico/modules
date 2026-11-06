@@ -45,10 +45,16 @@ compat_arguments_schema:
 rules:
   # Tubi 只在美国可用。这里把它的域名固定走代理，避免被「国内直连」类规则带走，
   # 导致 MITM 看不到流量、模块静默失效。
-  # 如果你本身在美国，或想指定某个策略组/节点，把下面四条的 PROXY 改成 DIRECT
+  # 如果你本身在美国，或想指定某个策略组/节点，把下面六条的 PROXY 改成 DIRECT
   # 或你的策略组名称即可。
   - domain_suffix:
       match: "tubitv.com"
+      policy: PROXY
+  - domain_suffix:
+      match: "tubi.com"
+      policy: PROXY
+  - domain_suffix:
+      match: "tubi.tv"
       policy: PROXY
   - domain_suffix:
       match: "tubi.video"

@@ -37,12 +37,14 @@ Tubi 只在美国可用。模块的 `rules` 段把它的域名固定指向 `PROX
 | 域名 | 用途 |
 | --- | --- |
 | `tubitv.com` | App 接口、网页、静态资源 |
+| `tubi.com` | 301 跳到 tubitv.com |
+| `tubi.tv` | 302 跳到 gdpr.tubi.tv |
 | `tubi.video` | 视频 CDN |
 | `tubi.io` | 接口与广告 |
 | `adrise.tv` | 广告（`ads.adrise.tv`） |
 
 这样不会被「国内直连」之类的规则带走，导致 MITM 看不到流量、模块静默失效。
-如果你本身在美国，或想指定某个节点/策略组，把 `rules` 里这四条的 `PROXY`
+如果你本身在美国，或想指定某个节点/策略组，把 `rules` 里这六条的 `PROXY`
 改成 `DIRECT` 或你的策略组名即可。
 
 ## 参数
