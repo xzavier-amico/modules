@@ -53,6 +53,9 @@
   if (patched.changed) {
     log("has_lyrics -> true（" + patched.mode + "）");
     notify("改成 true（" + patched.mode + "）");
+  } else {
+    log("has_lyrics 已经是 true，不动");
+    notify("已经是 true，没改");
   }
 
   $done({ body: patched.bytes });
