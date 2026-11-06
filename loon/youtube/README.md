@@ -14,7 +14,7 @@
 
 ## 参数
 
-共 24 个参数，均可在插件设置页调整；默认值与上游原版行为一致。
+共 25 个参数，均可在插件设置页调整；默认值与上游原版行为一致。
 
 ### 界面与内容
 
@@ -22,6 +22,7 @@
 | --- | --- | --- |
 | `block_upload` | true | 移除侧栏中的「上传」入口 |
 | `block_shorts` | false | 移除侧栏中的 Shorts 入口 |
+| `block_shorts_feed` | false | 移除首页列表中的 Shorts 推荐货架 |
 | `block_games` | true | 移除首页 Playables（小游戏） |
 | `block_vertical_live` | false | 移除首页竖屏直播 |
 | `block_store` | true | 移除创作者商店、商品卡片与相关悬浮层 |
@@ -64,6 +65,6 @@
 
 - `max_height`、`prefer_premium` 只在 `auto_hd` 开启时生效。
 - `on_the_go_audio`、`on_the_go_chapters` 只在 `on_the_go` 开启时生效。
-- `block_upload` / `block_shorts` 与 `block_guide_items` 都作用于侧栏；`block_games` / `block_store` 只清理首页或播放器内的卡片与悬浮层，不会隐藏侧栏入口，如有需要可把对应 `browseId` 填入 `block_guide_items`。
+- `block_upload` / `block_shorts` 与 `block_guide_items` 都作用于侧栏；`block_shorts_feed` 只清理首页等信息流中的 Shorts 推荐货架，二者互不影响。`block_games` / `block_store` 只清理首页或播放器内的卡片与悬浮层，不会隐藏侧栏入口，如有需要可把对应 `browseId` 填入 `block_guide_items`。
 - `[Rewrite]` 中的 `pagead/pcs` 与 `stats/ads` 两条 404 规则无法按参数条件启用；即使关闭相关广告开关，这两条静态规则仍会生效。
 - 若上游脚本更新导致补丁无法精确匹配，`update.sh` 会保留旧脚本而不会发布半成品。

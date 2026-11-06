@@ -43,6 +43,7 @@ icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/yout
 compat_arguments:
   block_upload: "true"
   block_shorts: "false"
+  block_shorts_feed: "false"
   auto_hd: "true"
   block_games: "true"
   block_vertical_live: "false"
@@ -69,6 +70,7 @@ compat_arguments:
 compat_arguments_desc: |
   block_upload          — 移除侧栏中的「上传」入口
   block_shorts          — 移除侧栏中的 Shorts 入口
+  block_shorts_feed     — 移除首页列表中的 Shorts 推荐货架
   auto_hd               — 优先选择可用的最高分辨率（已授权时用 Premium 高码率）
   block_games           — 移除首页 Playables（小游戏）
   block_vertical_live   — 移除首页竖屏直播
@@ -101,6 +103,10 @@ compat_arguments_schema:
   block_shorts:
     name: "移除 Shorts 入口"
     description: "移除侧栏中的 Shorts 入口"
+    options: ["true", "false"]
+  block_shorts_feed:
+    name: "屏蔽首页 Shorts"
+    description: "移除首页列表中的 Shorts 推荐货架"
     options: ["true", "false"]
   auto_hd:
     name: "自动高清"
@@ -220,7 +226,7 @@ scriptings:
       max_size: 33554432    # 32 MiB（0 的语义文档未定义，显式大值；默认 1 MiB 会截断大响应）
       timeout: 60
       env:
-        _compat.$argument: '{"blockUpload":{{{block_upload}}},"blockShorts":{{{block_shorts}}},"autoHd":{{{auto_hd}}},"blockGames":{{{block_games}}},"blockVerticalLive":{{{block_vertical_live}}},"jumpAhead":{{{jump_ahead}}},"blockStore":{{{block_store}}},"blockAi":{{{block_ai}}},"onTheGo":{{{on_the_go}}},"backgroundPlay":{{{background_play}}},"pip":{{{pip}}},"maxSpeed":"{{{max_speed}}}","hidePremium":{{{hide_premium}}},"preferPremium":{{{prefer_premium}}},"maxHeight":{{{max_height}}},"blockPlayerAds":{{{block_player_ads}}},"blockFeedAds":{{{block_feed_ads}}},"blockShortsAds":{{{block_shorts_ads}}},"removePaidPromotion":{{{remove_paid_promotion}}},"blockAdTracking":{{{block_ad_tracking}}},"blockGuideItems":"{{{block_guide_items}}}","onTheGoAudio":{{{on_the_go_audio}}},"onTheGoChapters":{{{on_the_go_chapters}}},"stripHotHash":{{{strip_hot_hash}}}}'
+        _compat.$argument: '{"blockUpload":{{{block_upload}}},"blockShorts":{{{block_shorts}}},"autoHd":{{{auto_hd}}},"blockGames":{{{block_games}}},"blockVerticalLive":{{{block_vertical_live}}},"jumpAhead":{{{jump_ahead}}},"blockStore":{{{block_store}}},"blockAi":{{{block_ai}}},"onTheGo":{{{on_the_go}}},"backgroundPlay":{{{background_play}}},"pip":{{{pip}}},"maxSpeed":"{{{max_speed}}}","hidePremium":{{{hide_premium}}},"preferPremium":{{{prefer_premium}}},"maxHeight":{{{max_height}}},"blockPlayerAds":{{{block_player_ads}}},"blockFeedAds":{{{block_feed_ads}}},"blockShortsFeed":{{{block_shorts_feed}}},"blockShortsAds":{{{block_shorts_ads}}},"removePaidPromotion":{{{remove_paid_promotion}}},"blockAdTracking":{{{block_ad_tracking}}},"blockGuideItems":"{{{block_guide_items}}}","onTheGoAudio":{{{on_the_go_audio}}},"onTheGoChapters":{{{on_the_go_chapters}}},"stripHotHash":{{{strip_hot_hash}}}}'
 
   # youtube.enhance.key：从 config/log_event 提取 client/encrypt 密钥（ump 解密依赖）
   - http_response:
@@ -243,7 +249,7 @@ scriptings:
       max_size: 33554432
       timeout: 60
       env:
-        _compat.$argument: '{"blockGames":{{{block_games}}},"blockVerticalLive":{{{block_vertical_live}}},"jumpAhead":{{{jump_ahead}}},"autoHd":{{{auto_hd}}},"blockStore":{{{block_store}}},"blockAi":{{{block_ai}}},"onTheGo":{{{on_the_go}}},"backgroundPlay":{{{background_play}}},"pip":{{{pip}}},"maxSpeed":"{{{max_speed}}}","hidePremium":{{{hide_premium}}},"preferPremium":{{{prefer_premium}}},"maxHeight":{{{max_height}}},"blockPlayerAds":{{{block_player_ads}}},"blockFeedAds":{{{block_feed_ads}}},"blockShortsAds":{{{block_shorts_ads}}},"removePaidPromotion":{{{remove_paid_promotion}}},"blockAdTracking":{{{block_ad_tracking}}},"blockGuideItems":"{{{block_guide_items}}}","onTheGoAudio":{{{on_the_go_audio}}},"onTheGoChapters":{{{on_the_go_chapters}}},"stripHotHash":{{{strip_hot_hash}}}}'
+        _compat.$argument: '{"blockGames":{{{block_games}}},"blockVerticalLive":{{{block_vertical_live}}},"jumpAhead":{{{jump_ahead}}},"autoHd":{{{auto_hd}}},"blockStore":{{{block_store}}},"blockAi":{{{block_ai}}},"onTheGo":{{{on_the_go}}},"backgroundPlay":{{{background_play}}},"pip":{{{pip}}},"maxSpeed":"{{{max_speed}}}","hidePremium":{{{hide_premium}}},"preferPremium":{{{prefer_premium}}},"maxHeight":{{{max_height}}},"blockPlayerAds":{{{block_player_ads}}},"blockFeedAds":{{{block_feed_ads}}},"blockShortsFeed":{{{block_shorts_feed}}},"blockShortsAds":{{{block_shorts_ads}}},"removePaidPromotion":{{{remove_paid_promotion}}},"blockAdTracking":{{{block_ad_tracking}}},"blockGuideItems":"{{{block_guide_items}}}","onTheGoAudio":{{{on_the_go_audio}}},"onTheGoChapters":{{{on_the_go_chapters}}},"stripHotHash":{{{strip_hot_hash}}}}'
 
   # youtube.enhance.init：initplayback 请求改写
   - http_request:

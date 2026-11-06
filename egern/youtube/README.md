@@ -53,7 +53,7 @@ modules:
 
 ## 参数
 
-原有 9 个参数与上游 `#!arguments` 一一对应；其余 15 个参数是把上游脚本中原本硬编码的行为提取出来的开关。所有默认值都保持原版行为，升级无感。
+原有 9 个参数与上游 `#!arguments` 一一对应；其余 16 个参数是把上游脚本中原本硬编码的行为提取出来的开关。所有默认值都保持原版行为，升级无感。
 
 ### 界面与内容
 
@@ -61,6 +61,7 @@ modules:
 | --- | --- | --- |
 | `block_upload` | true | 移除侧栏中的「上传」入口 |
 | `block_shorts` | false | 移除侧栏中的 Shorts 入口 |
+| `block_shorts_feed` | false | 移除首页列表中的 Shorts 推荐货架 |
 | `block_games` | true | 移除首页 Playables（小游戏） |
 | `block_vertical_live` | false | 移除首页竖屏直播 |
 | `block_store` | true | 移除创作者商店、商品卡片与相关悬浮层 |
@@ -104,6 +105,7 @@ modules:
 - `max_height`、`prefer_premium` 只在 `auto_hd` 开启时生效。
 - `on_the_go_audio`、`on_the_go_chapters` 只在 `on_the_go` 开启时生效。
 - `block_guide_items` 接收 YouTube 侧栏项对应的 `browseId`（例如 `FEuploads`、`FEshorts`）。它用于补充隐藏 `block_games` / `block_store` 等开关没有覆盖的侧栏入口。
+- `block_shorts` 只移除侧栏的 Shorts 入口，不会清理首页列表；要移除首页等信息流中的 Shorts 推荐货架，请打开 `block_shorts_feed`。
 - 这些参数由 `scripts/patch_youtube.py` 在上游脚本基础上打补丁实现；补丁采用精确匹配并带断言，上游脚本结构变化时会失败并保留旧脚本。
 
 ## 转换对照（Surge → Egern）

@@ -20,6 +20,7 @@ import re
 ARG_KEYS = {
     "block_upload": "blockUpload",
     "block_shorts": "blockShorts",
+    "block_shorts_feed": "blockShortsFeed",
     "auto_hd": "autoHd",
     "block_games": "blockGames",
     "block_vertical_live": "blockVerticalLive",
@@ -105,7 +106,7 @@ def patch_response(t):
     t = sub(
         t,
         "function N(E,{blockGames:i=!0,blockVerticalLive:r=!1,jumpAhead:U=!0,blockStore:J=!0,blockAi:P=!0,onTheGo:N=!0}={}){",
-        "function N(E,{blockGames:i=!0,blockVerticalLive:r=!1,jumpAhead:U=!0,blockStore:J=!0,blockAi:P=!0,onTheGo:N=!0,maxSpeed:maxSpeedOpt=4,hidePremium:hidePremiumOpt=!0,blockFeedAds:blockFeedAdsOpt=!0,onTheGoAudio:onTheGoAudioOpt=!0,onTheGoChapters:onTheGoChaptersOpt=!0}={}){",
+        "function N(E,{blockGames:i=!0,blockVerticalLive:r=!1,jumpAhead:U=!0,blockStore:J=!0,blockAi:P=!0,onTheGo:N=!0,maxSpeed:maxSpeedOpt=4,hidePremium:hidePremiumOpt=!0,blockFeedAds:blockFeedAdsOpt=!0,blockShortsFeed:blockShortsFeedOpt=!1,onTheGoAudio:onTheGoAudioOpt=!0,onTheGoChapters:onTheGoChaptersOpt=!0}={}){",
         "response N signature",
         "maxSpeed:maxSpeedOpt=4",
     )
@@ -177,6 +178,13 @@ def patch_response(t):
         "h&&A.products?.length||K&&!1!==blockFeedAdsOpt&&V(A)",
         "response promoted contents",
         "K&&!1!==blockFeedAdsOpt&&V(A)",
+    )
+    t = sub(
+        t,
+        'return function g(I,E=!1){if(!I||"object"!=typeof I||ArrayBuffer.isView(I))return 0;',
+        'return function g(I,E=!1){if(!I||"object"!=typeof I||ArrayBuffer.isView(I))return 0;if(!1!==blockShortsFeedOpt&&I.reelShelfRenderer)return 2;',
+        "response Shorts feed shelf",
+        "blockShortsFeedOpt&&I.reelShelfRenderer",
     )
 
     # ---- player response (X): paid promotion / ad slots / speed / tracking / PiP / background ----
@@ -282,7 +290,7 @@ def patch_ump(t):
     t = sub(
         t,
         "function Z(E,{blockGames:o=!0,blockVerticalLive:e=!1,jumpAhead:h=!0,blockStore:a=!0,blockAi:L=!0,onTheGo:O=!0}={}){",
-        "function Z(E,{blockGames:o=!0,blockVerticalLive:e=!1,jumpAhead:h=!0,blockStore:a=!0,blockAi:L=!0,onTheGo:O=!0,maxSpeed:maxSpeedOpt=4,hidePremium:hidePremiumOpt=!0,blockFeedAds:blockFeedAdsOpt=!0,onTheGoAudio:onTheGoAudioOpt=!0,onTheGoChapters:onTheGoChaptersOpt=!0}={}){",
+        "function Z(E,{blockGames:o=!0,blockVerticalLive:e=!1,jumpAhead:h=!0,blockStore:a=!0,blockAi:L=!0,onTheGo:O=!0,maxSpeed:maxSpeedOpt=4,hidePremium:hidePremiumOpt=!0,blockFeedAds:blockFeedAdsOpt=!0,blockShortsFeed:blockShortsFeedOpt=!1,onTheGoAudio:onTheGoAudioOpt=!0,onTheGoChapters:onTheGoChaptersOpt=!0}={}){",
         "ump Z signature",
         "maxSpeed:maxSpeedOpt=4",
     )
@@ -354,6 +362,13 @@ def patch_ump(t):
         "K&&A.products?.length||s&&!1!==blockFeedAdsOpt&&P(A)",
         "ump promoted contents",
         "s&&!1!==blockFeedAdsOpt&&P(A)",
+    )
+    t = sub(
+        t,
+        'return function g(I,E=!1){if(!I||"object"!=typeof I||ArrayBuffer.isView(I))return 0;',
+        'return function g(I,E=!1){if(!I||"object"!=typeof I||ArrayBuffer.isView(I))return 0;if(!1!==blockShortsFeedOpt&&I.reelShelfRenderer)return 2;',
+        "ump Shorts feed shelf",
+        "blockShortsFeedOpt&&I.reelShelfRenderer",
     )
 
     # ---- player response (z) ----
