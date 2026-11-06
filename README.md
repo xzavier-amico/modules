@@ -10,7 +10,7 @@
 
 | 模块 | Egern | Loon | 说明 |
 | --- | :---: | :---: | --- |
-| YouTube Enhance | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/youtube-enhance.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/youtube-enhance.plugin) | 去广告、后台播放、PiP、最高 4x 倍速、On-the-go；可屏蔽首页 Shorts 货架 |
+| YouTube Enhance | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/youtube-enhance.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/youtube-enhance.plugin) | 去广告、后台播放、PiP、最高 4x 倍速、On-the-go；可屏蔽首页 Shorts 货架、过滤会员专属视频 |
 | Spotify AD | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/spotify.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/spotify.plugin) | 去广告，恢复歌手 / 专辑列表 |
 | Spotify AD (Rewrite) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/spotify-rewrite.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/spotify-rewrite.plugin) | 纯 rewrite 版，无脚本，通过 mock 服务器返回修改后的响应 |
 | Spotify AD (Reukix) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify-reukix/spotify-reukix.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify-reukix/spotify-reukix.plugin) | Reukix 多脚本版；Loon 需 3.5.3+ |

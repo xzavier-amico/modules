@@ -21,6 +21,7 @@ ARG_KEYS = {
     "block_upload": "blockUpload",
     "block_shorts": "blockShorts",
     "block_shorts_feed": "blockShortsFeed",
+    "block_members_only": "blockMembersOnly",
     "auto_hd": "autoHd",
     "block_games": "blockGames",
     "block_vertical_live": "blockVerticalLive",
@@ -44,6 +45,25 @@ ARG_KEYS = {
     "on_the_go_chapters": "onTheGoChapters",
     "strip_hot_hash": "stripHotHash",
 }
+
+# Scans a decoded VideoLockup message for an exact members-only badge text.
+# The protobuf field numbers for the new lockup metadata are not modelled, so
+# walk the raw bytes and compare complete string fields against known labels.
+MEMBERS_ONLY_HELPER = (
+    'function ytmob(g){try{const b=g&&g[_]&&g[_].bytes;if(!b||!b.length)return!1;'
+    'const L=["Members only","会员专享","會員專享","メンバー限定","멤버 전용","BADGE_MEMBERS_ONLY"],'
+    'D=new TextDecoder("utf-8",{fatal:!0});'
+    'function w(b,d){if(d>8)return!1;let p=0;while(p<b.length){let t=0,s=0,c;'
+    'do{if(p>=b.length)return!1;c=b[p++];t+=(c&127)*2**s;s+=7;if(s>35)return!1}while(c&128);'
+    'const n=Math.floor(t/8),q=t%8;'
+    'if(q===0){do{if(p>=b.length)return!1;c=b[p++]}while(c&128)}'
+    'else if(q===1){p+=8}else if(q===5){p+=4}'
+    'else if(q===2){let l=0;s=0;do{if(p>=b.length)return!1;c=b[p++];l+=(c&127)*2**s;s+=7;if(s>35)return!1}while(c&128);'
+    'if(p+l>b.length)return!1;const u=b.subarray(p,p+l);'
+    'try{if(L.includes(D.decode(u)))return!0}catch{}'
+    'if(w(u,d+1))return!0;p+=l}'
+    'else return!1}return!1}return w(b,0)}catch{return!1}}'
+)
 
 
 def fix_done_arg(arg):
@@ -106,7 +126,7 @@ def patch_response(t):
     t = sub(
         t,
         "function N(E,{blockGames:i=!0,blockVerticalLive:r=!1,jumpAhead:U=!0,blockStore:J=!0,blockAi:P=!0,onTheGo:N=!0}={}){",
-        "function N(E,{blockGames:i=!0,blockVerticalLive:r=!1,jumpAhead:U=!0,blockStore:J=!0,blockAi:P=!0,onTheGo:N=!0,maxSpeed:maxSpeedOpt=4,hidePremium:hidePremiumOpt=!0,blockFeedAds:blockFeedAdsOpt=!0,blockShortsFeed:blockShortsFeedOpt=!1,onTheGoAudio:onTheGoAudioOpt=!0,onTheGoChapters:onTheGoChaptersOpt=!0}={}){",
+        "function N(E,{blockGames:i=!0,blockVerticalLive:r=!1,jumpAhead:U=!0,blockStore:J=!0,blockAi:P=!0,onTheGo:N=!0,maxSpeed:maxSpeedOpt=4,hidePremium:hidePremiumOpt=!0,blockFeedAds:blockFeedAdsOpt=!0,blockShortsFeed:blockShortsFeedOpt=!1,blockMembersOnly:blockMembersOnlyOpt=!1,onTheGoAudio:onTheGoAudioOpt=!0,onTheGoChapters:onTheGoChaptersOpt=!0}={}){",
         "response N signature",
         "maxSpeed:maxSpeedOpt=4",
     )
@@ -185,6 +205,22 @@ def patch_response(t):
         'return function g(I,E=!1){if(!I||"object"!=typeof I||ArrayBuffer.isView(I))return 0;if(!1!==blockShortsFeedOpt&&I.reelShelfRenderer)return 2;',
         "response Shorts feed shelf",
         "blockShortsFeedOpt&&I.reelShelfRenderer",
+    )
+
+    # ---- members-only feed items (badge text scan, opt-in) ----
+    t = sub(
+        t,
+        "function Bg(g){",
+        MEMBERS_ONLY_HELPER + "function Bg(g){",
+        "response members-only helper",
+        "function ytmob(",
+    )
+    t = sub(
+        t,
+        "}(g.videoLockup))||Bg(g).some",
+        "}(g.videoLockup)||(!1!==blockMembersOnlyOpt&&g.videoLockup&&ytmob(g.videoLockup)))||Bg(g).some",
+        "response members-only feed items",
+        "!1!==blockMembersOnlyOpt&&g.videoLockup&&ytmob",
     )
 
     # ---- player response (X): paid promotion / ad slots / speed / tracking / PiP / background ----
@@ -290,7 +326,7 @@ def patch_ump(t):
     t = sub(
         t,
         "function Z(E,{blockGames:o=!0,blockVerticalLive:e=!1,jumpAhead:h=!0,blockStore:a=!0,blockAi:L=!0,onTheGo:O=!0}={}){",
-        "function Z(E,{blockGames:o=!0,blockVerticalLive:e=!1,jumpAhead:h=!0,blockStore:a=!0,blockAi:L=!0,onTheGo:O=!0,maxSpeed:maxSpeedOpt=4,hidePremium:hidePremiumOpt=!0,blockFeedAds:blockFeedAdsOpt=!0,blockShortsFeed:blockShortsFeedOpt=!1,onTheGoAudio:onTheGoAudioOpt=!0,onTheGoChapters:onTheGoChaptersOpt=!0}={}){",
+        "function Z(E,{blockGames:o=!0,blockVerticalLive:e=!1,jumpAhead:h=!0,blockStore:a=!0,blockAi:L=!0,onTheGo:O=!0,maxSpeed:maxSpeedOpt=4,hidePremium:hidePremiumOpt=!0,blockFeedAds:blockFeedAdsOpt=!0,blockShortsFeed:blockShortsFeedOpt=!1,blockMembersOnly:blockMembersOnlyOpt=!1,onTheGoAudio:onTheGoAudioOpt=!0,onTheGoChapters:onTheGoChaptersOpt=!0}={}){",
         "ump Z signature",
         "maxSpeed:maxSpeedOpt=4",
     )
@@ -369,6 +405,22 @@ def patch_ump(t):
         'return function g(I,E=!1){if(!I||"object"!=typeof I||ArrayBuffer.isView(I))return 0;if(!1!==blockShortsFeedOpt&&I.reelShelfRenderer)return 2;',
         "ump Shorts feed shelf",
         "blockShortsFeedOpt&&I.reelShelfRenderer",
+    )
+
+    # ---- members-only feed items (badge text scan, opt-in) ----
+    t = sub(
+        t,
+        "function tg(g){",
+        MEMBERS_ONLY_HELPER + "function tg(g){",
+        "ump members-only helper",
+        "function ytmob(",
+    )
+    t = sub(
+        t,
+        "}(g.videoLockup))||tg(g).some",
+        "}(g.videoLockup)||(!1!==blockMembersOnlyOpt&&g.videoLockup&&ytmob(g.videoLockup)))||tg(g).some",
+        "ump members-only feed items",
+        "!1!==blockMembersOnlyOpt&&g.videoLockup&&ytmob",
     )
 
     # ---- player response (z) ----
