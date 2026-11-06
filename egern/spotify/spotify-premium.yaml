@@ -78,8 +78,6 @@ scriptings:
       name: "spotify.lyrics"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v2\\/track\\/"
       script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js"
-      body_required: true
-      binary_body: true
       max_size: 1048576
       timeout: 10
       env:

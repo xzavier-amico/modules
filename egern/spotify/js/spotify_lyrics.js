@@ -70,31 +70,44 @@
   const rawBody = res.body;
   const body = toText(rawBody);
   const trimmed = body.trim();
+  const hasBody = trimmed.length > 0;
+  const status = Number(res.status);
 
-  // 新版客户端要的是 protobuf（响应体以 0a 开头的一棵 message 树），旧版要 JSON。
-  // 判断依据：URL 带 format=protobuf，或者 200 响应体既不是 JSON 也不为空。
+  // 新版客户端要 protobuf（0a 开头的一棵 message 树），旧版要 JSON。
+  // 拿不到 body 时只能看 URL 上的 format 参数；没有这个参数就按新版算。
   const rawBytes = toBytes(rawBody);
   const wantsProto = /[?&]format=protobuf/i.test(url);
-  const protoMode = trimmed.charAt(0) !== "{" && (wantsProto || trimmed.length > 0);
+  const protoMode = wantsProto || (hasBody ? trimmed.charAt(0) !== "{" : true);
 
-  log("命中 " + trackId + "，状态 " + (res.status === undefined ? "-" : res.status) + "，url=" + url);
-  notify("命中，状态 " + (res.status === undefined ? "-" : res.status) + (protoMode ? "，protobuf" : "，json"));
+  log("命中 " + trackId + "，状态 " + res.status + "，body " + (hasBody ? trimmed.length + " 字节" : "为空") + "，url=" + url);
+  notify("命中，状态 " + res.status + "，" + (hasBody ? "有 body" : "无 body") + (protoMode ? "，protobuf" : "，json"));
 
-  if (protoMode) {
-    const count = Number(res.status) === 200 ? protoLineCount(rawBytes) : 0;
-    if (count > 0) {
-      log("官方已有歌词（protobuf " + count + " 行），放行");
-      notify("放行：官方已有歌词（protobuf " + count + " 行）");
+  // 200 就是「官方有歌词」：拿不到 body 时直接放行，避免把官方歌词顶掉。
+  if (status === 200 && !hasBody) {
+    log("200 但没有 body（没开 requires_body），按官方有歌词放行");
+    notify("放行：200 无 body");
+    finish({});
+    return;
+  }
+
+  if (status === 200) {
+    if (protoMode) {
+      // 解析不了（拿不到原始字节）时返回 -1，宁可放行也不要顶掉官方歌词。
+      const count = rawBytes.length ? protoLineCount(rawBytes) : -1;
+      if (count !== 0) {
+        log("官方已有歌词（protobuf " + (count > 0 ? count + " 行" : "无法判断") + "），放行");
+        notify("放行：官方有歌词（protobuf " + (count > 0 ? count + " 行" : "未知") + "）");
+        finish({});
+        return;
+      }
+    } else if (hasLyrics(trimmed)) {
+      log("官方已有歌词，放行");
+      notify("放行：官方已有歌词");
       finish({});
       return;
     }
-    log("官方没有歌词（protobuf），准备注入；前 24 字节: " + hexHead(rawBody));
-    notify("protobuf 无歌词，开始找第三方歌词");
-  } else if (Number(res.status) === 200 && trimmed && hasLyrics(trimmed)) {
-    log("官方已有歌词，放行");
-    notify("放行：官方已有歌词");
-    finish({});
-    return;
+    log("官方 200 但歌词为空，准备注入；前 24 字节: " + hexHead(rawBody));
+    notify("官方歌词为空，开始找第三方歌词");
   }
 
   const oembedUrl = "https://open.spotify.com/oembed?url=" + encodeURIComponent("https://open.spotify.com/track/" + trackId);
@@ -383,7 +396,7 @@
 
     if (protoMode) {
       const bytes = encodeProto(payload.lyrics.lines, payload.lyrics.syncType, payload.lyrics.provider);
-      finish({ status: 200, headers: { "Content-Type": "application/x-protobuf" }, body: bytes.buffer });
+      finish({ status: 200, headers: { "Content-Type": "application/x-protobuf" }, body: bytes });
       return;
     }
 
