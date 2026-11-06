@@ -41,6 +41,18 @@
   }
   const trackId = match[1];
 
+  // 日志面板不一定能刷到脚本输出，开 verbose 时用系统通知把每一步结果报出来：
+  // 通知就是排查通道，看到什么就说明走到哪一步了。
+  const notify = (body) => {
+    if (!verbose) return;
+    if (typeof $notification === "undefined" || !$notification || "function" != typeof $notification.post) return;
+    try {
+      $notification.post("Spotify 歌词 v4", trackId, body);
+    } catch (e) {
+      // 通知失败不影响主流程
+    }
+  };
+
   const USER_AGENT = "xzavier-modules/1.0 (https://github.com/xzavier-amico/modules)";
   const utf8 = new TextDecoder("utf-8");
 
@@ -58,26 +70,19 @@
   const body = toText(rawBody);
   const trimmed = body.trim();
   log("命中 " + trackId + "，状态 " + (res.status === undefined ? "-" : res.status) + "，url=" + url);
-
-  // 排查用：开了 verbose_log 就发一条系统通知。日志面板不一定能刷到脚本输出，
-  // 通知是最直接的「脚本到底跑没跑」的证据；顺带带上版本号，方便判断脚本是不是最新的。
-  if (verbose && typeof $notification !== "undefined" && $notification && "function" == typeof $notification.post) {
-    try {
-      $notification.post("Spotify 歌词 v3", trackId, "状态 " + (res.status === undefined ? "-" : res.status));
-    } catch (e) {
-      // 通知失败不影响主流程
-    }
-  }
+  notify("命中，状态 " + (res.status === undefined ? "-" : res.status));
 
   if (Number(res.status) === 200 && trimmed && trimmed.charAt(0) !== "{") {
     // 不是 JSON 说明客户端要的是 protobuf，注入 JSON 会让它解析失败，直接放行。
     log("官方返回非 JSON（可能是 protobuf），放行，前 24 字节: " + hexHead(rawBody));
+    notify("放行：非 JSON，前 24 字节 " + hexHead(rawBody));
     finish({});
     return;
   }
 
   if (Number(res.status) === 200 && trimmed && hasLyrics(trimmed)) {
     log("官方已有歌词，放行");
+    notify("放行：官方已有歌词");
     finish({});
     return;
   }
@@ -86,6 +91,7 @@
   httpGetJson(oembedUrl, (meta) => {
     if (!meta || !meta.title) {
       log("oembed 没有返回元数据");
+      notify("失败：拿不到曲目元数据");
       finish({});
       return;
     }
@@ -128,6 +134,7 @@
           return;
         }
         log("LRCLIB 没有找到 " + title);
+        notify("失败：LRCLIB 没有 " + title);
         finish({});
       });
     });
@@ -197,6 +204,7 @@
   function emit(payload, title, artist) {
     const kind = payload.lyrics.syncType === "LINE_SYNCED" ? "同步" : "纯文本";
     log("注入 " + title + " / " + artist + "（" + kind + " " + payload.lyrics.lines.length + " 行）");
+    notify("注入 " + kind + " " + payload.lyrics.lines.length + " 行 · " + title);
     finish({
       status: 200,
       headers: { "Content-Type": "application/json; charset=utf-8" },
