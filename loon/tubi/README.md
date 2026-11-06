@@ -30,6 +30,21 @@ Tubi 带反广告拦截：网页端会去拉 `https://mcdn.tubitv.com/js/ads.js`
 `AD_REQUEST_BLOCKED_ERROR`。把广告域名直接 reject 会被计入拦截次数，轻则弹提示，
 重则不给播。返回合法的空广告响应走的是正常业务分支，不触发这些检测。
 
+## 规则（美国线路）
+
+Tubi 只在美国可用。插件的 `[Rule]` 段把它的域名固定指向 `PROXY`：
+
+| 域名 | 用途 |
+| --- | --- |
+| `tubitv.com` | App 接口、网页、静态资源 |
+| `tubi.video` | 视频 CDN |
+| `tubi.io` | 接口与广告 |
+| `adrise.tv` | 广告（`ads.adrise.tv`） |
+
+这样不会被「国内直连」之类的规则带走，导致 MITM 看不到流量、插件静默失效。
+如果你本身在美国，或想指定某个节点/策略组，把 `[Rule]` 里这四行的 `PROXY`
+改成 `DIRECT` 或你的策略组名即可。
+
 ## 参数
 
 | 参数 | 默认 | 说明 |
