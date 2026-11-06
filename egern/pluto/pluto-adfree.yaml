@@ -1,0 +1,74 @@
+#=======================================================================================
+# Pluto TV Ad-Free — Egern 模块
+#
+# Pluto 的广告是服务端拼接（SSAI）：stitcher 把广告片直接缝进 HLS，客户端只是照单
+# 播放。所以这里不拦广告素材，而是把 boot 接口的 serverSideAds 改成 false，让
+# stitcher 返回纯内容清单。
+#
+# 证据：
+#   GET https://boot.pluto.tv/v4/start?...&serverSideAds=true
+#   返回 JWT payload 里 "serverSideAds": true
+#   同一接口传 false，JWT 里就是 false
+#   网页端一直传 false（网页自己用 IMA 做客户端广告）
+#
+# 注意：
+#   - 需要 MITM boot.pluto.tv。
+#   - 规则段把 pluto.tv / plutotv.net 指向 PROXY，因为美国内容需要美国节点；
+#     不在美国或想用别的策略组时，把 PROXY 改成 DIRECT / 你的策略组名。
+#   - doubleclick / springserve 是客户端广告和广告同步域名，直接 REJECT。
+#=======================================================================================
+
+name: "Pluto TV Ad-Free"
+description: "去广告：把 boot 的 serverSideAds 改成 false，让 stitcher 不再把广告缝进 HLS；不碰视频流。"
+author: "xzavier-amico"
+homepage: "https://github.com/xzavier-amico/modules"
+icon: "https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Reject.png"
+
+compat_arguments:
+  block_ads: "true"
+  verbose_log: "false"
+
+compat_arguments_desc: |
+  block_ads   — 去除广告：把 boot.pluto.tv 的 serverSideAds 改成 false
+  verbose_log — 输出日志：打印 boot 请求的改写结果，排查时使用
+
+compat_arguments_schema:
+  block_ads:
+    name: "去除广告"
+    description: "把 boot 请求的 serverSideAds 改成 false，stitcher 返回的清单里就没有广告段"
+    options: ["true", "false"]
+  verbose_log:
+    name: "输出日志"
+    description: "在日志中打印 boot 请求的改写结果，排查时使用"
+    options: ["true", "false"]
+
+rules:
+  # Pluto 美国内容需要美国节点。不在美国，或想指定别的策略组，改这里的 PROXY。
+  - domain_suffix:
+      match: "pluto.tv"
+      policy: PROXY
+  - domain_suffix:
+      match: "plutotv.net"
+      policy: PROXY
+  # 客户端广告与广告同步
+  - domain_suffix:
+      match: "doubleclick.net"
+      policy: REJECT
+  - domain_suffix:
+      match: "springserve.com"
+      policy: REJECT
+
+scriptings:
+  - http_request:
+      name: "pluto.adfree"
+      match: "^https?:\\/\\/boot\\.pluto\\.tv\\/v4\\/start"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_adfree.js"
+      body_required: true
+      timeout: 10
+      env:
+        _compat.$argument: '{"block_ads":{{{block_ads}}},"verbose_log":{{{verbose_log}}}}'
+
+mitm:
+  hostnames:
+    includes:
+      - "boot.pluto.tv"

@@ -1,0 +1,25 @@
+#!name=Pluto TV Ad-Free
+#!desc=去广告：把 boot 的 serverSideAds 改成 false，让 stitcher 不再把广告缝进 HLS；不碰视频流。
+#!category=Pluto TV
+#!author=xzavier-amico
+#!homepage=https://github.com/xzavier-amico/modules
+#!icon=https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Reject.png
+#!tag=Pluto TV
+
+[Argument]
+block_ads = switch,true,type=boolean,tag=去除广告,desc=把 boot.pluto.tv 的 serverSideAds 改成 false，stitcher 返回的清单里就没有广告段。
+verbose_log = switch,false,type=boolean,tag=输出日志,desc=在 Loon 日志中打印 boot 请求的改写结果，排查时使用。
+
+[Rule]
+# Pluto 美国内容需要美国节点。不在美国，或想指定别的策略组，改这里的 PROXY。
+DOMAIN-SUFFIX,pluto.tv,PROXY
+DOMAIN-SUFFIX,plutotv.net,PROXY
+# 客户端广告与广告同步
+DOMAIN-SUFFIX,doubleclick.net,REJECT
+DOMAIN-SUFFIX,springserve.com,REJECT
+
+[Script]
+request if ${url} ~= /^https?:\/\/boot\.pluto\.tv\/v4\/start/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/pluto/js/pluto_adfree.js", {${block_ads}, ${verbose_log}}) with requires_body=true, tag="Pluto TV Ad-Free", timeout=10
+
+[MitM]
+hostname = boot.pluto.tv
