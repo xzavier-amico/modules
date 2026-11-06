@@ -56,13 +56,14 @@
   // 外部接口慢的时候不要拖住 App，超过 4.5 秒就按「没有歌词」放行。
   if (typeof setTimeout === "function") setTimeout(() => finish({}), 4500);
 
-  const body = toText(res.body);
+  const rawBody = res.body;
+  const body = toText(rawBody);
   const trimmed = body.trim();
   log("命中 " + trackId + "，状态 " + (res.status === undefined ? "-" : res.status) + "，url=" + url);
 
   if (Number(res.status) === 200 && trimmed && trimmed.charAt(0) !== "{") {
     // 不是 JSON 说明客户端要的是 protobuf，注入 JSON 会让它解析失败，直接放行。
-    log("官方返回非 JSON（可能是 protobuf），放行");
+    log("官方返回非 JSON（可能是 protobuf），放行，前 24 字节: " + hexHead(rawBody));
     finish({});
     return;
   }
@@ -131,6 +132,17 @@
     if (value instanceof ArrayBuffer) return utf8.decode(new Uint8Array(value));
     if (value && ArrayBuffer.isView(value)) return utf8.decode(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
     return "";
+  }
+
+  // 排查用：把响应体开头几个字节打成十六进制，好判断是 protobuf、gzip 还是别的。
+  function hexHead(value) {
+    let bytes;
+    if (value instanceof ArrayBuffer) bytes = new Uint8Array(value, 0, Math.min(24, value.byteLength));
+    else if (value && ArrayBuffer.isView(value)) bytes = new Uint8Array(value.buffer, value.byteOffset, Math.min(24, value.byteLength));
+    else return "(非二进制)";
+    const parts = [];
+    for (let i = 0; i < bytes.length; i += 1) parts.push(("0" + bytes[i].toString(16)).slice(-2));
+    return parts.join(" ");
   }
 
   function hasLyrics(text) {
