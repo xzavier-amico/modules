@@ -84,7 +84,10 @@
 
     // /api/get 只认精确的曲名+歌手，命中时可能只有纯文本没有时间轴。
     // 所以先收下纯文本当备选，再去 /api/search 捞一版带时间轴的，都找不到才退回纯文本。
+    // 精确记录里的时长顺便当锚点：同一首歌在 LRCLIB 里常有好几个版本（Video Edit、
+    // Extended Mix），时长差太多的那版时间轴对不上，宁可选时长接近的。
     let fallback = null;
+    let anchor = NaN;
     const take = (record) => {
       const payload = buildPayload(record);
       if (!payload) return false;
@@ -97,10 +100,13 @@
     };
 
     httpGetJson("https://lrclib.net/api/get?" + query, (record) => {
+      if (record && "object" == typeof record && Number.isFinite(Number(record.duration))) {
+        anchor = Number(record.duration);
+      }
       if (take(record)) return;
 
       httpGetJson("https://lrclib.net/api/search?" + query, (list) => {
-        const picked = pickRecord(list, title);
+        const picked = pickRecord(list, title, anchor);
         if (picked && take(picked)) return;
 
         if (fallback) {
@@ -250,8 +256,9 @@
     return out;
   }
 
-  // 同名曲目往往有好几版（原版、Extended Mix、Remix），优先挑有同步时间轴的。
-  function pickRecord(list, title) {
+  // 同名曲目往往有好几版（原版、Video Edit、Extended Mix）。打分选版本：
+  // 时长贴近的优先（时间轴才对得上），其次要有同步时间轴，其次曲名精确匹配。
+  function pickRecord(list, title, duration) {
     if (!Array.isArray(list) || !list.length) return null;
     const wanted = normalize(title);
     const usable = list.filter((item) => {
@@ -262,14 +269,26 @@
       );
     });
     if (!usable.length) return null;
+
     const synced = (item) => Boolean(item.syncedLyrics && item.syncedLyrics.trim());
     const named = (item) => normalize(item.trackName) === wanted;
-    return (
-      usable.find((item) => named(item) && synced(item)) ||
-      usable.find((item) => synced(item)) ||
-      usable.find((item) => named(item)) ||
-      usable[0]
-    );
+    const near = (item) =>
+      Number.isFinite(duration) &&
+      duration > 0 &&
+      Number.isFinite(Number(item.duration)) &&
+      Math.abs(Number(item.duration) - duration) <= 3;
+    const score = (item) => (synced(item) ? 2 : 0) + (named(item) ? 1 : 0) + (near(item) ? 4 : 0);
+
+    let best = usable[0];
+    let bestScore = score(best);
+    for (let i = 1; i < usable.length; i += 1) {
+      const current = score(usable[i]);
+      if (current > bestScore) {
+        best = usable[i];
+        bestScore = current;
+      }
+    }
+    return best;
   }
 
   function normalize(text) {
