@@ -11,10 +11,7 @@
 | 模块 | Egern | Loon | 说明 |
 | --- | :---: | :---: | --- |
 | YouTube Enhance | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/youtube-enhance.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/youtube-enhance.plugin) | 去广告、后台播放、PiP、最高 4x 倍速、On-the-go；可屏蔽首页 Shorts 货架、过滤会员专属视频 |
-| Spotify AD | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/spotify.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/spotify.plugin) | 去广告，恢复歌手 / 专辑列表 |
 | Spotify Premium | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/spotify-premium.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/spotify-premium.plugin) | 改写 bootstrap 的 protobuf：去广告、伪装 Premium、解锁顺序/随机播放；未知字段原样保留 |
-| Spotify AD (Rewrite) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/spotify-rewrite.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/spotify-rewrite.plugin) | 纯 rewrite 版，无脚本，通过 mock 服务器返回修改后的响应 |
-| Spotify AD (Reukix) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify-reukix/spotify-reukix.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify-reukix/spotify-reukix.plugin) | Reukix 多脚本版；Loon 需 3.5.3+ |
 | BiliBili Biliverse | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/bilibili-enhance.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/bilibili-enhance.plugin) | 增强 + 全球 + 重定向 + 去广告 合并模块 |
 | ADBlock | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/adblock/adblock.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/adblock/adblock.plugin) | 常见国内外广告 URL 重写拦截 |
 | HTTPDNS Block | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/httpdns/httpdns-block.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/httpdns/httpdns-block.plugin) | 阻止常见的 HTTPDNS 服务器 |
@@ -44,7 +41,6 @@ modules:
 
 - 需要改写 HTTPS 响应的模块（YouTube、Spotify、Bilibili、ADBlock 的 HTTPS 规则）必须在客户端安装并信任 CA 证书，并开启 MITM；具体域名见各模块的 `mitm` / `[MitM]` 段。
 - HTTPDNS Block 是纯规则模块，不需要 MITM。
-- Spotify (Reukix) 的 Loon 版要求 Loon 3.5.3+。
 - YouTube 的 response / ump 脚本需要处理大响应，Egern 版已把 timeout 调到 60s；设备较慢时可继续调大。
 
 ## 目录结构
@@ -81,7 +77,6 @@ bash scripts/update.sh           # 手动同步上游（不再定时执行）
 
 - YouTube Enhance：原始代码来自 [Maasea](https://github.com/Maasea)（Apache-2.0），经 [gholts/surge](https://github.com/gholts/surge) 转换，本仓库由 xzavier-amico 维护并扩展。
 - BiliBili Biliverse：[VirgilClyne](https://github.com/VirgilClyne) / [Biliverse](https://github.com/Biliverse)。
-- Spotify：app2smile、[001ProMax](https://github.com/001ProMax)、[Reukix](https://github.com/Reukix)。
 - Spotify Premium：字段号与属性/规则表来自 [whoeevee/EeveeSpotifyReborn](https://github.com/whoeevee/EeveeSpotifyReborn) 与 [skopevoj/spoti.pw](https://github.com/skopevoj/spoti.pw)（v0.21.1，GPL-3.0），本仓库重写为 Loon / Egern 脚本，按 GPL-3.0 分发。
 - ADBlock：[blackmatrix7/ios_rule_script](https://github.com/blackmatrix7/ios_rule_script)。
 - HTTPDNS Block：[VirgilClyne/GetSomeFries](https://github.com/VirgilClyne/GetSomeFries)。
