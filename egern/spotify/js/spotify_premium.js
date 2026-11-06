@@ -32,7 +32,7 @@
     return;
   }
   if (body.length > 4 * 1024 * 1024) {
-    console.log("spotify: body too large " + body.length);
+    log("body too large " + body.length);
     $done({});
     return;
   }
@@ -53,6 +53,14 @@
   const adsOn = flag(opt.block_ads, true);
   const playOn = flag(opt.unlock_playback, true);
   const verbose = flag(opt.verbose_log, false);
+
+  // 用 warn 级别输出：info 一多就刷没了，warn 在日志里更好找。
+  const log = (msg) => {
+    if (!verbose) return;
+    const line = "spotify: " + msg;
+    if ("function" == typeof console.warn) console.warn(line);
+    else console.log(line);
+  };
 
   // ---------------------------------------------------------------- protobuf
 
@@ -633,11 +641,11 @@
   else out = patchCustomize(body) || patchBootstrap(body);
 
   if (!out || same(out, body)) {
-    if (verbose) console.log("spotify: nothing to patch");
+    log("nothing to patch");
     $done({});
     return;
   }
 
-  if (verbose) console.log("spotify: " + body.length + " -> " + out.length + " bytes");
+  log(body.length + " -> " + out.length + " bytes");
   $done({ body: out });
 })();

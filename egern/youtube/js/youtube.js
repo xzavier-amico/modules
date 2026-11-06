@@ -395,8 +395,12 @@
     return value === true || value === "true" || value === 1 || value === "1";
   })();
 
+  // 用 warn 级别输出：info 一多就刷没了，warn 在日志里更好找。
   const log = (message) => {
-    if (VERBOSE) console.log("youtube: " + message);
+    if (!VERBOSE) return;
+    const line = "youtube: " + message;
+    if ("function" == typeof console.warn) console.warn(line);
+    else console.log(line);
   };
 
   function readOptions(defaults = {}) {

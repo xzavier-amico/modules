@@ -42,8 +42,12 @@
   const blockAds = flag(opt.block_ads, true);
   const hideVip = flag(opt.hide_vip, true);
   const verbose = flag(opt.verbose_log, false);
+  // 用 warn 级别输出：info 一多就刷没了，warn 在日志里更好找。
   const log = (msg) => {
-    if (verbose) console.log("bilibili: " + msg);
+    if (!verbose) return;
+    const line = "bilibili: " + msg;
+    if ("function" == typeof console.warn) console.warn(line);
+    else console.log(line);
   };
 
   const body = res.body;

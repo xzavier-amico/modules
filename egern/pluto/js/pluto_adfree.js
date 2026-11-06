@@ -31,8 +31,12 @@
     v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0");
 
   const verbose = flag(opt.verbose_log, false);
+  // 用 warn 级别输出：info 一多就刷没了，warn 在日志里更好找。
   const log = (msg) => {
-    if (verbose) console.log("pluto: " + msg);
+    if (!verbose) return;
+    const line = "pluto: " + msg;
+    if ("function" == typeof console.warn) console.warn(line);
+    else console.log(line);
   };
 
   if (!flag(opt.block_ads, true)) {
