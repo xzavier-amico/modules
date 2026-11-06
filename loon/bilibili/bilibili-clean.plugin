@@ -1,5 +1,5 @@
 #!name=BiliBili Clean
-#!desc=去广告、去会员推广、去遥测，播放请求自动要最高画质。只改 JSON 结构，不碰视频流。
+#!desc=去广告、去会员推广、去遥测，播放请求自动要最高画质。JSON 与 gRPC 都改，不碰视频流。
 #!category=BiliBili
 #!author=xzavier-amico
 #!homepage=https://github.com/xzavier-amico/modules
@@ -7,7 +7,7 @@
 #!tag=BiliBili
 
 [Argument]
-block_ads = switch,true,type=boolean,tag=去广告,desc=删除开屏、首页推荐、搜索、番剧页、直播推荐和番剧弹窗里的广告。
+block_ads = switch,true,type=boolean,tag=去广告,desc=删除开屏、首页推荐、搜索、番剧页、直播推荐、番剧弹窗、详情页、评论区和暂停广告。
 hide_vip = switch,true,type=boolean,tag=去会员推广,desc=删除番剧页 payment 块、大会员广告素材和 VIP 卡片。
 auto_quality = switch,true,type=boolean,tag=自动最高画质,desc=把 playurl 请求的 qn 改成 120（4K），服务端按账号权限返回实际最高档。
 verbose_log = switch,false,type=boolean,tag=输出日志,desc=在 Loon 日志中打印改写前后的字节数，排查时使用。
@@ -26,6 +26,8 @@ request if ${url} ~= /^https?:\/\/api\.bilibili\.com\/x\/report\/click\// then r
 [Script]
 response if ${url} ~= /^https?:\/\/(?:app\.bilibili\.com|api\.bilibili\.com|api\.live\.bilibili\.com)\/(?:x\/v2\/splash\/|x\/v2\/feed\/index|x\/v2\/search\/square|x\/web-interface\/wbi\/index\/top\/feed\/rcmd|x\/vip\/ads\/materials|pgc\/view\/v2\/app\/season|pgc\/page\/|pgc\/activity\/deliver\/material\/receive|xlive\/(?:app-interface\/v2\/(?:index\/feed|room\/recList)|app-room\/v1\/index\/getInfoByRoom))/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/js/bilibili_clean.js", {${block_ads}, ${hide_vip}, ${verbose_log}}) with requires_body=true, tag="BiliBili Clean", timeout=20
 request if ${url} ~= /^https?:\/\/(?:api|app)\.bilibili\.com\/.*playurl/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/js/bilibili_quality.js", {${auto_quality}, ${verbose_log}}) with tag="BiliBili Clean", timeout=10
+# 详情页 / 评论区 / 播放器走 gRPC（protobuf over HTTP/2），需要二进制 body。
+response if ${url} ~= /^https?:\/\/(?:grpc\.biliapi\.net|app\.bilibili\.com)\/bilibili\.(?:app\.(?:view|viewunite)\.v1\.View|main\.community\.reply\.v1\.Reply)\// then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/js/bilibili_grpc.js", {${block_ads}, ${verbose_log}}) with requires_body=true, binary_body_mode=true, tag="BiliBili Clean gRPC", timeout=20
 
 [MitM]
-hostname = app.bilibili.com, api.bilibili.com, api.live.bilibili.com
+hostname = app.bilibili.com, api.bilibili.com, api.live.bilibili.com, grpc.biliapi.net

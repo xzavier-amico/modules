@@ -14,6 +14,14 @@
 #   /xlive/...                直播推荐
 #   /pgc/activity/.../receive 番剧弹窗广告
 #
+# 详情页、评论区、播放器状态走 gRPC（protobuf），JSON 脚本碰不到，单独用
+# bilibili_grpc.js 按字段号删：
+#   view.v1.View/View           cms / cm_config / cm_ipad / cm_under_player / 相关推荐广告
+#   viewunite.v1.View/View      cm（视频下方广告）
+#   viewunite.v1.View/PlayPause 暂停广告
+#   viewunite.v1.View/ViewEndPage 播放结束页广告
+#   reply.v1.Reply/MainList     评论列表广告、带货置顶、评论区顶部带货卡
+#
 # 遥测：data.bilibili.com、cm.bilibili.com 与两个第三方广告归因域名直接 REJECT，
 # 另外拦掉 api.bilibili.com/x/report/click/*。
 #
@@ -22,7 +30,7 @@
 #=======================================================================================
 
 name: "BiliBili Clean"
-description: "去广告、去会员推广、去遥测，播放请求自动要最高画质。只改 JSON 结构，不碰视频流。"
+description: "去广告、去会员推广、去遥测，播放请求自动要最高画质。JSON 与 gRPC 都改，不碰视频流。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"
 icon: "https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/bilibili.png"
@@ -34,7 +42,7 @@ compat_arguments:
   verbose_log: "false"
 
 compat_arguments_desc: |
-  block_ads    — 去广告：开屏、首页、搜索、番剧页、直播推荐、番剧弹窗
+  block_ads    — 去广告：开屏、首页、搜索、番剧页、直播推荐、番剧弹窗、详情页、评论区、暂停广告
   hide_vip     — 去会员推广：番剧页 payment 块、大会员广告素材、VIP 卡片
   auto_quality — 自动最高画质：playurl 的 qn 改成 120（4K），按账号权限生效
   verbose_log  — 输出日志：打印改写前后的字节数，排查时使用
@@ -42,7 +50,7 @@ compat_arguments_desc: |
 compat_arguments_schema:
   block_ads:
     name: "去广告"
-    description: "删除开屏、首页推荐、搜索、番剧页、直播推荐和番剧弹窗里的广告"
+    description: "删除开屏、首页推荐、搜索、番剧页、直播推荐、番剧弹窗、详情页、评论区和暂停广告"
     options: ["true", "false"]
   hide_vip:
     name: "去会员推广"
@@ -96,9 +104,23 @@ scriptings:
       env:
         _compat.$argument: '{"auto_quality":{{{auto_quality}}},"verbose_log":{{{verbose_log}}}}'
 
+  # 详情页 / 评论区 / 播放器走 gRPC（protobuf over HTTP/2），不是 JSON，
+  # 用单独的脚本按字段号删，需要二进制 body。
+  - http_response:
+      name: "bilibili.grpc"
+      match: "^https?:\\/\\/(?:grpc\\.biliapi\\.net|app\\.bilibili\\.com)\\/bilibili\\.(?:app\\.(?:view|viewunite)\\.v1\\.View|main\\.community\\.reply\\.v1\\.Reply)\\/"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_grpc.js"
+      body_required: true
+      binary_body: true
+      max_size: 16777216
+      timeout: 20
+      env:
+        _compat.$argument: '{"block_ads":{{{block_ads}}},"verbose_log":{{{verbose_log}}}}'
+
 mitm:
   hostnames:
     includes:
       - "app.bilibili.com"
       - "api.bilibili.com"
       - "api.live.bilibili.com"
+      - "grpc.biliapi.net"
