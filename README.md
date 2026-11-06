@@ -15,6 +15,7 @@
 | Pluto TV Ad-Free | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/pluto-adfree.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/pluto/pluto-adfree.plugin) | 去广告：把 boot 的 serverSideAds 改成 false，stitcher 不再把广告缝进 HLS |
 | Emby Unlock | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/emby/emby-unlock.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/emby/emby-unlock.plugin) | 解锁 Emby iOS 客户端的完整播放：mock mb3admin.com 授权校验；不含服务器端 Premiere |
 | BiliBili Clean | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/bilibili-clean.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/bilibili-clean.plugin) | 去广告、去会员推广、去遥测；详情页与评论区走 gRPC 也一并改写；playurl 自动要最高画质 |
+| Delivery Ad-Free | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/delivery/delivery-adfree.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/delivery/delivery-adfree.plugin) | 京东 / 美团 / 饿了么：拒绝广告域名，并用 MITM 改写美团开屏、点餐广告板与京东促销楼层 |
 | CN Video Ad-Free | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/cnvideo/cnvideo-adfree.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/cnvideo/cnvideo-adfree.plugin) | 优酷 / 爱奇艺 / 腾讯视频：拒绝广告、广告 SDK 与遥测域名；纯规则 |
 | ADBlock | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/adblock/adblock.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/adblock/adblock.plugin) | 常见国内外广告 URL 重写拦截 |
 | HTTPDNS Block | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/httpdns/httpdns-block.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/httpdns/httpdns-block.plugin) | 阻止常见的 HTTPDNS 服务器 |
@@ -42,7 +43,7 @@ modules:
 
 ## 通用要求
 
-- 需要改写 HTTPS 响应的模块（YouTube、Spotify、Tubi、Pluto、Emby、Bilibili、ADBlock 的 HTTPS 规则）必须在客户端安装并信任 CA 证书，并开启 MITM；具体域名见各模块的 `mitm` / `[MitM]` 段。
+- 需要改写 HTTPS 响应的模块（YouTube、Spotify、Tubi、Pluto、Emby、Bilibili、Delivery、ADBlock 的 HTTPS 规则）必须在客户端安装并信任 CA 证书，并开启 MITM；具体域名见各模块的 `mitm` / `[MitM]` 段。
 - HTTPDNS Block 与 CN Video Ad-Free 是纯规则模块，不需要 MITM。
 - YouTube 的 response / ump 脚本需要处理大响应，Egern 版已把 timeout 调到 60s；设备较慢时可继续调大。
 
