@@ -1,0 +1,62 @@
+#=======================================================================================
+# Tubi Ad-Free — Egern 模块
+#
+# 去广告。Tubi 是客户端插广告（CSAI）：内容清单是干净的 VOD playlist，广告位来自
+# 内容元数据里的 cue_points，播到那一秒再去广告接口要一批广告。所以这里不碰视频，
+# 只让广告接口回答「没有广告」。
+#
+# 命中两类请求：
+#   rainmaker*.production-public.tubi.io   广告决策，返回 {"ads":[...],"metrics":{...}}
+#   ads.adrise.tv / ads.tubi.io / ads.production-public.tubi.io
+#                                          广告素材 / 暂停广告，VAST、VMAP 或 JSON
+#
+# 注意：
+#   - 需要开启 MITM 并信任证书。
+#   - 不要再用别的规则 reject 上面这些域名。Tubi 有反广告拦截（网页端会拉
+#     mcdn.tubitv.com/js/ads.js 这个诱饵），请求直接失败会被计入拦截次数；
+#     本模块返回的是合法的空广告响应，走「这次没广告」的正常分支。
+#   - 广告位本身还在，只是每次请求都立刻拿到空结果，观感上就是直接进正片。
+#=======================================================================================
+
+name: "Tubi Ad-Free"
+description: "去广告：广告决策接口返回空广告列表，VAST / VMAP 换成空文档。不改动视频流，不触发 Tubi 的广告拦截检测。"
+author: "xzavier-amico"
+homepage: "https://github.com/xzavier-amico/modules"
+icon: "https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Tubi.png"
+
+compat_arguments:
+  block_ads: "true"
+  verbose_log: "false"
+
+compat_arguments_desc: |
+  block_ads   — 去除广告
+  verbose_log — 输出日志
+
+compat_arguments_schema:
+  block_ads:
+    name: "去除广告"
+    description: "把广告决策接口的 ads 列表清空，并把 VAST / VMAP 换成空文档"
+    options: ["true", "false"]
+  verbose_log:
+    name: "输出日志"
+    description: "在日志中打印命中的域名与改写结果，排查时使用"
+    options: ["true", "false"]
+
+scriptings:
+  - http_response:
+      name: "tubi.adfree"
+      match: "^https?:\\/\\/(?:rainmaker\\d*\\.production-public\\.tubi\\.io|ads\\.adrise\\.tv|ads\\.tubi\\.io|ads\\.production-public\\.tubi\\.io)\\/"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/tubi/js/tubi_adfree.js"
+      body_required: true
+      timeout: 10
+      env:
+        _compat.$argument: '{"block_ads":{{{block_ads}}},"verbose_log":{{{verbose_log}}}}'
+
+mitm:
+  hostnames:
+    includes:
+      - "rainmaker.production-public.tubi.io"
+      - "rainmaker4.production-public.tubi.io"
+      - "ads.tubi.io"
+      - "ads.adrise.tv"
+      - "ads.production-public.tubi.io"

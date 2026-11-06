@@ -1,0 +1,17 @@
+#!name=Tubi Ad-Free
+#!desc=去广告：广告决策接口返回空广告列表，VAST / VMAP 换成空文档。不改动视频流，不触发 Tubi 的广告拦截检测。
+#!category=Tubi
+#!author=xzavier-amico
+#!homepage=https://github.com/xzavier-amico/modules
+#!icon=https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Tubi.png
+#!tag=Tubi
+
+[Argument]
+block_ads = switch,true,type=boolean,tag=去除广告,desc=把广告决策接口的 ads 列表清空，并把 VAST / VMAP 换成空文档。
+verbose_log = switch,false,type=boolean,tag=输出日志,desc=在 Loon 日志中打印命中的域名与改写结果，排查时使用。
+
+[Script]
+response if ${url} ~= /^https?:\/\/(?:rainmaker\d*\.production-public\.tubi\.io|ads\.adrise\.tv|ads\.tubi\.io|ads\.production-public\.tubi\.io)\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/tubi/js/tubi_adfree.js", {${block_ads}, ${verbose_log}}) with requires_body=true, tag="Tubi Ad-Free", timeout=10
+
+[MitM]
+hostname = rainmaker.production-public.tubi.io, rainmaker4.production-public.tubi.io, ads.tubi.io, ads.adrise.tv, ads.production-public.tubi.io
