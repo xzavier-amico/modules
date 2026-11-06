@@ -3,7 +3,7 @@
 set -u
 LOG=/opt/modules/.state/update.log
 STATE=/opt/modules/.state/hashes.txt
-mkdir -p /opt/modules/.cache/httpdns /opt/modules/.cache/youtube/scripts /opt/modules/.state
+mkdir -p /opt/modules/.cache/httpdns /opt/modules/.state
 exec >>"$LOG" 2>&1
 echo "===== $(date -Is) update start ====="
 
@@ -98,31 +98,6 @@ for line in lines:
 pathlib.Path("/opt/modules/loon/httpdns/httpdns-block.plugin").write_text("\n".join(out2))
 PYEOF
 echo "loon httpdns regenerated"
-
-# ---------- YouTube ----------
-echo "-- YouTube --"
-fetch "https://raw.githubusercontent.com/gholts/surge/main/modules/youtube-enhance.sgmodule" "/opt/modules/.cache/youtube/youtube-enhance.sgmodule" && changed=1
-mkdir -p /opt/modules/.cache/youtube/scripts
-yt_changed=0
-for f in request.js response.js key.js ump.js; do
-  if fetch "https://raw.githubusercontent.com/gholts/surge/main/scripts/youtube/$f" "/opt/modules/.cache/youtube/scripts/$f"; then
-    yt_changed=1
-  fi
-done
-if [ "$yt_changed" = "1" ]; then
-  # patch for Egern/Loon compat
-  if python3 /opt/modules/scripts/patch_youtube.py /opt/modules/.cache/youtube/scripts/*.js; then
-    cp /opt/modules/.cache/youtube/scripts/*.js /opt/modules/egern/youtube/js/
-    cp /opt/modules/.cache/youtube/scripts/*.js /opt/modules/loon/youtube/js/
-    echo "youtube js patched & synced"
-    changed=1
-  else
-    echo "youtube patch FAILED; keeping old js"
-  fi
-else
-  # no upstream change; still sync egern->loon
-  cp /opt/modules/egern/youtube/js/*.js /opt/modules/loon/youtube/js/ 2>/dev/null
-fi
 
 # ---------- Commit & push ----------
 cd /opt/modules

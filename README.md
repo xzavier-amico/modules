@@ -55,7 +55,6 @@ egern/<module>/js/               # Egern 脚本
 loon/<module>/<module>.plugin    # Loon 插件
 loon/<module>/js/                # Loon 脚本
 scripts/update.sh                # 拉取上游、重新生成、提交推送
-scripts/patch_youtube.py         # YouTube 脚本补丁（Surge -> Egern/Loon）
 scripts/validate.py              # 参数、占位符、JSON、JS 语法校验
 ```
 
@@ -75,11 +74,11 @@ bash scripts/update.sh           # 手动同步上游（不再定时执行）
 - 本地 raw URL（脚本、图标）是否指向仓库中存在的文件
 - 所有 JavaScript 文件是否通过 `node --check`
 
-`update.sh` 在 YouTube 补丁失败时会保留旧脚本并在日志中记录，不会用未打补丁的脚本覆盖仓库。
+`update.sh` 已不再同步 YouTube 脚本：该模块已重写并合并为单文件 `js/youtube.js`，由本仓库自行维护，上游变化需要人工对比后再决定是否跟进。
 
 ## 来源与许可
 
-- YouTube Enhance：原始代码来自 [Maasea](https://github.com/Maasea)（Apache-2.0），经 [gholts/surge](https://github.com/gholts/surge) 转换，本仓库由 xzavier-amico 维护并扩展。
+- YouTube Enhance：原始逻辑来自 [Maasea](https://github.com/Maasea)（Apache-2.0），经 [gholts/surge](https://github.com/gholts/surge) 分发；本仓库把 4 个脚本重写并合并为单文件 `js/youtube.js`，按 Apache-2.0 保留原版权声明并注明修改。
 - BiliBili Clean：接口路径参考社区抓包（Biliverse / app2smile），脚本与规则为本仓库重写。
 - CN Video Ad-Free：域名表参考 [blackmatrix7/ios_rule_script](https://github.com/blackmatrix7/ios_rule_script) 与各 App 历史抓包，本仓库整理。
 - Spotify Premium：字段号与属性/规则表来自 [whoeevee/EeveeSpotifyReborn](https://github.com/whoeevee/EeveeSpotifyReborn) 与 [skopevoj/spoti.pw](https://github.com/skopevoj/spoti.pw)（v0.21.1，GPL-3.0），本仓库重写为 Loon / Egern 脚本，按 GPL-3.0 分发。
