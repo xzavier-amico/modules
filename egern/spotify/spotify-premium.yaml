@@ -34,7 +34,7 @@ compat_arguments_desc: |
   spoof_premium   — 伪装 Premium（总开关）
   block_ads       — 去除广告
   unlock_playback — 解锁播放限制
-  verbose_log     — 输出日志
+  verbose_log     — 输出日志（改写字节数、歌词注入结果）
 
 compat_arguments_schema:
   spoof_premium:
@@ -51,7 +51,7 @@ compat_arguments_schema:
     options: ["true", "false"]
   verbose_log:
     name: "输出日志"
-    description: "在日志中打印改写前后的字节数，排查时使用"
+    description: "在日志中打印改写前后的字节数与歌词注入结果，排查时使用"
     options: ["true", "false"]
 
 scriptings:
@@ -65,6 +65,18 @@ scriptings:
       timeout: 30
       env:
         _compat.$argument: '{"spoof_premium":{{{spoof_premium}}},"block_ads":{{{block_ads}}},"unlock_playback":{{{unlock_playback}}},"verbose_log":{{{verbose_log}}}}'
+
+  # spotify.lyrics：官方没有歌词时，用 LRCLIB 注入第三方逐行歌词。
+  # 官方有歌词就原样放行；任何一步失败也原样放行，不影响播放。
+  - http_response:
+      name: "spotify.lyrics"
+      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v2\\/track\\/"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js"
+      body_required: true
+      max_size: 1048576
+      timeout: 10
+      env:
+        _compat.$argument: '{"verbose_log":{{{verbose_log}}}}'
 
 mitm:
   hostnames:

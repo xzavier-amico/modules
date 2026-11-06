@@ -231,8 +231,11 @@ def check_loon(checker, path):
         if len(variants) > 1:
             checker.error(path, f"script {url} is called with different argument sets: {sorted(variants)}")
 
+    # 单脚本插件要求把声明的参数全部传进去；多脚本插件允许每条脚本只取自己需要的子集
+    # （例如歌词脚本只关心 verbose_log），但仍会检查占位符必须在 [Argument] 里声明。
     non_empty = [set(names) for _, names in calls if names]
-    if args and non_empty and max(len(names) for names in non_empty) == len(arg_set):
+    single_script = len(by_url) == 1
+    if args and non_empty and single_script and max(len(names) for names in non_empty) == len(arg_set):
         for names in non_empty:
             missing = sorted(arg_set - names)
             checker.ok(path, not missing, f"script call omits declared arguments: {missing}")
