@@ -83,6 +83,20 @@ scriptings:
       env:
         _compat.$argument: '{"verbose_log":{{{verbose_log}}},"lyrics_source":"{{{lyrics_source}}}"}'
 
+  # spotify.meta：把 Track 元数据里的 has_lyrics 改成 true。
+  # 没有官方歌词的歌，客户端看到 has_lyrics=false 就不去请求 color-lyrics，
+  # 代理层拦不到任何东西；先把这个开关打开，客户端才会去请求。
+  - http_response:
+      name: "spotify.meta"
+      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/metadata\\/4\\/track\\/"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_meta.js"
+      body_required: true
+      binary_body: true
+      max_size: 4194304
+      timeout: 10
+      env:
+        _compat.$argument: '{"verbose_log":{{{verbose_log}}}}'
+
 mitm:
   hostnames:
     includes:

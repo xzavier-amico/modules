@@ -10,7 +10,13 @@ premium、关掉广告位、移除免费版的试听时长上限与队列/随机
 
 ## 歌词
 
-`js/spotify_lyrics.js` 处理 `color-lyrics/v2/track/{id}`：
+`js/spotify_meta.js` 先把曲目元数据里的 `has_lyrics` 改成 true。Spotify 的
+`Track` 消息（librespot `protocol/proto/metadata.proto`）里有
+`optional bool has_lyrics = 18`，客户端看到 false 就直接显示「无歌词」，
+连 `color-lyrics` 都不请求，代理层拦不到任何东西。这个脚本只处理
+`/metadata/4/track/` 的响应，顶层就是 `Track`，改字段 18 后其余字节原样写回。
+
+`js/spotify_lyrics.js` 在**请求阶段**处理 `color-lyrics/v2/track/{id}`：
 
 - 官方返回了非空歌词 → 原样放行，不动官方歌词；
 - 官方 404 / 空歌词 → 用 `open.spotify.com/oembed` 取歌名与歌手，去配置的歌词源找；

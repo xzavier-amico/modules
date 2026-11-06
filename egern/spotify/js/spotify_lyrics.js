@@ -141,17 +141,15 @@
       return;
     }
 
-    notify("请求 " + trackId + "，先探官方有没有歌词");
+    log("探测官方歌词接口");
     probeOfficial((hasOfficial) => {
       if (hasOfficial === null) {
         log("探测失败，放行");
-        notify("探测失败，放行");
         $done({});
         return;
       }
       if (hasOfficial) {
         log("官方有歌词，放行");
-        notify("官方有歌词，放行");
         $done({});
         return;
       }
