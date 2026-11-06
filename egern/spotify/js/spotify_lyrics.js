@@ -54,7 +54,7 @@
 
   const body = toText(res.body);
   const trimmed = body.trim();
-  log("命中 " + trackId + "，官方状态 " + (res.status === undefined ? "-" : res.status));
+  log("命中 " + trackId + "，状态 " + (res.status === undefined ? "-" : res.status) + "，url=" + url);
 
   if (Number(res.status) === 200 && trimmed && trimmed.charAt(0) !== "{") {
     // 不是 JSON 说明客户端要的是 protobuf，注入 JSON 会让它解析失败，直接放行。
@@ -82,22 +82,34 @@
     const query =
       "track_name=" + encodeURIComponent(title) + (artist ? "&artist_name=" + encodeURIComponent(artist) : "");
 
+    // /api/get 只认精确的曲名+歌手，命中时可能只有纯文本没有时间轴。
+    // 所以先收下纯文本当备选，再去 /api/search 捞一版带时间轴的，都找不到才退回纯文本。
+    let fallback = null;
+    const take = (record) => {
+      const payload = buildPayload(record);
+      if (!payload) return false;
+      if (payload.lyrics.syncType === "LINE_SYNCED") {
+        emit(payload, title, artist);
+        return true;
+      }
+      if (!fallback) fallback = payload;
+      return false;
+    };
+
     httpGetJson("https://lrclib.net/api/get?" + query, (record) => {
-      if (tryRecord(record, title, artist)) return;
+      if (take(record)) return;
 
       httpGetJson("https://lrclib.net/api/search?" + query, (list) => {
-        if (!Array.isArray(list) || !list.length) {
-          log("LRCLIB 没有找到 " + title);
-          finish({});
-          return;
-        }
         const picked = pickRecord(list, title);
-        if (!picked) {
-          log("LRCLIB 结果里没有可用歌词");
-          finish({});
+        if (picked && take(picked)) return;
+
+        if (fallback) {
+          log("只有纯文本歌词，退回无时间轴模式");
+          emit(fallback, title, artist);
           return;
         }
-        tryRecord(picked, title, artist);
+        log("LRCLIB 没有找到 " + title);
+        finish({});
       });
     });
   });
@@ -152,16 +164,14 @@
     }
   }
 
-  function tryRecord(record, title, artist) {
-    const payload = buildPayload(record);
-    if (!payload) return false;
-    log("注入 " + title + " / " + artist + "（" + payload.lyrics.lines.length + " 行）");
+  function emit(payload, title, artist) {
+    const kind = payload.lyrics.syncType === "LINE_SYNCED" ? "同步" : "纯文本";
+    log("注入 " + title + " / " + artist + "（" + kind + " " + payload.lyrics.lines.length + " 行）");
     finish({
       status: 200,
       headers: { "Content-Type": "application/json; charset=utf-8" },
       body: JSON.stringify(payload),
     });
-    return true;
   }
 
   function buildPayload(record) {
@@ -240,19 +250,26 @@
     return out;
   }
 
+  // 同名曲目往往有好几版（原版、Extended Mix、Remix），优先挑有同步时间轴的。
   function pickRecord(list, title) {
+    if (!Array.isArray(list) || !list.length) return null;
     const wanted = normalize(title);
-    let fallback = null;
-    for (const item of list) {
-      if (!item || "object" != typeof item || item.instrumental) continue;
-      const has =
+    const usable = list.filter((item) => {
+      if (!item || "object" != typeof item || item.instrumental) return false;
+      return Boolean(
         (typeof item.syncedLyrics === "string" && item.syncedLyrics.trim()) ||
-        (typeof item.plainLyrics === "string" && item.plainLyrics.trim());
-      if (!has) continue;
-      if (normalize(item.trackName) === wanted) return item;
-      fallback = fallback || item;
-    }
-    return fallback;
+          (typeof item.plainLyrics === "string" && item.plainLyrics.trim()),
+      );
+    });
+    if (!usable.length) return null;
+    const synced = (item) => Boolean(item.syncedLyrics && item.syncedLyrics.trim());
+    const named = (item) => normalize(item.trackName) === wanted;
+    return (
+      usable.find((item) => named(item) && synced(item)) ||
+      usable.find((item) => synced(item)) ||
+      usable.find((item) => named(item)) ||
+      usable[0]
+    );
   }
 
   function normalize(text) {
