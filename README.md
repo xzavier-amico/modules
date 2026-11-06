@@ -22,7 +22,7 @@
 
 表格里的「安装」就是模块的 raw URL，可直接粘贴到对应 App 的导入框。
 
-> `loon/local_reflect/local_reflect.plugin` 是本机开发用的服务回环插件，不属于通用模块，未列入上表。
+> `loon/local-reflect/local-reflect.plugin` 是本机开发用的服务回环插件（把发往 `10.7.0.1` 的连接反射回本机），不属于通用模块，未列入上表。
 
 ## 安装
 
