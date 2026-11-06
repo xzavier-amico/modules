@@ -126,6 +126,17 @@ rules:
       match: "irs01.net"
       policy: REJECT
 
+scriptings:
+  # 保守过滤：只删数组里 is_ad=true / ad_type+ad_id / card_type=ad_* 的条目。
+  # 三家首页信息流的广告字段名没有抓包，这个脚本不一定命中；命中才改写，否则原样放行。
+  - http_response:
+      name: "delivery.clean"
+      match: "^https?:\\/\\/(?:wmapi|apimobile|i)\\.meituan\\.com\\/|^https?:\\/\\/(?:waimai-guide|client-api|newton-api)\\.ele\\.me\\/|^https?:\\/\\/api\\.m\\.jd\\.com\\/"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/delivery/js/delivery_clean.js"
+      body_required: true
+      max_size: 8388608
+      timeout: 10
+
 url_rewrites:
   # 美团外卖开屏：startpicture 返回开屏素材，loadInfo 带开屏配置，openscreen 是曝光回调。
   # 三个都只服务开屏，改成 {} 后客户端直接跳过，不影响首页数据。
@@ -142,5 +153,11 @@ mitm:
   hostnames:
     includes:
       - "wmapi.meituan.com"
+      - "apimobile.meituan.com"
+      - "i.meituan.com"
       - "rms.meituan.com"
+      - "waimai-guide.ele.me"
+      - "client-api.ele.me"
+      - "newton-api.ele.me"
+      - "api.m.jd.com"
       - "homepage-gw.jd.com"

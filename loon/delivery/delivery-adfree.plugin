@@ -53,6 +53,11 @@ DOMAIN-SUFFIX,cpro2.baidu.com,REJECT
 DOMAIN-SUFFIX,irs01.com,REJECT
 DOMAIN-SUFFIX,irs01.net,REJECT
 
+[Script]
+# 保守过滤：只删数组里 is_ad=true / ad_type+ad_id / card_type=ad_* 的条目。
+# 三家首页信息流的广告字段名没有抓包，这个脚本不一定命中；命中才改写，否则原样放行。
+response if ${url} ~= /^https?:\/\/(?:wmapi|apimobile|i)\.meituan\.com\/|^https?:\/\/(?:waimai-guide|client-api|newton-api)\.ele\.me\/|^https?:\/\/api\.m\.jd\.com\// then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/delivery/js/delivery_clean.js") with requires_body=true, tag="delivery.clean", timeout=10
+
 [Rewrite]
 # 美团外卖开屏：startpicture 返回开屏素材，loadInfo 带开屏配置，openscreen 是曝光回调。
 # 三个都只服务开屏，改成 {} 后客户端直接跳过，不影响首页数据。
@@ -63,4 +68,4 @@ DOMAIN-SUFFIX,irs01.net,REJECT
 ^https?:\/\/homepage-gw\.jd\.com\/npromotion reject-dict
 
 [MitM]
-hostname = wmapi.meituan.com, rms.meituan.com, homepage-gw.jd.com
+hostname = wmapi.meituan.com, apimobile.meituan.com, i.meituan.com, rms.meituan.com, waimai-guide.ele.me, client-api.ele.me, newton-api.ele.me, api.m.jd.com, homepage-gw.jd.com
