@@ -11,6 +11,20 @@ spoof_premium = switch,true,type=boolean,tag=伪装 Premium,desc=把账号状态
 block_ads = switch,true,type=boolean,tag=去除广告,desc=关闭广告相关开关，并移除广告与推广位的远程配置。
 unlock_playback = switch,true,type=boolean,tag=解锁播放限制,desc=移除试听时长上限、队列上限与强制随机等免费版限制。
 
+[Rule]
+# 广告域名兜底：脚本改的是服务端下发的广告开关，这里再拦一层真正投放广告的域名。
+# 免费号的音频广告是服务端缝进流里的，拦域名没用；能挡的是展示位、播客外链广告和
+# 广告曝光回传。doubleclick / googlesyndication 是全局域名，其它 App 也会一起被拦。
+DOMAIN-SUFFIX,ads.spotify.com,REJECT
+DOMAIN-SUFFIX,adeventtracker.spotify.com,REJECT
+DOMAIN-SUFFIX,pubads.g.doubleclick.net,REJECT
+DOMAIN-SUFFIX,securepubads.g.doubleclick.net,REJECT
+DOMAIN-SUFFIX,googleads.g.doubleclick.net,REJECT
+DOMAIN-SUFFIX,pagead2.googlesyndication.com,REJECT
+DOMAIN-SUFFIX,tpc.googlesyndication.com,REJECT
+DOMAIN-SUFFIX,adservice.google.com,REJECT
+DOMAIN-SUFFIX,www.googletagservices.com,REJECT
+
 [Script]
 response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:bootstrap|user-customization-service)/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_premium.js", {${spoof_premium}, ${block_ads}, ${unlock_playback}}) with requires_body=true, binary_body_mode=true, tag="Spotify Premium", timeout=30
 

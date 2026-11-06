@@ -48,6 +48,38 @@ compat_arguments_schema:
     description: "移除试听时长上限、队列上限与强制随机等免费版限制"
     options: ["true", "false"]
 
+rules:
+  # 广告域名兜底：脚本改的是服务端下发的广告开关，这里再拦一层真正投放广告的域名。
+  # 免费号的音频广告是服务端缝进流里的，拦域名没用；能挡的是展示位、播客外链广告和
+  # 广告曝光回传。doubleclick / googlesyndication 是全局域名，其它 App 也会一起被拦。
+  - domain_suffix:
+      match: "ads.spotify.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "adeventtracker.spotify.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "pubads.g.doubleclick.net"
+      policy: REJECT
+  - domain_suffix:
+      match: "securepubads.g.doubleclick.net"
+      policy: REJECT
+  - domain_suffix:
+      match: "googleads.g.doubleclick.net"
+      policy: REJECT
+  - domain_suffix:
+      match: "pagead2.googlesyndication.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "tpc.googlesyndication.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "adservice.google.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "www.googletagservices.com"
+      policy: REJECT
+
 scriptings:
   - http_response:
       name: "spotify.premium"
