@@ -38,6 +38,23 @@ GET https://boot.pluto.tv/v4/start?...&serverSideAds=true
 模块把 App 的 boot 请求改成 `serverSideAds=false`，stitcher 返回的就是纯内容清单。
 不碰视频流、不碰 stitcher 响应。
 
+## 第二道：清单里删广告段
+
+`serverSideAds=false` 之后 stitcher 不再缝第三方广告，但还有两样东西留得下来：
+
+- 转场 bumper：分片名里带 `_ad_bumper` 的 Pluto 台标动画，5~25 秒
+- 部分片源残留的 `_ad/creative`，常见形式是百分号编码的 `_ad%2Fcreative`
+
+所以再加一层清单过滤：命中这些标记的分片整段删掉；另外落在
+`#EXT-X-CUE-OUT` 与 `#EXT-X-CUE-IN` 之间的分片也一并删，这样不依赖分片命名。
+
+几条安全边界：
+
+- 只处理点播清单（有 `#EXT-X-ENDLIST`、且不是 master）。直播清单原样放行——
+  直播的广告就是当时的播出内容，删段会让时间轴错位、反复重缓冲。
+- 删段时保留 `#EXT-X-DISCONTINUITY`：广告前后的正片来自不同编码，时间戳本来就有跳变。
+- 裁掉超过 40% 时长视为判断错了，整份清单原样放行——宁可留广告，不能把正片删了。
+
 ## 规则
 
 | 域名 | 策略 | 用途 |
@@ -58,13 +75,13 @@ GET https://boot.pluto.tv/v4/start?...&serverSideAds=true
 
 ## 注意
 
-- 需开启 MitM：`boot.pluto.tv`。
+- 需开启 MitM：`boot.pluto.tv`、`pluto.tv`、`*.pluto.tv`、`*.prd.pluto.tv`
+  （清单在 `service-manifest-generator-*.prd.pluto.tv`）。视频 CDN 不用 MITM。
 - 会话 JWT 的有效期是 8 小时（`refreshInSec: 28800`）。开启模块后如果还有广告，
   先强制退出 App 再打开，让它重新走一次 boot。
-- 这套做法基于 boot 接口的实际行为（参数会写进签名 JWT）。**App 端效果需要实测**：
-  如果强制退出后仍有广告，说明 App 没走 `boot.pluto.tv/v4/start`，抓包确认一下
-  boot 请求的域名和路径是不是变了。
-- 补充实测：用 `serverSideAds=false` 的美国直播流连续采样 15 分钟，广告位仍然会拼一段
-  5~25 秒的 Pluto 台标 bumper（分片名里带 `ad_bumper`），但清单里没有真正的广告片。
-  所以开启模块后，原来放广告的位置可能看到一小段台标动画，这是 stitcher 的转场，不是广告。
+- 这套做法基于 boot 接口的实际行为（参数会写进签名 JWT 和 `stitcherParams`）。
+  **App 端效果需要实测**：如果强制退出后仍有广告，说明 App 没走
+  `boot.pluto.tv/v4/start`，抓包确认一下 boot 请求的域名和路径是不是变了。
+- 点播的转场 bumper 现在会被删掉。直播频道没有清单可改，原位置上仍然是那段台标
+  动画，这是 stitcher 的转场，不是广告。
 - 图标：Streaming.png
