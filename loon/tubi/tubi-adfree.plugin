@@ -8,7 +8,6 @@
 
 [Argument]
 block_ads = switch,true,type=boolean,tag=去除广告,desc=清空 cue_points 与 ads 列表，并把 VAST / VMAP 换成空文档。
-debug = switch,false,type=boolean,tag=调试日志,desc=打印 [tubi] 开头的日志：命中的 URL、响应长度、是否改写。
 
 [Rule]
 # Tubi 只在美国可用。这里把它的域名固定走代理，避免被「国内直连」类规则带走，
@@ -24,7 +23,7 @@ DOMAIN-SUFFIX,adrise.tv,PROXY
 
 [Script]
 # 前半段：广告侧主机；后半段：内容元数据 / API（cue_points 从这里来）。
-response if ${url} ~= /^https?:\/\/(?:(?:[a-z0-9-]+\.)*(?:ads|rainmaker)[a-z0-9.-]*\.(?:tubi\.io|tubitv\.com|tubi\.video|adrise\.tv)\/|(?:[a-z0-9-]+\.)*(?:tubitv\.com|tubi\.io)\/(?:oz|api)\/)/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/tubi/js/tubi_adfree.js", {${block_ads},${debug}}) with requires_body=true, tag="Tubi Ad-Free", timeout=10
+response if ${url} ~= /^https?:\/\/(?:(?:[a-z0-9-]+\.)*(?:ads|rainmaker)[a-z0-9.-]*\.(?:tubi\.io|tubitv\.com|tubi\.video|adrise\.tv)\/|(?:[a-z0-9-]+\.)*(?:tubitv\.com|tubi\.io)\/(?:oz|api)\/)/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/tubi/js/tubi_adfree.js", {${block_ads}}) with requires_body=true, tag="Tubi Ad-Free", timeout=10
 
 [MitM]
 # 通配，别只列已知的五个主机：广告请求换个子域就会从 MITM 里漏掉，

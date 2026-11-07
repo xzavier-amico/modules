@@ -29,21 +29,15 @@ icon: "https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Tubi.
 
 compat_arguments:
   block_ads: "true"
-  debug: "false"
 
 compat_arguments_desc: |
   block_ads   — 去除广告
-  debug       — 在日志里打印每个被处理 / 未处理的广告响应，排查用
 
 compat_arguments_schema:
   block_ads:
     name: "去除广告"
     description: "清空 cue_points 与 ads 列表，并把 VAST / VMAP 换成空文档"
     options: ["true", "false"]
-  debug:
-    name: "调试日志"
-    description: "打印 [tubi] 开头的日志：命中的 URL、响应长度、是否改写"
-    options: ["false", "true"]
 
 rules:
   # Tubi 只在美国可用。这里把它的域名固定走代理，避免被「国内直连」类规则带走，
@@ -78,7 +72,7 @@ scriptings:
       body_required: true
       timeout: 10
       env:
-        _compat.$argument: '{"block_ads":{{{block_ads}}},"debug":{{{debug}}}}'
+        _compat.$argument: '{"block_ads":{{{block_ads}}}}'
 
 mitm:
   # 通配，别只列已知的五个主机：广告请求换个子域就会从 MITM 里漏掉，

@@ -33,7 +33,7 @@
   let opt = {};
   try {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
-    if (Array.isArray(raw)) opt = { block_ads: raw[0], debug: raw[1] };
+    if (Array.isArray(raw)) opt = { block_ads: raw[0] };
     else if (typeof raw === "string") opt = JSON.parse(raw || "{}") || {};
     else if (raw && "object" == typeof raw) opt = raw;
   } catch (e) {
@@ -41,14 +41,6 @@
   }
   const flag = (v, d) =>
     v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0");
-
-  const debug = flag(opt.debug, false);
-  const log = (m) => {
-    if (!debug) return;
-    try {
-      console.log("[tubi] " + m);
-    } catch (e) {}
-  };
 
   if (!flag(opt.block_ads, true)) {
     $done({});
@@ -85,14 +77,12 @@
   }
   // 内容元数据带 video_resources，偶尔会超过 1MB，放宽到 8MB。
   if (body.length > 8 * 1024 * 1024) {
-    log("skip oversized body " + body.length + "B");
     $done({});
     return;
   }
 
-  const parts = url.match(/^https?:\/\/([^/?#]+)([^?#]*)/i) || [];
+  const parts = url.match(/^https?:\/\/([^/?#]+)/i) || [];
   const host = (parts[1] || "").split(":")[0].toLowerCase();
-  const path = parts[2] || "";
 
   // 广告侧主机：ads.* / rainmaker* 以及 adrise.tv 自家域。
   const isAdHost =
@@ -143,11 +133,6 @@
     return '<?xml version="1.0" encoding="UTF-8"?><VAST version="' + version + '"></VAST>';
   };
 
-  const finish = (out) => {
-    log("rewrite " + out.length + "B <- " + host + path);
-    $done({ body: out });
-  };
-
   const text = body.trim();
 
   if (text.charAt(0) === "{") {
@@ -169,8 +154,7 @@
             data.metrics.responseTime = 1;
           }
         }
-        log("cleared " + hits + " ad entries: " + host + path);
-        finish(JSON.stringify(data));
+        $done({ body: JSON.stringify(data) });
         return;
       }
       // JSON 里内嵌 VAST/VMAP 的情况：只替换那个字符串字段，别把 JSON 换成 XML。
@@ -182,12 +166,9 @@
         }
       }
       if (embedded > 0) {
-        finish(JSON.stringify(data));
+        $done({ body: JSON.stringify(data) });
         return;
       }
-      // 内容 / 接口 JSON 大部分本来就没有广告字段，只在广告主机上记这条，
-      // 否则每次搜索、详情、推荐都会刷一行，真正有用的 rewrite 反而找不到。
-      if (isAdHost) log("json untouched " + text.length + "B: " + host + path);
       $done({});
       return;
     }
@@ -195,14 +176,12 @@
 
   if (/<VAST[\s>]|<vmap:VMAP[\s>]|<VMAP[\s>]/i.test(text)) {
     if (!isAdHost) {
-      log("xml on non-ad host, skip: " + host + path);
       $done({});
       return;
     }
-    finish(emptyVast(text));
+    $done({ body: emptyVast(text) });
     return;
   }
 
-  log("unhandled " + text.length + "B: " + host + path + " | " + text.slice(0, 120));
   $done({});
 })();
