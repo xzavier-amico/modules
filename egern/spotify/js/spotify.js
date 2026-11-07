@@ -51,6 +51,11 @@
   const playOn = flag(opt.unlock_playback, true);
   const lyricsOn = flag(opt.enable_lyrics, true);
 
+  // 响应体上限：这些接口正常都在 1 MiB 以内，超过上限直接放行，避免解析 / 重编码占满内存。
+  // 原值是 meta 8 MiB、bootstrap 32 MiB；这里各放宽一档，给播客 / 长曲目元数据留余量。
+  const MAX_META_BYTES = 12 * 1024 * 1024; // extended-metadata / context-resolve / connect-state / metadata
+  const MAX_BOOTSTRAP_BYTES = 40 * 1024 * 1024; // bootstrap / user-customization
+
   // ---------------------------------------------------------------- protobuf
 
   const TE = new TextEncoder();
@@ -876,7 +881,7 @@
     $done({});
     return;
   }
-  if (body.length > (isMeta ? 8 : 32) * 1024 * 1024) {
+  if (body.length > (isMeta ? MAX_META_BYTES : MAX_BOOTSTRAP_BYTES)) {
     $done({});
     return;
   }
