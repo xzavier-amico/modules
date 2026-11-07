@@ -13,7 +13,7 @@
 ├── youtube-enhance.yaml        # Egern 模块（script_url 为本仓库 GitHub raw 绝对 URL）
 ├── README.md                   # 本说明
 ├── icon/
-│   └── YouTube.png             # 模块图标（yaml 中 icon 用其本仓库 raw URL）
+│   └── YouTube.png             # 旧图标备份（yaml 当前使用 Koolson/Qure 的外链图标）
 └── js/
     └── youtube.js              # 单文件脚本：请求 / 响应 / 密钥 / UMP 四段逻辑按 URL 分发
 ```
@@ -26,7 +26,11 @@ https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/
 
 ## 使用方法
 
-1. 模块已托管在 GitHub raw，在 Egern 主配置 `modules:` 中直接引用该 URL：
+1. 点下面的链接会直接唤起 Egern 导入：
+
+   `egern:/modules/new?name=YouTube%20Enhance&url=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Fegern%2Fyoutube%2Fyoutube-enhance.yaml`
+
+   也可以在主配置 `modules:` 中直接引用该 URL：
 
 ```yaml
 modules:
@@ -43,69 +47,55 @@ modules:
 modules:
   - url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/youtube-enhance.yaml"
     compat_arguments:
-      block_shorts: "true"      # 例：连 Shorts 标签一起去掉
+      home_menu: "-shorts"      # 例：保留全部侧栏入口，只去掉 Shorts
 ```
 
 3. HTTPS 改写需要 **安装并信任 Egern CA 证书并开启 MITM**
-   （`*.googlevideo.com`、`youtubei.googleapis.com`、`www.youtube.com`、`s.youtube.com`）。
+   （`*.googlevideo.com`、`youtubei.googleapis.com`、`www.youtube.com`、`music.youtube.com`、`s.youtube.com`）。
 
 ## 参数
 
-原有 9 个参数与上游 `#!arguments` 一一对应；其余 18 个参数是把上游脚本中原本硬编码的行为提取出来的开关。所有默认值都保持原版行为，升级无感。
+共 12 个参数。广告、画质、首页菜单、On-the-go 都做了聚合；后台播放、PiP、On-the-go 音频/章节、热更新哈希这些不再单独给开关，脚本常开。
 
-### 界面与内容
+### 广告与 AI
 
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
-| `block_upload` | true | 移除侧栏中的「上传」入口 |
-| `block_shorts` | false | 移除侧栏中的 Shorts 入口 |
-| `block_shorts_feed` | false | 移除首页列表中的 Shorts 推荐货架 |
-| `block_members_only` | false | 移除首页、频道页等列表中需要频道会员才能观看的视频 |
-| `block_games` | true | 移除首页 Playables（小游戏） |
-| `block_vertical_live` | false | 移除首页竖屏直播 |
-| `block_store` | true | 移除创作者商店、商品卡片与相关悬浮层 |
+| `block_ads` | true | 一次关掉播放器广告、信息流广告、Shorts 广告、付费推广、广告追踪转化、Premium 推广与创作者商店/商品卡 |
 | `block_ai` | true | 移除 Ask、AI 摘要及相关控件 |
+
+### 画质、字幕与播放器
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `max_height` | max | 默认分辨率：`max`（最高可用）/ `4320` / `2160` / `1440` / `1080` / `720` / `480` / `off`（不修改画质） |
+| `caption_lang` | zh-Hans | 字幕默认翻译语言，使用 Google 语言代码；`off` 关闭字幕翻译 |
+| `max_speed` | 4 | 最大播放倍速，可选 `4` / `3` / `2` / `off` |
 | `jump_ahead` | true | 启用播放器中的 Jump Ahead 快进按钮 |
-| `hide_premium` | true | 隐藏侧栏 Premium 入口和倍速菜单中的 Premium 推广 |
-| `block_guide_items` | 空 | 额外隐藏的侧栏入口 `browseId`，多个用英文逗号分隔（如 `FEuploads,FEshorts`） |
 
-### 播放与画质
+### 首页与菜单
 
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
-| `auto_hd` | true | 优先选择可用的最高分辨率；已授权 Premium 时使用高码率 |
-| `prefer_premium` | true | 自动高清时若有 Premium 高码率版本则优先使用 |
-| `max_height` | 4320 | 自动高清允许的最高分辨率高度，可选 4320 / 2160 / 1440 / 1080 / 720 / 480 |
-| `max_speed` | 4 | 最大播放倍速，可选 4 / 3 / 2 / off；`off` 表示不修改倍速数值与上限 |
-| `background_play` | true | 启用后台播放，并在设置页强制打开后台播放 |
-| `pip` | true | 启用画中画（PiP） |
+| `home_menu` | 空 | 首页/侧栏菜单保留项（多选，逗号分隔）。留空=旧默认（仅隐藏上传）；`all`=全部保留；`none`=全部隐藏；`-shorts`=保留全部但隐藏 Shorts；`upload,shorts`=只保留这两项 |
+| `block_shorts_feed` | false | 移除首页、搜索和推荐信息流中的 Shorts 推荐货架 |
+| `home_cleanup` | standard | 首页内容清理：`standard`=Playables；`all`=再加竖屏直播；`off`=不清理 |
+| `block_members_only` | false | 从首页、频道页等列表中移除需要频道会员才能观看的视频 |
 
-### 广告与追踪
+### On-the-go 与 YouTube Music
 
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
-| `block_player_ads` | true | 移除播放器广告位，并让 `ad_break` 返回空响应 |
-| `block_feed_ads` | true | 移除首页、搜索和推荐信息流中的广告卡片 |
-| `block_shorts_ads` | true | 移除 Shorts 列表中的广告条目 |
-| `remove_paid_promotion` | true | 移除播放器响应中的付费推广与推广内容字段 |
-| `block_ad_tracking` | true | 移除播放跟踪中的广告转化字段 |
-| `strip_hot_hash` | true | 移除 `log_event` 中的 `x-youtube-hot-hash-data` 响应头，避免热更新配置覆盖 |
-
-### On-the-go
-
-| 参数 | 默认 | 说明 |
-| --- | --- | --- |
-| `on_the_go` | true | 启用 On-the-go 控件总开关 |
-| `on_the_go_audio` | true | 在 On-the-go 控件中加入音频模式切换按钮 |
-| `on_the_go_chapters` | true | 在 On-the-go 控件中加入章节按钮 |
+| `on_the_go` | true | 启用 On-the-go 控件；音频模式与章节按钮一并启用 |
+| `youtube_music` | true | YouTube Music 增强：去广告、后台播放、PiP；关闭后 YouTube Music 的请求完全放行 |
 
 补充说明：
 
-- `max_height`、`prefer_premium` 只在 `auto_hd` 开启时生效。
-- `on_the_go_audio`、`on_the_go_chapters` 只在 `on_the_go` 开启时生效。
-- `block_guide_items` 接收 YouTube 侧栏项对应的 `browseId`（例如 `FEuploads`、`FEshorts`）。它用于补充隐藏 `block_games` / `block_store` 等开关没有覆盖的侧栏入口。
-- `block_shorts` 只移除侧栏的 Shorts 入口，不会清理首页列表；要移除首页等信息流中的 Shorts 推荐货架，请打开 `block_shorts_feed`。
-- `block_members_only` 只从列表页（首页、频道页、Shorts 货架）中移除会员专属视频，不会解锁播放；它按徽章文字（`会员专享` / `Members only` 等）匹配，极少数标题恰好同名的视频可能被误删。
+- `home_menu` 支持可读别名：`home`、`shorts`、`subscriptions`/`subs`、`explore`、`trending`、`upload`、`history`、`playlists`、`library`、`watch_later`/`later`、`liked`、`music`、`downloads`，也可以直接写 `browseId`（如 `FEuploads`）。以 `-` 或 `!` 开头的项表示隐藏，其余表示保留。
+- `max_height` 选 `off` 时不再改写画质；`max` 与 `4320` 当前等价（YouTube 最高 4320P），保留 `max` 是为了以后 8K 时不用改配置。
+- `block_ads` 同时控制侧栏 Premium 入口、倍速菜单里的 Premium 推广，以及创作者商店/商品卡；即使 `home_menu=all`，Premium 入口仍会随 `block_ads` 隐藏。
+- `background_play`、`pip`、`on_the_go_audio`、`on_the_go_chapters`、`strip_hot_hash` 已从参数表移除，脚本始终按开启处理。
+- `block_members_only` 只从列表页移除会员专属视频，不会解锁播放；它按徽章文字（`会员专享` / `Members only` 等）匹配，极少数标题恰好同名的视频可能被误删。
 - 脚本已重写并合并为单文件，不依赖上游脚本结构，也不跟随上游自动同步；上游若有大改动，需要人工对比后再决定是否跟进。
 
 ## 转换对照（Surge → Egern）
@@ -141,17 +131,17 @@ modules:
   说明引擎接受大值；若 N 是另一个固定数字，说明引擎层还有更硬的内部上限——届时只能降级：
   大体积请求会原样放行（不影响播放，只是该视频的 4x/自动 HD 那轮不生效）。
   可根据日志再评估是否调更高（如 67108864）。
-- **脚本托管**：3 条 `script_url`（及 `icon`）均使用本仓库 GitHub raw 绝对 URL，
-  在任何设备上导入 yaml 都能直接拉到脚本；本地化使用时可按需换回相对路径 `js/youtube.js`。
+- **脚本托管**：3 条 `script_url` 使用本仓库 GitHub raw 绝对 URL，在任何设备上导入 yaml
+  都能直接拉到脚本；`icon` 使用 Koolson/Qure 的彩色图标外链。本地化使用时可按需换回相对路径 `js/youtube.js`。
 - **持久化共享**：脚本在 `config`/`log_event` 响应里写入 `YouTubeConfig`（client/encrypt 密钥），
   在 `initplayback` 响应里读取它解密 UMP；两者在同一条链路上，正常触发时互相配合。
 - **拒绝模式**：Egern `rewrites → respond 404` 等价 Surge 的空响应 reject；如需和应用层
   完全一致可改为 200（`respond: {status: 200}`）。
 - **功能范围**：保留 gholts 原版模块的全部功能（去广告、后台播放、PiP、
-  最高 4x 倍速、On-the-go 控件）；同时把原脚本中硬编码的行为提取为参数，
-  所有新增参数默认开启或保持原值，升级后行为与原版一致。
+  最高 4x 倍速、On-the-go 控件），并新增字幕翻译与 YouTube Music 增强；
+  后台播放、PiP、On-the-go 音频/章节、热更新哈希改为常开，不再单独设开关。
 - **静态改写**：`rewrites` 中的 `pagead/pcs` 与 `stats/ads` 两条 404 规则无法按参数
-  条件启用；即使关闭 `block_player_ads` / `block_ad_tracking`，这两条规则仍会生效。
+  条件启用；即使关闭 `block_ads`，这两条规则仍会生效（响应体内的广告位不会再改）。
 - **参数兼容**：Loon 以对象（或位置数组）传入 snake_case 参数，Egern 以 JSON 字符串传入
   camelCase 参数；脚本入口会统一映射，两侧共用同一份 `js/youtube.js`。
 

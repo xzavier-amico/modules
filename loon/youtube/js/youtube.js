@@ -60,6 +60,24 @@
     "BADGE_MEMBERS_ONLY",
   ];
 
+  // 侧栏/首页菜单项：值是可读别名，id 是 guide 响应里的 browseId。
+  // home_menu 用别名或 browseId 都可以，多个用英文逗号分隔。
+  const MENU_ITEMS = [
+    { id: "FEwhat_to_watch", keys: ["home", "首页"] },
+    { id: "FEshorts", keys: ["shorts"] },
+    { id: "FEsubscriptions", keys: ["subscriptions", "subs", "订阅"] },
+    { id: "FEexplore", keys: ["explore", "探索"] },
+    { id: "FEtrending", keys: ["trending", "时下流行"] },
+    { id: "FEuploads", keys: ["upload", "uploads", "上传"] },
+    { id: "FEhistory", keys: ["history", "历史"] },
+    { id: "FEplaylist_aggregation", keys: ["playlists", "playlist", "播放列表"] },
+    { id: "FElibrary", keys: ["library", "媒体库"] },
+    { id: "FEwatch_later", keys: ["watch_later", "later", "稍后观看"] },
+    { id: "FEliked_videos", keys: ["liked", "likes", "喜欢的视频"] },
+    { id: "FEmusic", keys: ["music", "音乐"] },
+    { id: "FEdownloads", keys: ["downloads", "download", "下载"] },
+  ];
+
   //=====================================================================================
   // §2 持久化
   //=====================================================================================
@@ -117,6 +135,26 @@
     }
     if (!Number.isSafeInteger(value)) throw new Error("Unsafe decoded integer");
     return value;
+  }
+
+  // 解 packed repeated varint（proto3 默认把 repeated 数字字段打包成一个 bytes）。
+  function decodePackedVarints(bytes) {
+    const values = [];
+    let offset = 0;
+    while (offset < bytes.length) {
+      let value = 0;
+      let scale = 1;
+      let byte;
+      do {
+        if (offset >= bytes.length) throw new Error("Truncated packed varint");
+        byte = bytes[offset++];
+        value += (127 & byte) * scale;
+        scale *= 128;
+      } while (128 & byte);
+      if (!Number.isSafeInteger(value)) throw new Error("Unsafe packed integer");
+      values.push(value);
+    }
+    return values;
   }
 
   // YouTube 的 params 是 URL-safe base64，去掉填充后长度可能差一位。
@@ -281,6 +319,13 @@
     );
   }
 
+  // 把一组数字编码成 packed repeated 字段（wire type 2）。
+  function encodePackedField(spec, values) {
+    const [fieldNo, , kind] = spec;
+    const payload = concatBytes(values.map((value) => encodeVarint("bool" === kind ? (value ? 1 : 0) : value)));
+    return concatBytes([encodeVarint(8 * fieldNo + 2), encodeVarint(payload.length), payload]);
+  }
+
   // 判断某条嵌套路径上的最后一个值是否等于 marker（prefixOnly 时只比前缀）。
   function matchesPath(bytes, path, marker = PAGEAD_MARKER, prefixOnly = false) {
     return path.length
@@ -337,32 +382,18 @@
   //=====================================================================================
 
   const ARG_ALIASES = {
-    block_upload: "blockUpload",
-    block_shorts: "blockShorts",
-    block_shorts_feed: "blockShortsFeed",
-    block_members_only: "blockMembersOnly",
-    auto_hd: "autoHd",
-    block_games: "blockGames",
-    block_vertical_live: "blockVerticalLive",
-    jump_ahead: "jumpAhead",
-    block_store: "blockStore",
+    block_ads: "blockAds",
     block_ai: "blockAi",
-    on_the_go: "onTheGo",
-    background_play: "backgroundPlay",
-    pip: "pip",
-    max_speed: "maxSpeed",
-    hide_premium: "hidePremium",
-    prefer_premium: "preferPremium",
     max_height: "maxHeight",
-    block_player_ads: "blockPlayerAds",
-    block_feed_ads: "blockFeedAds",
-    block_shorts_ads: "blockShortsAds",
-    remove_paid_promotion: "removePaidPromotion",
-    block_ad_tracking: "blockAdTracking",
-    block_guide_items: "blockGuideItems",
-    on_the_go_audio: "onTheGoAudio",
-    on_the_go_chapters: "onTheGoChapters",
-    strip_hot_hash: "stripHotHash",
+    caption_lang: "captionLang",
+    home_menu: "homeMenu",
+    block_shorts_feed: "blockShortsFeed",
+    on_the_go: "onTheGo",
+    youtube_music: "youtubeMusic",
+    block_members_only: "blockMembersOnly",
+    home_cleanup: "homeCleanup",
+    jump_ahead: "jumpAhead",
+    max_speed: "maxSpeed",
   };
 
   // Loon 传 snake_case 对象或位置数组，Egern 传 JSON 字符串，这里统一成普通对象。
@@ -386,22 +417,144 @@
     return raw && "object" == typeof raw ? raw : {};
   }
 
+  // 把 home_menu 里的一个 token 归一成 { hide, id }；认不出就返回 undefined。
+  function menuToken(token) {
+    const text = String(token ?? "").trim();
+    if (!text) return undefined;
+
+    const hide = text.startsWith("-") || text.startsWith("!");
+    const name = (hide ? text.slice(1) : text).trim().toLowerCase();
+    if (!name) return undefined;
+
+    const item = MENU_ITEMS.find((entry) => entry.id.toLowerCase() === name || entry.keys.some((key) => key.toLowerCase() === name));
+    if (item) return { hide, id: item.id };
+    // 也允许直接写 browseId；只接受像 ID 的字符串，避免把说明文字当成入口。
+    if (/^[a-z0-9_]+$/i.test(name)) return { hide, id: name };
+    return undefined;
+  }
+
+  // home_menu 语义：
+  //   空              -> 旧默认：只隐藏上传
+  //   all             -> 全部保留
+  //   none            -> 全部隐藏
+  //   upload,shorts   -> 只保留这两项
+  //   -shorts         -> 保留全部，只隐藏 Shorts
+  //   all,-shorts     -> 保留全部，但隐藏 Shorts
+  // 以 - 或 ! 开头的 token 表示隐藏；其余表示保留。
+  function resolveHiddenMenu(value, blockAds) {
+    const hidden = new Set();
+    const tokens = String(value ?? "")
+      .split(",")
+      .map((token) => token.trim())
+      .filter(Boolean);
+
+    if (!tokens.length) {
+      hidden.add("FEuploads");
+    } else {
+      const keep = new Set();
+      const extraHide = new Set();
+      let keepAll = false;
+      let hideAll = false;
+
+      for (const token of tokens) {
+        const lower = token.toLowerCase();
+        if ("all" === lower) {
+          keepAll = true;
+          continue;
+        }
+        if ("none" === lower) {
+          hideAll = true;
+          continue;
+        }
+        const parsed = menuToken(token);
+        if (!parsed) continue;
+        (parsed.hide ? extraHide : keep).add(parsed.id);
+      }
+
+      if (hideAll) {
+        for (const item of MENU_ITEMS) hidden.add(item.id);
+      } else if (!keepAll && keep.size) {
+        for (const item of MENU_ITEMS) if (!keep.has(item.id)) hidden.add(item.id);
+      }
+      for (const id of extraHide) hidden.add(id);
+    }
+
+    if (blockAds) hidden.add("SPunlimited");
+    return [...hidden];
+  }
+
+  // 判断请求是不是 YouTube Music（iOS App 的 UA / client-name 都带 music）。
+  function isMusicRequest(request) {
+    if (/^https?:\/\/music\.youtube\.com\//i.test(String(request?.url ?? ""))) return true;
+    for (const [key, value] of Object.entries(request?.headers ?? {})) {
+      const name = key.toLowerCase();
+      const text = String(value ?? "");
+      if ("user-agent" === name && /music/i.test(text)) return true;
+      if ("x-youtube-client-name" === name && /music|remix/i.test(text)) return true;
+      if ("x-youtube-client-version" === name && /music|remix/i.test(text)) return true;
+    }
+    return false;
+  }
+
   function readOptions(defaults = {}) {
     const raw = readArgument();
-    if (!raw || "object" != typeof raw) return defaults;
-
-    const options = { ...raw };
+    const options = raw && "object" == typeof raw ? { ...raw } : {};
     for (const snakeKey in ARG_ALIASES) {
       if (void 0 !== options[snakeKey] && void 0 === options[ARG_ALIASES[snakeKey]]) {
         options[ARG_ALIASES[snakeKey]] = options[snakeKey];
       }
     }
 
-    const speed = String(options.maxSpeed ?? "4").toLowerCase();
-    options.maxSpeed = speed === "off" || options.maxSpeed === false ? false : Math.max(2, Math.min(4, parseInt(speed) || 4));
+    // 广告总开关：播放器 / 信息流 / Shorts / 付费推广 / 广告追踪 / Premium 推广 / 创作者商店。
+    const blockAds = false !== options.blockAds;
+    options.blockAds = blockAds;
+    options.blockPlayerAds = blockAds;
+    options.blockFeedAds = blockAds;
+    options.blockShortsAds = blockAds;
+    options.removePaidPromotion = blockAds;
+    options.blockAdTracking = blockAds;
+    options.hidePremium = blockAds;
 
-    const height = parseInt(options.maxHeight);
-    options.maxHeight = Number.isFinite(height) ? Math.max(144, Math.min(4320, height)) : 4320;
+    // 默认分辨率：max / 4320 / 2160 / ... / off。off 表示完全不改画质。
+    const height = String(options.maxHeight ?? "max").toLowerCase();
+    if ("off" === height || "false" === height) {
+      options.autoHd = false;
+      options.maxHeight = 4320;
+    } else {
+      const parsed = parseInt(height, 10);
+      options.autoHd = true;
+      options.maxHeight = "max" === height || !Number.isFinite(parsed) ? 4320 : Math.max(144, Math.min(4320, parsed));
+    }
+    options.preferPremium = true;
+
+    // 这些是系统设置里能开的，脚本直接常开，不再单独给开关。
+    options.backgroundPlay = true;
+    options.pip = true;
+    options.onTheGoAudio = true;
+    options.onTheGoChapters = true;
+    options.stripHotHash = true;
+
+    // 首页清理：off 全关，standard 只清 Playables，all 再加竖屏直播。
+    // 创作者商店/商品卡属于付费推广，跟随 blockAds。
+    const cleanup = String(options.homeCleanup ?? "standard").toLowerCase();
+    options.blockStore = blockAds;
+    options.blockGames = "off" !== cleanup;
+    options.blockVerticalLive = "all" === cleanup;
+
+    options.hiddenGuideItems = resolveHiddenMenu(options.homeMenu, blockAds);
+
+    const speed = String(options.maxSpeed ?? "4").toLowerCase();
+    options.maxSpeed = "off" === speed || false === options.maxSpeed ? false : Math.max(2, Math.min(4, parseInt(speed) || 4));
+
+    const caption = String(options.captionLang ?? "zh-Hans").trim();
+    options.captionLang = /^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/i.test(caption) ? caption : "off";
+
+    options.blockAi = false !== options.blockAi;
+    options.blockShortsFeed = false !== options.blockShortsFeed;
+    options.blockMembersOnly = false !== options.blockMembersOnly;
+    options.onTheGo = false !== options.onTheGo;
+    options.jumpAhead = false !== options.jumpAhead;
+    options.youtubeMusic = false !== options.youtubeMusic;
 
     return { ...defaults, ...options };
   }
@@ -515,6 +668,40 @@
       [2, "playabilityStatus", "PlayabilityStatus"],
       [9, "playbackTracking", "PlaybackTracking"],
       [68, "adSlots", "bytes", true],
+      [10, "captions", "Captions"],
+    ],
+    Captions: [[51621377, "playerCaptionsTrackListRenderer", "PlayerCaptionsTrackListRenderer"]],
+    PlayerCaptionsTrackListRenderer: [
+      [1, "captionTracks", "CaptionTrack", true],
+      [2, "audioTracks", "AudioTrack", true],
+      [3, "translationLanguages", "TranslationLanguage", true],
+      [4, "defaultAudioTrackIndex", "uint"],
+      [6, "defaultCaptionTrackIndex", "uint"],
+    ],
+    CaptionTrack: [
+      [1, "baseUrl", "string"],
+      [2, "name", "Text"],
+      [3, "vssId", "string"],
+      [4, "languageCode", "string"],
+      [5, "kind", "string"],
+      [6, "rtl", "bool"],
+      [7, "isTranslatable", "bool"],
+    ],
+    Text: [[1, "runs", "TextRun", true]],
+    TextRun: [[1, "text", "string"]],
+    AudioTrack: [
+      [2, "captionTrackIndices", "uint", true],
+      [3, "defaultCaptionTrackIndex", "uint"],
+      [4, "forcedCaptionTrackIndex", "uint"],
+      [5, "visibility", "uint"],
+      [6, "hasDefaultTrack", "bool"],
+      [7, "hasForcedTrack", "bool"],
+      [8, "audioTrackId", "string"],
+      [11, "captionsInitialState", "uint"],
+    ],
+    TranslationLanguage: [
+      [1, "languageCode", "string"],
+      [2, "languageName", "Text"],
     ],
     PlayerConfig: [[1, "granularVariableSpeedConfig", "PlaybackSpeedConfig"]],
     PlaybackSpeedConfig: [
@@ -755,7 +942,7 @@
     if (repeatedCount) {
       for (const field of fields) {
         const spec = specsByNo.get(field.no);
-        if (spec && field.wire === wireTypeOf(spec[2])) {
+        if (spec && (field.wire === wireTypeOf(spec[2]) || isPackedNumeric(spec, field))) {
           field.spec = spec;
           if (!spec[3]) repeatedCount.set(spec[1], (repeatedCount.get(spec[1]) ?? 0) + 1);
         }
@@ -765,10 +952,14 @@
     let deferredNames;
     for (const field of fields) {
       const spec = repeatedCount ? field.spec : specsByNo.get(field.no);
-      if (!spec || field.wire !== wireTypeOf(spec[2])) continue;
+      if (!spec || (field.wire !== wireTypeOf(spec[2]) && !isPackedNumeric(spec, field))) continue;
       field.spec = spec;
 
       const [, name, valueType, repeated] = spec;
+      if (isPackedNumeric(spec, field)) {
+        for (const value of decodePackedVarints(field.data)) obj[name].push("bool" === valueType ? 0 !== value : value);
+        continue;
+      }
       if (!repeated && (repeatedCount?.get(name) ?? 0) > 1) {
         delete field.spec;
         continue;
@@ -802,6 +993,11 @@
     return "bool" === valueType || "uint" === valueType ? 0 : 2;
   }
 
+  // proto3 的 repeated 数字字段默认 packed（wire type 2），解码时要当成一串 varint。
+  function isPackedNumeric(spec, field) {
+    return !!spec[3] && 2 === field.wire && ("uint" === spec[2] || "bool" === spec[2]);
+  }
+
   function readFieldValue(field, depth, state, eager) {
     const [, name, valueType] = field.spec;
     if ("bytes" === valueType) return field.data;
@@ -819,6 +1015,7 @@
     const parts = [];
     const repeatedPool = new Map();
     const written = new Set();
+    const numericWritten = new Set();
     const rawOf = (value, valueType) => (SCHEMA[valueType] ? (value[WIRE_STATE]?.bytes ?? value) : value);
     const valuesOf = (spec) => {
       const [, name, , repeated] = spec;
@@ -826,9 +1023,10 @@
     };
 
     // 数组字段：先把改动过的元素按原始字节做一次索引，重写时按原顺序取。
+    // 数字数组单独处理（可能 packed），不放进这个索引。
     for (const spec of SCHEMA[typeName]) {
       const [, name, valueType, repeated] = spec;
-      if (repeated && state?.changed?.has(name)) {
+      if (repeated && state?.changed?.has(name) && "uint" !== valueType && "bool" !== valueType) {
         repeatedPool.set(name, new Map(valuesOf(spec).map((value) => [rawOf(value, valueType), value])));
       }
     }
@@ -840,6 +1038,17 @@
       }
       const [, name, valueType, repeated] = field.spec;
       written.add(name);
+
+      // repeated 数字字段可能是 packed 或 unpacked：整体按原形式重写一次，避免逐条对不上。
+      if (repeated && ("uint" === valueType || "bool" === valueType)) {
+        if (!numericWritten.has(name)) {
+          const values = obj[name] ?? [];
+          if (2 === field.wire) parts.push(encodePackedField(field.spec, values));
+          else for (const value of values) parts.push(encodeField(field.spec, value));
+          numericWritten.add(name);
+        }
+        continue;
+      }
 
       if (repeated) {
         const pool = repeatedPool.get(name);
@@ -2155,8 +2364,62 @@
 
   // ---- 播放器响应 ----
 
+  // 字幕翻译：在原字幕轨道后面补一条带 tlang 的翻译轨道，并把它设为默认。
+  // 目标语言本身就在轨道列表里时直接选中它，不再重复添加。
+  function applyCaptionTranslation(player, lang) {
+    const renderer = player.captions?.playerCaptionsTrackListRenderer;
+    const tracks = renderer?.captionTracks;
+    if (!Array.isArray(tracks) || !tracks.length) return false;
+
+    let changed = false;
+    let bestIndex = 0;
+    let bestScore = 0;
+    const target = String(lang).toLowerCase();
+    for (let i = 0; i < tracks.length; i++) {
+      const track = tracks[i];
+      const code = String(track.languageCode ?? "").toLowerCase();
+      const score = code === target ? 2 : /^en(?:-|$)/.test(code) ? 1 : 0;
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = i;
+      }
+      if (track.isTranslatable !== true) changed = setField(track, "isTranslatable", true) || changed;
+    }
+
+    let selected = bestIndex;
+    if (bestScore !== 2) {
+      const base = tracks[bestIndex];
+      const baseUrl = String(base.baseUrl ?? "");
+      if (!baseUrl) return changed;
+      const translated = {
+        baseUrl: `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}tlang=${encodeURIComponent(lang)}`,
+        name: { runs: [{ text: `@Enhance (${lang})` }] },
+        vssId: `.${lang}`,
+        languageCode: lang,
+        isTranslatable: true,
+      };
+      selected = tracks.length;
+      changed = setField(renderer, "captionTracks", [...tracks, translated]) || changed;
+    }
+
+    changed = setField(renderer, "defaultCaptionTrackIndex", selected) || changed;
+    if (Array.isArray(renderer.audioTracks)) {
+      for (const audio of renderer.audioTracks) {
+        const indices = Array.isArray(audio.captionTrackIndices) ? audio.captionTrackIndices : [];
+        if (!indices.includes(selected)) changed = setField(audio, "captionTrackIndices", [...indices, selected]) || changed;
+        changed = setField(audio, "defaultCaptionTrackIndex", selected) || changed;
+        changed = setField(audio, "captionsInitialState", 3) || changed;
+      }
+    }
+    return changed;
+  }
+
   function rewritePlayer(player, options) {
     let changed = filterBrowseTree(player, options);
+
+    if (options.captionLang && "off" !== String(options.captionLang).toLowerCase()) {
+      changed = applyCaptionTranslation(player, options.captionLang) || changed;
+    }
 
     if (false !== options.removePaidPromotion) changed = deleteField(player, "paidPromotion") || changed;
 
@@ -2904,7 +3167,7 @@
   }
 
   function clientKeyFor(request) {
-    return Object.entries(request.headers ?? {}).some(([key, value]) => "user-agent" === key.toLowerCase() && /music/i.test(value)) ? "youtubeMusic" : "youtube";
+    return isMusicRequest(request) ? "youtubeMusic" : "youtube";
   }
 
   function readRequestBody(request) {
@@ -3099,10 +3362,11 @@
   function handleRequest(request) {
     const path = request.url.split("?")[0];
     const options = readOptions();
+    const musicDisabled = isMusicRequest(request) && false === options.youtubeMusic;
 
     try {
-      if (path.endsWith("/player/ad_break")) {
-        $done(false !== options.blockPlayerAds ? emptyProtobufResponse() : undefined);
+      if (path.endsWith("/ad_break")) {
+        $done(!musicDisabled && false !== options.blockPlayerAds ? emptyProtobufResponse() : undefined);
         return;
       }
       if (path.endsWith("/log_event")) {
@@ -3110,6 +3374,10 @@
         return;
       }
       if (path.endsWith("/initplayback")) {
+        if (musicDisabled) {
+          $done(undefined);
+          return;
+        }
         let result = handleInitPlaybackRequest(request, options);
         const body = readRequestBody(request);
         if (!result && body?.length && false !== options.autoHd) {
@@ -3120,6 +3388,10 @@
         return;
       }
       if (path.endsWith("/videoplayback")) {
+        if (musicDisabled) {
+          $done(undefined);
+          return;
+        }
         const body = false === options.autoHd ? undefined : readRequestBody(request);
         if (body?.length) {
           const rewritten = rewriteVideoPlaybackBody(body, request.url);
@@ -3221,15 +3493,7 @@
     guide: [
       "Guide",
       function (node, options) {
-        const hidden = new Set(false === options.hidePremium ? [] : ["SPunlimited"]);
-        String(options.blockGuideItems ?? "")
-          .split(",")
-          .map((item) => item.trim())
-          .filter(Boolean)
-          .forEach((item) => hidden.add(item));
-        if (options.blockUpload) hidden.add("FEuploads");
-        if (options.blockShorts) hidden.add("FEshorts");
-
+        const hidden = new Set(options.hiddenGuideItems ?? []);
         let changed = false;
         walkObjects(node, (item) => {
           const items = item.rendererItems;
@@ -3302,7 +3566,11 @@
       const [typeName, rewrite] = handler;
       const codec = messageCodec(typeName);
       const node = codec.fromBinary(body);
-      const options = readOptions({ blockUpload: true, blockShorts: false });
+      const options = readOptions();
+      if (isMusicRequest($request) && false === options.youtubeMusic) {
+        $done({});
+        return;
+      }
 
       if (false !== options.autoHd) {
         const players = (function () {
@@ -3337,7 +3605,11 @@
         return;
       }
 
-      const options = readOptions({ blockGames: true });
+      const options = readOptions();
+      if (isMusicRequest($request) && false === options.youtubeMusic) {
+        $done({});
+        return;
+      }
       const stored = readStore()[clientKeyFor($request)];
       // clientKey 本身就是 32 字节：前 16 字节做 AES-256 密钥，后 16 字节做 HMAC 密钥。
       // encryptKey 只用来校验 initplayback 请求体，不参与解密。

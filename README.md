@@ -9,18 +9,18 @@
 
 | 模块 | Egern | Loon | 说明 |
 | --- | :---: | :---: | --- |
-| YouTube Enhance | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/youtube-enhance.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/youtube-enhance.plugin) | 去广告、后台播放、PiP、最高 4x 倍速、On-the-go；可屏蔽首页 Shorts 货架、过滤会员专属视频 |
-| Spotify Premium | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/spotify-premium.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/spotify-premium.plugin) | 改写 bootstrap 的 protobuf：去广告、伪装 Premium、解锁顺序/随机播放；官方没有歌词时注入第三方歌词 |
-| Tubi Ad-Free | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/tubi/tubi-adfree.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/tubi/tubi-adfree.plugin) | 去广告：清空内容元数据里的 cue_points，广告接口返回空列表 / 空 VAST，视频流不动，不触发反广告拦截 |
-| Pluto TV Ad-Free | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/pluto-adfree.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/pluto/pluto-adfree.plugin) | 去广告：boot 的 serverSideAds 改成 false，再删掉 HLS 点播清单里的广告段 |
-| Emby Unlock | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/emby/emby-unlock.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/emby/emby-unlock.plugin) | 解锁 Emby iOS 客户端的完整播放：mock mb3admin.com 授权校验；不含服务器端 Premiere |
-| BiliBili Clean | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/bilibili-clean.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/bilibili-clean.plugin) | 去广告、去会员推广、去遥测；详情页与评论区走 gRPC 也一并改写；playurl 自动要最高画质 |
-| Delivery Ad-Free | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/delivery/delivery-adfree.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/delivery/delivery-adfree.plugin) | 京东 / 美团 / 饿了么：拒绝广告域名，MITM 改写美团开屏、点餐广告板与京东促销楼层，保守过滤信息流广告 |
-| CN Video Ad-Free | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/cnvideo/cnvideo-adfree.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/cnvideo/cnvideo-adfree.plugin) | 优酷 / 爱奇艺 / 腾讯视频：拒绝广告、广告 SDK 与遥测域名；纯规则 |
-| ADBlock | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/adblock/adblock.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/adblock/adblock.plugin) | 常见国内外广告 URL 重写拦截 |
-| HTTPDNS Block | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/httpdns/httpdns-block.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/httpdns/httpdns-block.plugin) | 阻止常见的 HTTPDNS 服务器 |
+| YouTube Enhance | [安装](egern:/modules/new?name=YouTube%20Enhance&url=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Fegern%2Fyoutube%2Fyoutube-enhance.yaml) | [安装](loon://import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Floon%2Fyoutube%2Fyoutube-enhance.plugin) | 去广告、字幕翻译、YouTube Music 去广告/后台播放、默认分辨率、首页菜单与 Shorts 过滤、On-the-go；后台播放/PiP 常开 |
+| Spotify Premium | [安装](egern:/modules/new?name=Spotify%20Premium&url=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Fegern%2Fspotify%2Fspotify-premium.yaml) | [安装](loon://import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Floon%2Fspotify%2Fspotify-premium.plugin) | 改写 bootstrap 的 protobuf：去广告、伪装 Premium、解锁顺序/随机播放；官方没有歌词时注入第三方歌词 |
+| Tubi Ad-Free | [安装](egern:/modules/new?name=Tubi%20Ad-Free&url=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Fegern%2Ftubi%2Ftubi-adfree.yaml) | [安装](loon://import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Floon%2Ftubi%2Ftubi-adfree.plugin) | 去广告：清空内容元数据里的 cue_points，广告接口返回空列表 / 空 VAST，视频流不动，不触发反广告拦截 |
+| Pluto TV Ad-Free | [安装](egern:/modules/new?name=Pluto%20TV%20Ad-Free&url=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Fegern%2Fpluto%2Fpluto-adfree.yaml) | [安装](loon://import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Floon%2Fpluto%2Fpluto-adfree.plugin) | 去广告：boot 的 serverSideAds 改成 false，再删掉 HLS 点播清单里的广告段 |
+| Emby Unlock | [安装](egern:/modules/new?name=Emby%20Unlock&url=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Fegern%2Femby%2Femby-unlock.yaml) | [安装](loon://import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Floon%2Femby%2Femby-unlock.plugin) | 解锁 Emby iOS 客户端的完整播放：mock mb3admin.com 授权校验；不含服务器端 Premiere |
+| BiliBili Clean | [安装](egern:/modules/new?name=BiliBili%20Clean&url=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Fegern%2Fbilibili%2Fbilibili-clean.yaml) | [安装](loon://import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Floon%2Fbilibili%2Fbilibili-clean.plugin) | 去广告、去会员推广、去遥测；详情页与评论区走 gRPC 也一并改写；playurl 自动要最高画质 |
+| Delivery Ad-Free | [安装](egern:/modules/new?name=Delivery%20Ad-Free&url=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Fegern%2Fdelivery%2Fdelivery-adfree.yaml) | [安装](loon://import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Floon%2Fdelivery%2Fdelivery-adfree.plugin) | 京东 / 美团 / 饿了么：拒绝广告域名，MITM 改写美团开屏、点餐广告板与京东促销楼层，保守过滤信息流广告 |
+| CN Video Ad-Free | [安装](egern:/modules/new?name=CN%20Video%20Ad-Free&url=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Fegern%2Fcnvideo%2Fcnvideo-adfree.yaml) | [安装](loon://import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Floon%2Fcnvideo%2Fcnvideo-adfree.plugin) | 优酷 / 爱奇艺 / 腾讯视频：拒绝广告、广告 SDK 与遥测域名；纯规则 |
+| ADBlock | [安装](egern:/modules/new?name=ADBlock&url=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Fegern%2Fadblock%2Fadblock.yaml) | [安装](loon://import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Floon%2Fadblock%2Fadblock.plugin) | 常见国内外广告 URL 重写拦截 |
+| HTTPDNS Block | [安装](egern:/modules/new?name=HTTPDNS%20Block&url=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Fegern%2Fhttpdns%2Fhttpdns-block.yaml) | [安装](loon://import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Floon%2Fhttpdns%2Fhttpdns-block.plugin) | 阻止常见的 HTTPDNS 服务器 |
 
-表格里的「安装」就是模块的 raw URL，可直接粘贴到对应 App 的导入框。
+表格里的「安装」使用 App 的 URL scheme（`egern:/modules/new`、`loon://import`），点击会直接唤起对应 App 并带上模块地址，不再跳转到 raw 文件页面。若在桌面浏览器里打开，需要手动允许跳转。
 
 > `loon/local-reflect/local-reflect.plugin` 是本机开发用的服务回环插件（把发往 `10.7.0.1` 的连接反射回本机），不属于通用模块，未列入上表。
 
@@ -28,7 +28,7 @@
 
 ### Egern
 
-在 Egern → 模块 → 添加模块，粘贴 YAML 的 raw URL；也可以写进主配置：
+直接点表格里的「安装」会通过 `egern:/modules/new?name=…&url=…` 唤起 Egern 并导入；也可以手动在 Egern → 模块 → 添加模块里粘贴 YAML 的 raw URL，或写进主配置：
 
 ```yaml
 modules:
@@ -39,7 +39,7 @@ modules:
 
 ### Loon
 
-在 Loon → 插件 → 右上角 `+` → 从 URL 导入，粘贴 plugin 的 raw URL。
+直接点表格里的「安装」会通过 `loon://import?plugin=…` 唤起 Loon 并导入；也可以手动在 Loon → 插件 → 右上角 `+` → 从 URL 导入，粘贴 plugin 的 raw URL。
 
 ## 通用要求
 

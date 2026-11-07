@@ -1,46 +1,32 @@
 #!name=YouTube Enhance
-#!desc=屏蔽广告，启用后台播放、画中画、最高 4 倍速与 On-the-go 控件。\n脚本已重写并合并为单文件；原始逻辑来自 Maasea 的代码 (Apache-2.0)。
+#!desc=屏蔽广告、字幕翻译、YouTube Music 去广告/后台播放、默认分辨率、首页菜单与 Shorts 过滤、On-the-go；后台播放与 PiP 常开。\n脚本已重写并合并为单文件；原始逻辑来自 Maasea 的代码 (Apache-2.0)。
 #!author=xzavier-amico
 #!homepage=https://github.com/xzavier-amico/modules
-#!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/icon/YouTube.png
+#!icon=https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/YouTube.png
 #!tag=YouTube
 #!system=iOS,iPadOS,macOS,tvOS
 
 [Argument]
-block_upload = switch,true,type=boolean,tag=移除上传入口,desc=移除侧栏中的「上传」入口。
-block_shorts = switch,false,type=boolean,tag=移除 Shorts 入口,desc=移除侧栏中的 Shorts 入口。
-block_shorts_feed = switch,false,type=boolean,tag=屏蔽首页 Shorts,desc=移除首页列表中的 Shorts 推荐货架。
-block_members_only = switch,false,type=boolean,tag=过滤会员专属视频,desc=移除首页、频道页等列表中需要频道会员才能观看的视频。
-auto_hd = switch,true,type=boolean,tag=自动高清,desc=优先选择可用的最高分辨率；已授权 Premium 时使用高码率。
-block_games = switch,true,type=boolean,tag=屏蔽 Playables,desc=移除首页的 Playables 小游戏。
-block_vertical_live = switch,false,type=boolean,tag=屏蔽竖屏直播,desc=移除首页的竖屏直播内容。
+block_ads = switch,true,type=boolean,tag=屏蔽广告,desc=播放器 / 信息流 / Shorts 广告、付费推广、广告追踪、Premium 推广、创作者商店一次关掉。
+block_ai = switch,true,type=boolean,tag=移除 AI 组件,desc=移除 Ask、AI 摘要及相关控件。
+max_height = select,"max","4320","2160","1440","1080","720","480","off",type=string,tag=默认分辨率,desc=max 表示最高可用；off 表示不修改画质。
+caption_lang = select,"zh-Hans","zh-Hant","en","ja","ko","es","fr","de","ru","pt","it","vi","th","id","ar","hi","tr","pl","nl","off",type=string,tag=字幕翻译,desc=选择默认翻译语言；off 关闭字幕翻译。
+home_menu = input,"",type=string,tag=首页菜单保留项,desc=多选：填写要保留的入口，逗号分隔。留空表示仅隐藏上传；all 表示全部保留；none 表示全部隐藏；-shorts 表示保留全部但隐藏 Shorts。支持 upload/shorts/explore/music/history/playlists/downloads/trending/library/later/liked 或 browseId。
+block_shorts_feed = switch,false,type=boolean,tag=移除 Shorts 推荐,desc=移除首页、搜索和推荐信息流中的 Shorts 货架。
+on_the_go = switch,true,type=boolean,tag=On-The-Go,desc=启用 On-the-go 控件，音频模式与章节按钮一并启用。
+youtube_music = switch,true,type=boolean,tag=YouTube Music 增强,desc=YouTube Music 去广告、后台播放、PiP。
+block_members_only = switch,false,type=boolean,tag=屏蔽会员专属视频,desc=从首页、频道页等列表中移除需要频道会员才能观看的视频。
+home_cleanup = select,"standard","all","off",type=string,tag=首页内容清理,desc=standard 表示 Playables；all 表示再加竖屏直播；off 表示不清理。
 jump_ahead = switch,true,type=boolean,tag=Jump Ahead 按钮,desc=启用播放器中的 Jump Ahead 快进按钮。
-block_store = switch,true,type=boolean,tag=屏蔽创作者商店,desc=移除创作者商店、商品卡片与相关悬浮层。
-block_ai = switch,true,type=boolean,tag=屏蔽 Ask / AI,desc=移除 Ask、AI 摘要及相关控件。
-on_the_go = switch,true,type=boolean,tag=On-the-go 控件,desc=在界面组件可用时启用 On-the-go 控件。
-background_play = switch,true,type=boolean,tag=后台播放,desc=启用后台播放能力，并在设置页强制打开后台播放。
-pip = switch,true,type=boolean,tag=画中画,desc=启用画中画（PiP）能力。
 max_speed = select,"4","3","2","off",type=string,tag=最大倍速,desc=允许的最高播放倍速；选 off 表示不修改倍速数值与倍速上限。
-hide_premium = switch,true,type=boolean,tag=隐藏 Premium 推广,desc=隐藏侧栏 Premium 入口和播放器倍速菜单中的 Premium 推广。
-prefer_premium = switch,true,type=boolean,tag=优先 Premium 码率,desc=自动高清时若有 Premium 高码率版本则优先使用。
-max_height = select,4320,2160,1440,1080,720,480,type=number,tag=最大分辨率,desc=自动高清允许的最高分辨率（像素高度），默认 4320。
-block_player_ads = switch,true,type=boolean,tag=屏蔽播放器广告,desc=移除播放器广告位并让 ad_break 返回空响应。
-block_feed_ads = switch,true,type=boolean,tag=屏蔽信息流广告,desc=移除首页、搜索和推荐信息流中的广告卡片。
-block_shorts_ads = switch,true,type=boolean,tag=屏蔽 Shorts 广告,desc=移除 Shorts 列表中的广告条目。
-remove_paid_promotion = switch,true,type=boolean,tag=移除付费推广,desc=移除播放器响应中的付费推广与推广内容字段。
-block_ad_tracking = switch,true,type=boolean,tag=屏蔽广告追踪,desc=移除播放跟踪中的广告转化字段。
-block_guide_items = input,"",type=string,tag=隐藏侧栏入口,desc=额外隐藏的侧栏入口 browseId，多个用英文逗号分隔（例如 FEuploads、FEshorts）。
-on_the_go_audio = switch,true,type=boolean,tag=On-the-go 音频模式,desc=在 On-the-go 控件中加入音频模式切换按钮。
-on_the_go_chapters = switch,true,type=boolean,tag=On-the-go 章节,desc=在 On-the-go 控件中加入章节按钮。
-strip_hot_hash = switch,true,type=boolean,tag=移除热更新哈希头,desc=移除 log_event 请求中的 x-youtube-hot-hash-data 响应头，避免热更新配置覆盖。
 
 [Script]
-request if ${url} ~= /^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/(?:player\/ad_break|log_event)(?:\?.*)?$|^https?:\/\/[\w-]+\.googlevideo\.com\/(?:initplayback|videoplayback)(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.js", {${block_upload}, ${block_shorts}, ${block_shorts_feed}, ${block_members_only}, ${auto_hd}, ${block_games}, ${block_vertical_live}, ${jump_ahead}, ${block_store}, ${block_ai}, ${on_the_go}, ${background_play}, ${pip}, ${max_speed}, ${hide_premium}, ${prefer_premium}, ${max_height}, ${block_player_ads}, ${block_feed_ads}, ${block_shorts_ads}, ${remove_paid_promotion}, ${block_ad_tracking}, ${block_guide_items}, ${on_the_go_audio}, ${on_the_go_chapters}, ${strip_hot_hash}}) with requires_body=true, binary_body_mode=true, tag="youtube.enhance.request", timeout=30
-response if ${url} ~= /^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/(?:navigation\/resolve_url|browse|next|player|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch|config|log_event)(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.js", {${block_upload}, ${block_shorts}, ${block_shorts_feed}, ${block_members_only}, ${auto_hd}, ${block_games}, ${block_vertical_live}, ${jump_ahead}, ${block_store}, ${block_ai}, ${on_the_go}, ${background_play}, ${pip}, ${max_speed}, ${hide_premium}, ${prefer_premium}, ${max_height}, ${block_player_ads}, ${block_feed_ads}, ${block_shorts_ads}, ${remove_paid_promotion}, ${block_ad_tracking}, ${block_guide_items}, ${on_the_go_audio}, ${on_the_go_chapters}, ${strip_hot_hash}}) with requires_body=true, binary_body_mode=true, tag="youtube.enhance.response", timeout=60
-response if ${url} ~= /^https?:\/\/[\w-]+\.googlevideo\.com\/initplayback(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.js", {${block_upload}, ${block_shorts}, ${block_shorts_feed}, ${block_members_only}, ${auto_hd}, ${block_games}, ${block_vertical_live}, ${jump_ahead}, ${block_store}, ${block_ai}, ${on_the_go}, ${background_play}, ${pip}, ${max_speed}, ${hide_premium}, ${prefer_premium}, ${max_height}, ${block_player_ads}, ${block_feed_ads}, ${block_shorts_ads}, ${remove_paid_promotion}, ${block_ad_tracking}, ${block_guide_items}, ${on_the_go_audio}, ${on_the_go_chapters}, ${strip_hot_hash}}) with requires_body=true, binary_body_mode=true, tag="youtube.enhance.ump", timeout=60
+request if ${url} ~= /^https:\/\/(?:youtubei\.googleapis\.com|music\.youtube\.com)\/youtubei\/v1\/(?:(?:player|music)\/ad_break|log_event)(?:\?.*)?$|^https?:\/\/[\w-]+\.googlevideo\.com\/(?:initplayback|videoplayback)(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.js", {${block_ads}, ${block_ai}, ${max_height}, ${caption_lang}, ${home_menu}, ${block_shorts_feed}, ${on_the_go}, ${youtube_music}, ${block_members_only}, ${home_cleanup}, ${jump_ahead}, ${max_speed}}) with requires_body=true, binary_body_mode=true, tag="youtube.enhance.request", timeout=30
+response if ${url} ~= /^https:\/\/(?:youtubei\.googleapis\.com|music\.youtube\.com)\/youtubei\/v1\/(?:navigation\/resolve_url|browse|next|player|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch|config|log_event)(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.js", {${block_ads}, ${block_ai}, ${max_height}, ${caption_lang}, ${home_menu}, ${block_shorts_feed}, ${on_the_go}, ${youtube_music}, ${block_members_only}, ${home_cleanup}, ${jump_ahead}, ${max_speed}}) with requires_body=true, binary_body_mode=true, tag="youtube.enhance.response", timeout=60
+response if ${url} ~= /^https?:\/\/[\w-]+\.googlevideo\.com\/initplayback(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.js", {${block_ads}, ${block_ai}, ${max_height}, ${caption_lang}, ${home_menu}, ${block_shorts_feed}, ${on_the_go}, ${youtube_music}, ${block_members_only}, ${home_cleanup}, ${jump_ahead}, ${max_speed}}) with requires_body=true, binary_body_mode=true, tag="youtube.enhance.ump", timeout=60
 [Rewrite]
 request if ${url} ~= /^https:\/\/www\.youtube\.com\/(pagead|pcs)\// then reject(404)
 request if ${url} ~= /^https:\/\/s\.youtube\.com\/api\/stats\/ads/ then reject(404)
 
 [MitM]
-hostname = *.googlevideo.com, youtubei.googleapis.com, www.youtube.com, s.youtube.com
+hostname = *.googlevideo.com, youtubei.googleapis.com, www.youtube.com, music.youtube.com, s.youtube.com
