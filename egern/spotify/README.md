@@ -45,6 +45,11 @@ premium、关掉广告位、移除免费版的试听时长上限与队列/随机
    放行；官方没有（404 / 空歌词）就取 `open.spotify.com/oembed` 的曲名歌手，
    去配置的歌词源找，合成 Spotify 的 protobuf 歌词返回。
 
+   合成时 `LyricsData.restriction`（字段 14）固定写 1 = `showLyrics`。枚举是
+   `0 unrestricted / 1 showLyrics / 2 showLyricsMonthlyLimit / 3 monthlyLimitReached`，
+   缺省 0 时客户端只显示 Now Playing 里那行预览，不出「查看完整歌词」的入口。
+   官方 200 的响应如果带 2 / 3（免费号每月额度），也一并改回 1。
+
 另外 `js/spotify_premium.js` 改 `ios-feature-lyrics` 下的三个 UCS 开关：
 
 - `enable_lyrics`、`is_get_lyrics_v2_enabled` → true

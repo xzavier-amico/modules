@@ -549,7 +549,9 @@
     }
     const lyrics = pbUint(1, syncType === "LINE_SYNCED" ? 1 : 0)
       .concat(lineOut)
-      .concat(pbBytes(5, encoder.encode(provider || "LRCLIB")));
+      .concat(pbBytes(5, encoder.encode(provider || "LRCLIB")))
+      // restriction = 1 (showLyrics)。缺省是 0，客户端会当成「没有歌词页」。
+      .concat(pbUint(14, 1));
     // colors 必须给：客户端拿它刷歌词页的背景和文字，字段缺失时是 0，alpha 也是 0，
     // 整页歌词就成了透明的 —— 表现是「封面下面那行有，点进歌词页一片空白」。
     // 取值是 ARGB（见 EeveeSpotify 的 Color.uInt32），这里用深底浅字，不依赖封面取色。
@@ -579,8 +581,11 @@
     return 0;
   }
 
-  // 把 LyricsData.restriction（字段 14）去掉。没有这个字段就返回 null，
-  // 调用方据此原样放行，不动官方响应的任何一个字节。
+  // 把 LyricsData.restriction（字段 14）统一成 1 = showLyrics。
+  //
+  // 枚举：0 unrestricted / 1 showLyrics / 2 showLyricsMonthlyLimit / 3 monthlyLimitReached。
+  // 免费号的每月额度用完时服务端回 3，客户端只弹额度提示、不出歌词页；这里一律
+  // 改回 1。没有这个字段、或者本来就是 1，就返回 null，调用方原样放行。
   function stripRestrictionProto(bytes) {
     let top;
     try {
@@ -602,7 +607,11 @@
       for (let j = 0; j < inner.length; j += 1) {
         const g = inner[j];
         if (g.field === 14 && g.wire === 0) {
-          changed = true;
+          if (g.value !== 1) {
+            g.value = 1;
+            changed = true;
+          }
+          outInner.push(pbEncodeField(g));
           continue;
         }
         outInner.push(pbEncodeField(g));

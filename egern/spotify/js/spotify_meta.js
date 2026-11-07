@@ -74,28 +74,31 @@
       return;
     }
 
-    // 临时探针：确认到底哪条响应被改了。验证通过后删掉。
-    // 每个来源只提示一次，避免滚动/轮询刷屏。
+    // 临时探针：确认到底哪条响应被改了、改的是哪首。验证通过后删掉。
+    // 30 秒内只提示一次，避免滚动/轮询刷屏。
     try {
-      const key = "spotify_lyrics_seen_" + source;
-      let seen = false;
+      const now = Date.now();
+      let last = 0;
       try {
-        seen = typeof $persistentStore !== "undefined" && $persistentStore && !!$persistentStore.read(key);
+        last = Number(($persistentStore && $persistentStore.read("spotify_lyrics_last")) || 0) || 0;
       } catch (e) {
-        seen = false;
+        last = 0;
       }
       if (
-        !seen &&
+        now - last > 30000 &&
         url.indexOf("connect-state") < 0 &&
         typeof $notification !== "undefined" && $notification && "function" == typeof $notification.post
       ) {
         try {
-          $persistentStore.write("1", key);
+          $persistentStore.write(String(now), "spotify_lyrics_last");
         } catch (e) {
           // 存储失败就退回每次都提示
         }
-        const path = String(url).replace(/^https?:\/\/[^/]+/, "");
-        $notification.post("Spotify 歌词", "已放开 " + stat.n + " 首", source + " " + path.slice(0, 72));
+        $notification.post(
+          "Spotify 歌词",
+          "已放开 " + stat.n + " 首",
+          source + " " + String(stat.last || "").slice(-14),
+        );
       }
     } catch (e) {
       // 通知失败不影响改写
@@ -320,14 +323,17 @@
   const encodeEntry = (key, value) => serialize([fieldString(1, key), fieldString(2, value)]);
 
   // EntityExtensionDataArray：field 2 = extension_kind，field 3 = EntityExtensionData[]
+  // 不按 extension_kind 过滤：只要数组里有 spotify:track: 的实体就当成 Track 数组，
+  // 这样客户端换用别的 extension kind 取 Track 时也能命中。
   function isTrackArray(fields) {
-    const kind = first(fields, 2);
-    if (!kind || kind.w !== 0 || kind.v !== TRACK_V4) return false;
-    const data = first(fields, 3);
-    if (!data || data.w !== 2) return false;
-    const ed = parse(data.p);
-    const uri = ed && text(first(ed, 2));
-    return !!uri && uri.indexOf("spotify:track:") === 0;
+    for (const f of fields) {
+      if (f.no !== 3 || f.w !== 2) continue;
+      const ed = parse(f.p);
+      if (!ed) continue;
+      const uri = text(first(ed, 2));
+      if (uri && uri.indexOf("spotify:track:") === 0) return true;
+    }
+    return false;
   }
 
   function patchTrackArray(fields, stat) {
@@ -347,12 +353,18 @@
       const value = first(any, 2);
       if (!value || value.w !== 2) continue;
 
+      // 只认 type_url 以 .Track 结尾的 Any，别把 Album / Artist / TrackDescriptor
+      // 当成 Track 改（字段 18 在别的消息里可能是别的东西）。
+      const typeUrl = text(first(any, 1));
+      if (typeUrl && !/\.Track$/.test(typeUrl)) continue;
+
       const track = parse(value.p);
       if (!track) continue;
       if (patchTrack(track, stat)) {
         value.p = serialize(track);
         anyField.p = serialize(any);
         f.p = serialize(ed);
+        stat.last = uri;
         changed = true;
       }
     }
@@ -391,6 +403,7 @@
           f.p = encodeEntry(MARK, "true");
           changed = true;
           stat.n++;
+          stat.last = text(first(fields, 1)) || stat.last;
         }
         continue;
       }
@@ -424,6 +437,7 @@
         fields.push({ no: 3, w: 2, p: encodeEntry(MARK, "true") });
         changed = true;
         stat.n++;
+        stat.last = text(first(fields, 1)) || stat.last;
       }
     }
 
