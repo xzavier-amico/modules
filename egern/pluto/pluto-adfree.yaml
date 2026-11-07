@@ -19,7 +19,7 @@
 #=======================================================================================
 
 name: "Pluto TV Ad-Free"
-description: "去广告：boot 的 serverSideAds 改成 false，再把 HLS 清单里的广告段（_ad/creative、_ad_bumper、CUE-OUT 区间）删掉。"
+description: "去广告：boot 的 serverSideAds 改成 false，再按 clip 分组删掉 HLS 点播清单里的广告段。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"
 icon: "https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Streaming.png"
@@ -66,6 +66,15 @@ scriptings:
       name: "pluto.hls"
       match: "^https?:\\/\\/[^\\/]*(?:pluto\\.tv|plutotv\\.net)\\/[^?]*\\.m3u8"
       script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_hls.js"
+      body_required: true
+      timeout: 10
+      env:
+        _compat.$argument: '{"block_ads":{{{block_ads}}}}'
+  # 第三道：把会话里的 adBreaks 清空，进度条广告块和左上角 Ad 角标跟着消失（直播跳过）。
+  - http_response:
+      name: "pluto.session"
+      match: "^https?:\\/\\/[^\\/]*pluto\\.tv\\/[^?]*session\\.json"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_session.js"
       body_required: true
       timeout: 10
       env:

@@ -40,20 +40,41 @@ GET https://boot.pluto.tv/v4/start?...&serverSideAds=true
 
 ## 第二道：清单里删广告段
 
-`serverSideAds=false` 之后 stitcher 不再缝第三方广告，但还有两样东西留得下来：
+`serverSideAds=false` 之后 stitcher 仍然会在广告位塞东西。实测一份美国直播流的清单，
+广告时段长这样：
 
-- 转场 bumper：分片名里带 `_ad_bumper` 的 Pluto 台标动画，5~25 秒
-- 部分片源残留的 `_ad/creative`，常见形式是百分号编码的 `_ad%2Fcreative`
+```
+#EXT-X-DISCONTINUITY
+#EXT-X-PROGRAM-DATE-TIME:2026-11-07T03:23:47.667Z
+#EXT-X-KEY:...URI=".../494_Pluto_TV_OandO/clip/58e5..._plutotv_error_30_.../hls_300_keyfile_0.key"
+#EXTINF:5,
+https://siloh-ns1.plutotv.net/494_Pluto_TV_OandO/clip/58e5..._plutotv_error_30_.../hls_300-00000.ts
+```
 
-所以再加一层清单过滤：命中这些标记的分片整段删掉；另外落在
-`#EXT-X-CUE-OUT` 与 `#EXT-X-CUE-IN` 之间的分片也一并删，这样不依赖分片命名。
+关键点：**广告没有任何 `_ad/creative` 标记，也没有 `EXT-X-CUE-OUT`**，它就是
+另一个 clip 的分片——路径前缀和正片（`.../c6009f_pluto/clip/604b...`）完全不同。
+
+所以按 clip 目录分组判断：同一部片子的分片都在同一个目录下，广告来自别的目录。
+按目录累计时长，占绝对大头的就是正片，占比很小的目录整组删掉。另外两种老形态
+（`_ad_bumper` 标记、`CUE-OUT` 区间）也一并兼容。
 
 几条安全边界：
 
-- 只处理点播清单（有 `#EXT-X-ENDLIST`、且不是 master）。直播清单原样放行——
-  直播的广告就是当时的播出内容，删段会让时间轴错位、反复重缓冲。
-- 删段时保留 `#EXT-X-DISCONTINUITY`：广告前后的正片来自不同编码，时间戳本来就有跳变。
-- 裁掉超过 40% 时长视为判断错了，整份清单原样放行——宁可留广告，不能把正片删了。
+- 只处理点播清单（有 `#EXT-X-ENDLIST`、声明 `PLAYLIST-TYPE:VOD`，或长清单且
+  media sequence 为 0）。直播清单原样放行——直播删段会让客户端在缓冲里跳段。
+- 删完只在相邻两段来自不同 clip 时补 `#EXT-X-DISCONTINUITY`；同一 clip 内部是连续的，
+  多插一个反而会让播放器误判时间戳跳变。
+- 保留时长不足 60% 视为判断错了，整份清单原样放行——宁可留广告，不能把正片删了。
+
+## 第三道：清掉会话里的 adBreaks
+
+进度条上的广告块、左上角的 Ad 角标、广告期间禁止拖动，都来自 stitcher 会话
+（`/v3/session.json`）里的 `adBreaks` 数组。清单里的广告段删掉之后，这份元数据
+也得跟着清空，否则会出现「画面已经是正片，进度条还在报广告」的错位。
+
+`pluto_session.js` 把 `adBreaks` 换成 `[]`，只做字符串级替换，不解析整份 JSON
+（点播会话约 1.7MB）。直播会话（`streamType: "channel"`）不动——直播广告删不掉，
+角标留着至少能知道现在在广告里。
 
 ## 规则
 

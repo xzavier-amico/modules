@@ -1,20 +1,24 @@
 // Pluto TV Ad-Free — HLS 清单过滤（Loon / Egern）.
 //
-// boot 那边把 serverSideAds 改成 false 之后，stitcher 不再往清单里缝第三方广告，
-// 但转场 bumper 还在（分片名带 _ad_bumper），部分片源也会残留 _ad/creative 的广告段。
-// 这里在清单层面把带广告标记的分片整段删掉：
+// 实测一份带广告的清单（美国直播流，广告时段）长这样：
 //
-//   _ad/creative、_ad%2Fcreative、_ad_bumper
+//   #EXT-X-DISCONTINUITY
+//   #EXT-X-PROGRAM-DATE-TIME:2026-11-07T03:23:47.667Z
+//   #EXT-X-KEY:...URI=".../494_Pluto_TV_OandO/clip/58e5..._plutotv_error_30_.../hls_300_keyfile_0.key"
+//   #EXTINF:5,
+//   https://siloh-ns1.plutotv.net/494_Pluto_TV_OandO/clip/58e5..._plutotv_error_30_.../hls_300-00000.ts
 //
-// 另外按 HLS 标准的广告区间标记兜底：落在 #EXT-X-CUE-OUT 与 #EXT-X-CUE-IN 之间的
-// 分片一并删掉，这样不依赖分片命名也能命中。
+// 也就是说：广告没有 _ad/creative 这类标记，也没有 EXT-X-CUE-OUT，它只是
+// **另一个 clip 的分片**，路径前缀和正片完全不同（正片是 .../c6009f_pluto/clip/604b...）。
 //
-// 只处理点播清单（有 #EXT-X-ENDLIST、且不是 master）。直播清单原样放行——直播的
-// 广告就是当时的播出内容，删段会让时间轴错位、反复重缓冲。
+// 所以按「clip 分组」判断：同一部片子所有分片都在同一个目录下，广告来自别的目录。
+// 按目录累计时长，占绝对大头的就是正片，占比很小的目录整组删掉。
 //
-// 删段时保留 #EXT-X-DISCONTINUITY：广告前后的正片来自不同编码，时间戳本来就有跳变，
-// 去掉会让播放器接不上。EXT-X-CUE-OUT / CUE-IN 则去掉，广告没了就不该再有倒计时。
-// 裁掉超过 40% 时长视为异常，整份清单原样放行——宁可留广告，不能把正片删了。
+// 只处理点播清单。直播清单原样放行——直播删段会让客户端在缓冲里跳段、反复重缓冲。
+//
+// 删完按目录变化补 DISCONTINUITY：只有相邻两段来自不同 clip 时才需要，同一 clip
+// 内部是连续的，多插一个反而会让播放器误判时间戳跳变。EXT-X-CUE-OUT / CUE-IN 一并去掉。
+// 保留时长不足 60% 视为判断错了，整份清单原样放行——宁可留广告，不能把正片删了。
 
 (() => {
   "use strict";
@@ -80,12 +84,8 @@
     return;
   }
 
-  // master 清单里没有分片；没有 ENDLIST 的是直播清单。都不动。
+  // master 清单里没有分片，直接放行。
   if (body.indexOf("#EXT-X-STREAM-INF") >= 0) {
-    $done({});
-    return;
-  }
-  if (body.indexOf("#EXT-X-ENDLIST") < 0) {
     $done({});
     return;
   }
@@ -132,40 +132,66 @@
   }
   const tail = next;
 
+  // 点播判定：有 ENDLIST 或声明 VOD 都算；长清单 + media sequence 0 也算
+  // （有的 stitcher 不给点播清单加 ENDLIST）。
+  let mediaSeq = -1;
+  const mseq = /#EXT-X-MEDIA-SEQUENCE:\s*(\d+)/i.exec(body);
+  if (mseq) mediaSeq = parseInt(mseq[1], 10);
+  const isVod =
+    body.indexOf("#EXT-X-ENDLIST") >= 0 ||
+    /#EXT-X-PLAYLIST-TYPE:\s*VOD/i.test(body) ||
+    (blocks.length >= 60 && mediaSeq === 0);
+  if (!isVod) {
+    $done({});
+    return;
+  }
+
+  // clip 目录：同一部片子的分片都在同一个目录下，广告来自别的目录。
+  const keyOf = (u) => {
+    const noq = u.split("?")[0];
+    const i = noq.lastIndexOf("/");
+    return i > 0 ? noq.slice(0, i) : noq;
+  };
+
+  const groupDur = Object.create(null);
+  let total = 0;
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    if (!b.uri) continue;
+    total += b.dur;
+    const k = keyOf(b.uri);
+    groupDur[k] = (groupDur[k] || 0) + b.dur;
+  }
+  let biggest = 0;
+  for (const k in groupDur) if (groupDur[k] > biggest) biggest = groupDur[k];
+
   const isAdUri = (u) =>
     /_ad(?:%2F|%252F|\/)(?:creative|bumper)/i.test(u) || /_ad[_-]?bumper/i.test(u);
   const isTag = (t, name) => new RegExp("^#EXT-X-" + name, "i").test(t);
 
   const kept = [];
-  let total = 0;
   let keptDur = 0;
   let dropped = 0;
   let inCue = false;
-  let carryDisc = false;
 
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i];
-    total += b.dur;
-
     let hasOut = false;
     let hasIn = false;
-    let hasDisc = false;
     for (let j = 0; j < b.tags.length; j++) {
       if (isTag(b.tags[j], "CUE-OUT")) hasOut = true;
       else if (isTag(b.tags[j], "CUE-IN")) hasIn = true;
-      else if (isTag(b.tags[j], "DISCONTINUITY")) hasDisc = true;
     }
     if (hasIn) inCue = false;
     if (hasOut) inCue = true;
 
-    if (b.uri && (isAdUri(b.uri) || inCue)) {
+    const k = b.uri ? keyOf(b.uri) : "";
+    // 广告判定：带广告标记 / 落在 CUE 区间 / 所在 clip 目录占比明显偏小。
+    const smallGroup = k && biggest > 0 && groupDur[k] < biggest * 0.5;
+    if (b.uri && (isAdUri(b.uri) || inCue || smallGroup)) {
       dropped++;
-      if (hasDisc) carryDisc = true;
       continue;
     }
-
-    if (carryDisc && !hasDisc) b.tags.unshift("#EXT-X-DISCONTINUITY");
-    carryDisc = false;
     kept.push(b);
     keptDur += b.dur;
   }
@@ -174,20 +200,29 @@
     $done({});
     return;
   }
-  // 过度裁剪保护：正片本来就占大头，裁掉一半以上说明标记判断错了。
-  if (total > 0 && keptDur < total * 0.4) {
+  if (total > 0 && keptDur < total * 0.6) {
     $done({});
     return;
   }
 
   const out = head.slice();
+  let prevKey = null;
   for (let i = 0; i < kept.length; i++) {
-    const tags = kept[i].tags;
-    for (let j = 0; j < tags.length; j++) {
-      if (isTag(tags[j], "CUE-OUT") || isTag(tags[j], "CUE-IN")) continue;
-      out.push(tags[j]);
+    const b = kept[i];
+    const k = keyOf(b.uri);
+    const tags = [];
+    let hasDisc = false;
+    for (let j = 0; j < b.tags.length; j++) {
+      const t = b.tags[j];
+      if (isTag(t, "CUE-OUT") || isTag(t, "CUE-IN")) continue;
+      if (isTag(t, "DISCONTINUITY")) hasDisc = true;
+      tags.push(t);
     }
-    out.push(kept[i].uri);
+    // 相邻两段来自不同 clip 才需要 discontinuity，同一 clip 内部是连续的。
+    if (prevKey !== null && k !== prevKey && !hasDisc) tags.unshift("#EXT-X-DISCONTINUITY");
+    for (let j = 0; j < tags.length; j++) out.push(tags[j]);
+    out.push(b.uri);
+    prevKey = k;
   }
   for (let i = 0; i < tail.length; i++) {
     if (isTag(tail[i], "CUE-OUT") || isTag(tail[i], "CUE-IN")) continue;

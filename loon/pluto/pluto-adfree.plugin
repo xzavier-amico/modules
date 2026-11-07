@@ -1,5 +1,5 @@
 #!name=Pluto TV Ad-Free
-#!desc=去广告：boot 的 serverSideAds 改成 false，再把 HLS 清单里的广告段（_ad/creative、_ad_bumper、CUE-OUT 区间）删掉。
+#!desc=去广告：boot 的 serverSideAds 改成 false，再按 clip 分组删掉 HLS 点播清单里的广告段。
 #!category=Pluto TV
 #!author=xzavier-amico
 #!homepage=https://github.com/xzavier-amico/modules
@@ -21,6 +21,8 @@ DOMAIN-SUFFIX,springserve.com,REJECT
 request if ${url} ~= /^https?:\/\/boot\.pluto\.tv\/v4\/start/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/pluto/js/pluto_adfree.js", {${block_ads}}) with requires_body=true, tag="Pluto TV Ad-Free", timeout=10
 # 第二道：点播清单里按广告标记删段（直播清单脚本内部会跳过）。
 response if ${url} ~= /^https?:\/\/[^\/]*(?:pluto\.tv|plutotv\.net)\/[^?]*\.m3u8/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/pluto/js/pluto_hls.js", {${block_ads}}) with requires_body=true, tag="Pluto TV HLS", timeout=10
+# 第三道：把会话里的 adBreaks 清空，进度条广告块和左上角 Ad 角标跟着消失（直播跳过）。
+response if ${url} ~= /^https?:\/\/[^\/]*pluto\.tv\/[^?]*session\.json/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/pluto/js/pluto_session.js", {${block_ads}}) with requires_body=true, tag="Pluto TV Session", timeout=10
 
 [MitM]
 hostname = boot.pluto.tv, pluto.tv, *.pluto.tv, *.prd.pluto.tv
