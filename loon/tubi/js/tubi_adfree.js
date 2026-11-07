@@ -185,7 +185,9 @@
         finish(JSON.stringify(data));
         return;
       }
-      log("json untouched " + text.length + "B: " + host + path);
+      // 内容 / 接口 JSON 大部分本来就没有广告字段，只在广告主机上记这条，
+      // 否则每次搜索、详情、推荐都会刷一行，真正有用的 rewrite 反而找不到。
+      if (isAdHost) log("json untouched " + text.length + "B: " + host + path);
       $done({});
       return;
     }
