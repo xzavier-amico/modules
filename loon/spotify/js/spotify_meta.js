@@ -96,6 +96,27 @@
         }
         while (merged.length > 60) merged.shift();
         $persistentStore.write(merged.join(","), "spotify_patched_ids");
+
+        // 见到过但本来就是 true 的曲目也记一份，好区分「没改到」和「不用改」。
+        const seen = stat.seen || [];
+        if (seen.length) {
+          const seenIds = [];
+          for (let i = 0; i < seen.length; i += 1) {
+            const u = String(seen[i] || "");
+            const at = u.lastIndexOf(":");
+            if (at >= 0 && at < u.length - 1) seenIds.push(u.slice(at + 1));
+          }
+          const prevSeen = String($persistentStore.read("spotify_seen_ids") || "")
+            .split(",")
+            .filter(Boolean);
+          const mergedSeen = [];
+          const allSeen = prevSeen.concat(seenIds);
+          for (let i = 0; i < allSeen.length; i += 1) {
+            if (allSeen[i] && mergedSeen.indexOf(allSeen[i]) < 0) mergedSeen.push(allSeen[i]);
+          }
+          while (mergedSeen.length > 120) mergedSeen.shift();
+          $persistentStore.write(mergedSeen.join(","), "spotify_seen_ids");
+        }
       }
     } catch (e) {
       // 存储失败不影响改写
@@ -399,6 +420,8 @@
 
       const track = parse(value.p);
       if (!track) continue;
+      if (!stat.seen) stat.seen = [];
+      if (stat.seen.length < 128) stat.seen.push(uri);
       if (patchTrack(track, stat)) {
         value.p = serialize(track);
         anyField.p = serialize(any);
@@ -470,6 +493,11 @@
 
     // 上下文里缺这个 entry 时补一条。
     if (isContextTrack(fields)) {
+      const ctxUri = text(first(fields, 1));
+      if (ctxUri) {
+        if (!stat.seen) stat.seen = [];
+        if (stat.seen.length < 128) stat.seen.push(ctxUri);
+      }
       let present = false;
       for (const f of fields) {
         if (f.no !== 3 || f.w !== 2) continue;

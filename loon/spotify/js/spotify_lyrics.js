@@ -80,8 +80,17 @@
   // 「已改」但界面还是不出歌词页 = 卡在客户端进程内的开关上，代理层无解。
   try {
     const store = typeof $persistentStore !== "undefined" && $persistentStore;
-    const list = String((store && store.read("spotify_patched_ids")) || "").split(",");
-    notifyOnce("meta_" + trackId, list.indexOf(trackId) >= 0 ? "元数据已改" : "元数据未改");
+    const read = (key) => String((store && store.read(key)) || "").split(",");
+    const patched = read("spotify_patched_ids");
+    const seen = read("spotify_seen_ids");
+    notifyOnce(
+      "meta_" + trackId,
+      patched.indexOf(trackId) >= 0
+        ? "元数据已改"
+        : seen.indexOf(trackId) >= 0
+          ? "元数据本来就是 true"
+          : "元数据没见到",
+    );
   } catch (e) {
     // 探针失败不影响主流程
   }
