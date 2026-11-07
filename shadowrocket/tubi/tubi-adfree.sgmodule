@@ -1,0 +1,26 @@
+#!name=Tubi Ad-Free
+#!desc=去广告：清空内容元数据里的 cue_points，广告接口返回空广告列表 / 空 VAST。不改动视频流，不触发 Tubi 的广告拦截检测。
+#!icon=https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Tubi.png
+#!arguments=去除广告:true
+#!arguments-desc=关闭后 cue_points、ads 列表与 VAST / VMAP 都不再改写。
+
+[Rule]
+# Tubi 只在美国可用。这里把它的域名固定走代理，避免被「国内直连」类规则带走，
+# 导致 MITM 看不到流量、模块静默失效。
+# 如果你本身在美国，或想指定某个策略组/节点，把下面六行的 PROXY 改成 DIRECT
+# 或你的策略组名称即可。
+DOMAIN-SUFFIX,tubitv.com,PROXY
+DOMAIN-SUFFIX,tubi.com,PROXY
+DOMAIN-SUFFIX,tubi.tv,PROXY
+DOMAIN-SUFFIX,tubi.video,PROXY
+DOMAIN-SUFFIX,tubi.io,PROXY
+DOMAIN-SUFFIX,adrise.tv,PROXY
+
+[Script]
+# 前半段：广告侧主机；后半段：内容元数据 / API（cue_points 从这里来）。
+tubi.adfree = type=http-response,pattern=^https?:\/\/(?:(?:[a-z0-9-]+\.)*(?:ads|rainmaker)[a-z0-9.-]*\.(?:tubi\.io|tubitv\.com|tubi\.video|adrise\.tv)\/|(?:[a-z0-9-]+\.)*(?:tubitv\.com|tubi\.io)\/(?:oz|api)\/),requires-body=1,max-size=8388608,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/tubi/js/tubi_adfree.js,argument="{"block_ads":{{{去除广告}}}}"
+
+[MITM]
+# 通配，别只列已知的五个主机：广告请求换个子域就会从 MITM 里漏掉，
+# 表现就是「前面能去广告，播到一半的 mid-roll 又出来了」。
+hostname = %APPEND% tubitv.com, *.tubitv.com, tubi.io, *.tubi.io, *.adrise.tv

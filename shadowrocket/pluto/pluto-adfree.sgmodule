@@ -1,0 +1,23 @@
+#!name=Pluto TV Ad-Free
+#!desc=去广告：boot 的 serverSideAds 改成 false，再按 clip 分组删掉 HLS 点播清单里的广告段。
+#!icon=https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Streaming.png
+#!arguments=去除广告:true
+#!arguments-desc=关闭后 boot 参数、HLS 清单与会话 adBreaks 都不再改写。
+
+[Rule]
+# Pluto 美国内容需要美国节点。不在美国，或想指定别的策略组，改这里的 PROXY。
+DOMAIN-SUFFIX,pluto.tv,PROXY
+DOMAIN-SUFFIX,plutotv.net,PROXY
+# 客户端广告与广告同步
+DOMAIN-SUFFIX,doubleclick.net,REJECT
+DOMAIN-SUFFIX,springserve.com,REJECT
+
+[Script]
+pluto.adfree = type=http-request,pattern=^https?:\/\/boot\.pluto\.tv\/v4\/start,requires-body=1,max-size=1048576,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/pluto/js/pluto_adfree.js,argument="{"block_ads":{{{去除广告}}}}"
+# 第二道：点播清单里按广告标记删段（直播清单脚本内部会跳过）。
+pluto.hls = type=http-response,pattern=^https?:\/\/[^\/]*(?:pluto\.tv|plutotv\.net)\/[^?]*\.m3u8,requires-body=1,max-size=8388608,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/pluto/js/pluto_hls.js,argument="{"block_ads":{{{去除广告}}}}"
+# 第三道：把会话里的 adBreaks 清空，进度条广告块和左上角 Ad 角标跟着消失（直播跳过）。
+pluto.session = type=http-response,pattern=^https?:\/\/[^\/]*pluto\.tv\/[^?]*session\.json,requires-body=1,max-size=8388608,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/pluto/js/pluto_session.js,argument="{"block_ads":{{{去除广告}}}}"
+
+[MITM]
+hostname = %APPEND% boot.pluto.tv, pluto.tv, *.pluto.tv, *.prd.pluto.tv

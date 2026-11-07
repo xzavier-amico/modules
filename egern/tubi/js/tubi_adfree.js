@@ -25,6 +25,73 @@
 (() => {
   "use strict";
 
+  // Shadowrocket 的 JS 运行时不一定提供 TextEncoder / TextDecoder（Loon、Egern 自带）。
+  // 这里补一份严格实现；已有原生对象时整段跳过，三端共用同一份脚本。
+  if ("undefined" == typeof TextEncoder) {
+    globalThis.TextEncoder = function () {};
+    TextEncoder.prototype.encode = function (s) {
+      s = String(s);
+      const out = [];
+      for (let i = 0; i < s.length; i++) {
+        let c = s.charCodeAt(i);
+        if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+          const d = s.charCodeAt(i + 1);
+          if (d >= 0xdc00 && d <= 0xdfff) {
+            c = 0x10000 + ((c - 0xd800) << 10) + (d - 0xdc00);
+            i++;
+          }
+        }
+        if (c >= 0xd800 && c <= 0xdfff) c = 0xfffd;
+        if (c < 0x80) out.push(c);
+        else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63));
+        else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+        else out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+      }
+      return new Uint8Array(out);
+    };
+  }
+  if ("undefined" == typeof TextDecoder) {
+    globalThis.TextDecoder = function (label, options) {
+      this.fatal = !!(options && options.fatal);
+    };
+    TextDecoder.prototype.decode = function (input) {
+      const b = input instanceof Uint8Array ? input : new Uint8Array(input || []);
+      let out = "";
+      for (let i = 0; i < b.length; ) {
+        const start = i;
+        const first = b[i++];
+        let cp = 0;
+        let need = 0;
+        if (first < 0x80) cp = first;
+        else if (first >= 0xc2 && first <= 0xdf) { cp = first & 0x1f; need = 1; }
+        else if (first >= 0xe0 && first <= 0xef) { cp = first & 0x0f; need = 2; }
+        else if (first >= 0xf0 && first <= 0xf4) { cp = first & 7; need = 3; }
+        else need = -1;
+        let ok = need >= 0 && i + need <= b.length;
+        for (let k = 0; ok && k < need; k++) {
+          if ((b[i + k] & 0xc0) !== 0x80) ok = false;
+          else cp = (cp << 6) | (b[i + k] & 63);
+        }
+        if (ok && need === 2 && (cp < 0x800 || (cp >= 0xd800 && cp <= 0xdfff))) ok = false;
+        if (ok && need === 3 && (cp < 0x10000 || cp > 0x10ffff)) ok = false;
+        if (!ok) {
+          if (this.fatal) throw new TypeError("invalid utf-8");
+          out += "\ufffd";
+          i = start + 1;
+          continue;
+        }
+        i += need;
+        if (cp > 0xffff) {
+          cp -= 0x10000;
+          out += String.fromCharCode(0xd800 + (cp >> 10), 0xdc00 + (cp & 1023));
+        } else {
+          out += String.fromCharCode(cp);
+        }
+      }
+      return out;
+    };
+  }
+
   const req = (typeof $request !== "undefined" && $request) || {};
   const res = (typeof $response !== "undefined" && $response) || {};
   const url = req.url || "";
