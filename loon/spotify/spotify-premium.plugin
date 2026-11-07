@@ -37,15 +37,15 @@ request if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::
 [Script]
 # extended-metadata 的 etag 在请求体里（ExtensionQuery.etag），请求阶段先把它抹掉，
 # 否则服务端只回「没变」，客户端继续用本地那份 has_lyrics=false 的实体。
-request if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/extended-metadata\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify.js?v=20261107-6", {${spoof_premium}, ${block_ads}, ${unlock_playback}, ${enable_lyrics}}) with enable=${enable_lyrics}, requires_body=true, binary_body_mode=true, tag="spotify.meta.req", timeout=10
+request if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/extended-metadata\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify.js?v=20261107-7", {${spoof_premium}, ${block_ads}, ${unlock_playback}, ${enable_lyrics}}) with enable=${enable_lyrics}, requires_body=true, binary_body_mode=true, tag="spotify.meta.req", timeout=10
 # 改写 bootstrap / user-customization-service 里的账号状态与远程配置。
-response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:bootstrap|user-customization-service)/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify.js?v=20261107-6", {${spoof_premium}, ${block_ads}, ${unlock_playback}, ${enable_lyrics}}) with enable=${spoof_premium}, requires_body=true, binary_body_mode=true, tag="Spotify Premium", timeout=30
+response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:bootstrap|user-customization-service)/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify.js?v=20261107-7", {${spoof_premium}, ${block_ads}, ${unlock_playback}, ${enable_lyrics}}) with enable=${spoof_premium}, requires_body=true, binary_body_mode=true, tag="Spotify Premium", timeout=30
 # 把曲目元数据里的 has_lyrics 改成 true，客户端才肯去请求 color-lyrics。
 # extended-metadata 是主路径（TRACK_V4 里的 Track 字段 18），context-resolve / connect-state 兜底。
-response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:extended-metadata|context-resolve|connect-state|metadata\/4\/track)\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify.js?v=20261107-6", {${spoof_premium}, ${block_ads}, ${unlock_playback}, ${enable_lyrics}}) with enable=${enable_lyrics}, requires_body=true, binary_body_mode=true, tag="spotify.meta", timeout=10
+response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:extended-metadata|context-resolve|connect-state|metadata\/4\/track)\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify.js?v=20261107-7", {${spoof_premium}, ${block_ads}, ${unlock_playback}, ${enable_lyrics}}) with enable=${enable_lyrics}, requires_body=true, binary_body_mode=true, tag="spotify.meta", timeout=10
 # 官方没有歌词时用第三方歌词补上；官方有歌词就原样放行。
 # 不强制 requires_body：没有歌词时官方回 404 且 body 为空，强制读 body 脚本就不会执行。
-response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/color-lyrics\/v\d\/track\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_lyrics.js?v=20261107-6", {${lyrics_source}, ${enable_lyrics}}) with enable=${enable_lyrics}, binary_body_mode=true, tag="spotify.lyrics", timeout=10
+response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/color-lyrics\/v\d\/track\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_lyrics.js?v=20261107-7", {${lyrics_source}, ${enable_lyrics}}) with enable=${enable_lyrics}, binary_body_mode=true, tag="spotify.lyrics", timeout=10
 
 [MitM]
 hostname = *-spclient.spotify.com, spclient.wg.spotify.com

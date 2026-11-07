@@ -60,6 +60,11 @@
   const COLOR_LINE = 0xb3ffffff;
   const COLOR_ACTIVE = 0xffffffff;
 
+  // 响应体上限：官方歌词正常 < 300 KiB，第三方 JSON 也远小于 2 MiB。
+  // 超过上限直接放行 / 当作没查到，避免异常响应把脚本内存打爆。
+  const MAX_LYRICS_BYTES = 2 * 1024 * 1024;
+  const MAX_HTTP_JSON_BYTES = 2 * 1024 * 1024;
+
   let settled = false;
   const finish = (value) => {
     if (settled) return;
@@ -71,6 +76,14 @@
   if (typeof setTimeout === "function") setTimeout(() => finish({}), 8000);
 
   const rawBody = res.body;
+  const rawBytes = toBytes(rawBody);
+  const rawLength = "string" == typeof rawBody ? rawBody.length : rawBytes.length;
+  if (rawLength > MAX_LYRICS_BYTES) {
+    // 超大的官方响应不解析，原样放行；超大 404 也当作没有歌词。
+    finish({});
+    return;
+  }
+
   const body = toText(rawBody);
   const trimmed = body.trim();
   const hasBody = trimmed.length > 0;
@@ -78,7 +91,6 @@
 
   // 新版客户端要 protobuf（0a 开头的一棵 message 树），旧版要 JSON。
   // 拿不到 body 时只能看 URL 上的 format 参数；没有这个参数就按新版算。
-  const rawBytes = toBytes(rawBody);
   const wantsProto = /[?&]format=protobuf/i.test(url);
   const protoMode = hasBody ? wantsProto || trimmed.charAt(0) !== "{" : wantsProto || !/[?&]format=json/i.test(url);
 
@@ -360,6 +372,11 @@
         },
         (error, response, data) => {
           if (error || !response || Number(response.status) >= 400 || !data) {
+            reply(null);
+            return;
+          }
+          // 第三方接口不可控：超长响应不解析，避免 JSON.parse 占满内存。
+          if ("string" != typeof data || data.length > MAX_HTTP_JSON_BYTES) {
             reply(null);
             return;
           }
