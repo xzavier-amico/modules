@@ -396,6 +396,37 @@
     max_speed: "maxSpeed",
   };
 
+  // 旧版插件的 26 个参数顺序。Loon 旧版按位置传数组时用它还原；
+  // 新版按参数名传对象，不受影响。
+  const LEGACY_ARG_ORDER = [
+    "blockUpload",
+    "blockShorts",
+    "blockShortsFeed",
+    "blockMembersOnly",
+    "autoHd",
+    "blockGames",
+    "blockVerticalLive",
+    "jumpAhead",
+    "blockStore",
+    "blockAi",
+    "onTheGo",
+    "backgroundPlay",
+    "pip",
+    "maxSpeed",
+    "hidePremium",
+    "preferPremium",
+    "maxHeight",
+    "blockPlayerAds",
+    "blockFeedAds",
+    "blockShortsAds",
+    "removePaidPromotion",
+    "blockAdTracking",
+    "blockGuideItems",
+    "onTheGoAudio",
+    "onTheGoChapters",
+    "stripHotHash",
+  ];
+
   // Loon 传 snake_case 对象或位置数组，Egern 传 JSON 字符串，这里统一成普通对象。
   function readArgument() {
     let raw = typeof $argument !== "undefined" ? $argument : undefined;
@@ -409,12 +440,24 @@
     }
     if (Array.isArray(raw)) {
       const out = {};
-      Object.keys(ARG_ALIASES).forEach((key, index) => {
+      const order = raw.length > Object.keys(ARG_ALIASES).length ? LEGACY_ARG_ORDER : Object.keys(ARG_ALIASES);
+      order.forEach((key, index) => {
         if (index < raw.length) out[key] = raw[index];
       });
       return out;
     }
     return raw && "object" == typeof raw ? raw : {};
+  }
+
+  // 参数可能来自 Loon（boolean）或 Egern（字符串 "true"/"false"），统一成布尔值。
+  function asBool(value, fallback = true) {
+    if (void 0 === value || null === value || "" === value) return fallback;
+    if (false === value || 0 === value) return false;
+    if (true === value) return true;
+    const text = String(value).trim().toLowerCase();
+    if ("false" === text || "0" === text || "off" === text || "no" === text) return false;
+    if ("true" === text || "1" === text || "on" === text || "yes" === text) return true;
+    return fallback;
   }
 
   // 把 home_menu 里的一个 token 归一成 { hide, id }；认不出就返回 undefined。
@@ -490,7 +533,8 @@
       const name = key.toLowerCase();
       const text = String(value ?? "");
       if ("user-agent" === name && /music/i.test(text)) return true;
-      if ("x-youtube-client-name" === name && /music|remix/i.test(text)) return true;
+      // WEB_REMIX（YouTube Music Web/iOS 的 InnerTube 客户端）的 client-name 是 67。
+      if ("x-youtube-client-name" === name && ("67" === text.trim() || /music|remix/i.test(text))) return true;
       if ("x-youtube-client-version" === name && /music|remix/i.test(text)) return true;
     }
     return false;
@@ -506,7 +550,7 @@
     }
 
     // 广告总开关：播放器 / 信息流 / Shorts / 付费推广 / 广告追踪 / Premium 推广 / 创作者商店。
-    const blockAds = false !== options.blockAds;
+    const blockAds = asBool(options.blockAds, true);
     options.blockAds = blockAds;
     options.blockPlayerAds = blockAds;
     options.blockFeedAds = blockAds;
@@ -516,6 +560,9 @@
     options.hidePremium = blockAds;
 
     // 默认分辨率：max / 4320 / 2160 / ... / off。off 表示完全不改画质。
+    if (void 0 === options.maxHeight && void 0 !== options.autoHd && !asBool(options.autoHd, true)) {
+      options.maxHeight = "off";
+    }
     const height = String(options.maxHeight ?? "max").toLowerCase();
     if ("off" === height || "false" === height) {
       options.autoHd = false;
@@ -536,10 +583,30 @@
 
     // 首页清理：off 全关，standard 只清 Playables，all 再加竖屏直播。
     // 创作者商店/商品卡属于付费推广，跟随 blockAds。
-    const cleanup = String(options.homeCleanup ?? "standard").toLowerCase();
+    let cleanup = String(options.homeCleanup ?? "").toLowerCase();
+    if (!cleanup) {
+      const games = void 0 === options.blockGames ? true : asBool(options.blockGames, true);
+      const vertical = void 0 !== options.blockVerticalLive && asBool(options.blockVerticalLive, false);
+      cleanup = vertical ? "all" : games ? "standard" : "off";
+    }
     options.blockStore = blockAds;
     options.blockGames = "off" !== cleanup;
     options.blockVerticalLive = "all" === cleanup;
+
+    // 旧版参数没有 home_menu，用 block_upload / block_shorts / block_guide_items 还原。
+    if (void 0 === options.homeMenu) {
+      const tokens = [];
+      if (void 0 === options.blockUpload || asBool(options.blockUpload, true)) tokens.push("-FEuploads");
+      if (void 0 !== options.blockShorts && asBool(options.blockShorts, false)) tokens.push("-FEshorts");
+      options.homeMenu = tokens.length ? tokens.join(",") : "all";
+    }
+    if (options.blockGuideItems) {
+      const extra = String(options.blockGuideItems)
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      if (extra.length) options.homeMenu = [options.homeMenu, ...extra.map((item) => `-${item}`)].filter(Boolean).join(",");
+    }
 
     options.hiddenGuideItems = resolveHiddenMenu(options.homeMenu, blockAds);
 
@@ -549,12 +616,13 @@
     const caption = String(options.captionLang ?? "zh-Hans").trim();
     options.captionLang = /^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/i.test(caption) ? caption : "off";
 
-    options.blockAi = false !== options.blockAi;
-    options.blockShortsFeed = false !== options.blockShortsFeed;
-    options.blockMembersOnly = false !== options.blockMembersOnly;
-    options.onTheGo = false !== options.onTheGo;
-    options.jumpAhead = false !== options.jumpAhead;
-    options.youtubeMusic = false !== options.youtubeMusic;
+    options.blockAi = asBool(options.blockAi, true);
+    // 这两项插件默认关闭，参数缺失时不能按「非 false 即 true」处理。
+    options.blockShortsFeed = asBool(options.blockShortsFeed, false);
+    options.blockMembersOnly = asBool(options.blockMembersOnly, false);
+    options.onTheGo = asBool(options.onTheGo, true);
+    options.jumpAhead = asBool(options.jumpAhead, true);
+    options.youtubeMusic = asBool(options.youtubeMusic, true);
 
     return { ...defaults, ...options };
   }
@@ -957,7 +1025,15 @@
 
       const [, name, valueType, repeated] = spec;
       if (isPackedNumeric(spec, field)) {
-        for (const value of decodePackedVarints(field.data)) obj[name].push("bool" === valueType ? 0 !== value : value);
+        let values;
+        try {
+          values = decodePackedVarints(field.data);
+        } catch (e) {
+          // 不是合法 packed 数据时按未知字段原样保留，避免整条响应改写失败。
+          delete field.spec;
+          continue;
+        }
+        for (const value of values) obj[name].push("bool" === valueType ? 0 !== value : value);
         continue;
       }
       if (!repeated && (repeatedCount?.get(name) ?? 0) > 1) {
@@ -2418,7 +2494,12 @@
     let changed = filterBrowseTree(player, options);
 
     if (options.captionLang && "off" !== String(options.captionLang).toLowerCase()) {
-      changed = applyCaptionTranslation(player, options.captionLang) || changed;
+      // 字幕轨道结构异常时只跳过字幕，不能连累广告清理。
+      try {
+        changed = applyCaptionTranslation(player, options.captionLang) || changed;
+      } catch (e) {
+        // ignore
+      }
     }
 
     if (false !== options.removePaidPromotion) changed = deleteField(player, "paidPromotion") || changed;
@@ -3361,10 +3442,12 @@
 
   function handleRequest(request) {
     const path = request.url.split("?")[0];
-    const options = readOptions();
-    const musicDisabled = isMusicRequest(request) && false === options.youtubeMusic;
 
     try {
+      // 参数解析也放进 try：任何异常都不能让 ad_break 漏过去。
+      const options = readOptions();
+      const musicDisabled = isMusicRequest(request) && false === options.youtubeMusic;
+
       if (path.endsWith("/ad_break")) {
         $done(!musicDisabled && false !== options.blockPlayerAds ? emptyProtobufResponse() : undefined);
         return;
@@ -3401,7 +3484,8 @@
       }
       $done(undefined);
     } catch (e) {
-      $done(path.endsWith("/initplayback") ? emptyProtobufResponse() : {});
+      // ad_break / initplayback 失败时也要给出空响应，避免退回服务端广告或原始数据。
+      $done(path.endsWith("/ad_break") || path.endsWith("/initplayback") ? emptyProtobufResponse() : {});
     }
   }
 
