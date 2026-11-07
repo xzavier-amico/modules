@@ -45,6 +45,22 @@
   }
   const trackId = match[1];
 
+  // 临时探针：确认客户端到底有没有请求 color-lyrics、回来什么状态。
+  // 每首歌只提示一次，验证通过后连同调用一起删掉。
+  const notifyOnce = (key, body) => {
+    try {
+      const store = typeof $persistentStore !== "undefined" && $persistentStore;
+      const name = "spotify_lyrics_" + key;
+      if (store && store.read(name)) return;
+      if (typeof $notification !== "undefined" && $notification && "function" == typeof $notification.post) {
+        $notification.post("Spotify 歌词 v5", trackId.slice(0, 8), body);
+        if (store) store.write("1", name);
+      }
+    } catch (e) {
+      // 通知失败不影响主流程
+    }
+  };
+
   const USER_AGENT = "xzavier-modules/1.0 (https://github.com/xzavier-amico/modules)";
   const utf8 = new TextDecoder("utf-8");
   const encoder = new TextEncoder();
@@ -75,6 +91,11 @@
   const rawBytes = toBytes(rawBody);
   const wantsProto = /[?&]format=protobuf/i.test(url);
   const protoMode = hasBody ? wantsProto || trimmed.charAt(0) !== "{" : wantsProto || !/[?&]format=json/i.test(url);
+
+  notifyOnce(
+    "hit_" + trackId,
+    (hasResponse ? "响应 " + status : "请求") + (hasBody ? " 有 body" : " 无 body") + (protoMode ? " proto" : " json"),
+  );
 
   // 请求阶段：先探一下官方有没有歌词，没有才去找第三方。
   // 之所以不在响应阶段做，是因为没有歌词时官方返回 404 且 body 为空，
@@ -477,6 +498,7 @@
     const kind = payload.lyrics.syncType === "LINE_SYNCED" ? "同步" : "纯文本";
     log("注入 " + title + " / " + artist + "（" + kind + " " + payload.lyrics.lines.length + " 行）");
     notify("注入 " + kind + " " + payload.lyrics.lines.length + " 行 · " + title);
+    notifyOnce("inj_" + trackId, "注入 " + kind + " " + payload.lyrics.lines.length + " 行");
 
     if (protoMode) {
       const bytes = encodeProto(payload.lyrics.lines, payload.lyrics.syncType, payload.lyrics.provider);

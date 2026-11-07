@@ -440,7 +440,12 @@
     ["","enable_sponsored_home_results_v2",1,0,"","ad"],
     ["ios-feature-search","prompted_playlist_merchandizing_enabled",1,0,"","misc"],
     ["","should_nova_scroll_use_scrollsita",0,0,"","misc"],
-    ["ios-sociallistening-configuration-impl","premium_gated_start_jam_buttons_enabled",2,0,"","misc"]
+    ["ios-sociallistening-configuration-impl","premium_gated_start_jam_buttons_enabled",2,0,"","misc"],
+    // 歌词入口：有的版本 is_lyrics_card_element_enabled 下发 false，Now Playing
+    // 里就不出歌词卡片，客户端也不会去请求 color-lyrics。
+    ["ios-feature-lyrics","is_lyrics_card_element_enabled",2,1,"","misc"],
+    ["ios-feature-lyrics","is_get_lyrics_v2_enabled",2,1,"","misc"],
+    ["ios-feature-lyrics","enable_lyrics",2,1,"","misc"]
   ];
 
   // -------------------------------------------------------------- attributes
