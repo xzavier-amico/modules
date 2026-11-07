@@ -50,14 +50,13 @@ premium、关掉广告位、移除免费版的试听时长上限与队列/随机
    缺省 0 时客户端只显示 Now Playing 里那行预览，不出「查看完整歌词」的入口。
    官方 200 的响应如果带 2 / 3（免费号每月额度），也一并改回 1。
 
-另外 `js/spotify_premium.js` 改 `ios-feature-lyrics` 下的三个 UCS 开关：
+另外 `js/spotify_premium.js` 改 `ios-feature-lyrics` 下的三个 UCS 开关，全部写 true：
+`enable_lyrics`、`is_get_lyrics_v2_enabled`、`is_lyrics_card_element_enabled`。
 
-- `enable_lyrics`、`is_get_lyrics_v2_enabled` → true
-- `is_lyrics_card_element_enabled` → **false**
-
-最后这个开关名字容易看反：它管的是 Now Playing 里那张「单行歌词」预览卡片。打开后
-客户端用卡片替代整页歌词，表现就是「能显示一行，但没有专门的歌词页」。真实账号的
-抓包里它是 false，歌词页照常显示。
+`is_lyrics_card_element_enabled` 是关键。真实账号的抓包里它是 false，但那些歌的
+`has_lyrics` 本来就是 true，用不着它。对我们这种 `has_lyrics = false` 的歌，它是
+客户端「仍然去拉一次 color-lyrics」的唯一原因 —— 关掉以后连请求都不发，注入无从
+谈起。开着它至少能在 Now Playing 里显示当前这一行。
 
 歌词源：`lrclib`（默认，曲库全但中文偏弱）、`musixmatch`、`netease`、`qq`、
 `auto`（依次尝试 lrclib → musixmatch → 网易云 → QQ）。

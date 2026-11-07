@@ -441,10 +441,10 @@
     ["ios-feature-search","prompted_playlist_merchandizing_enabled",1,0,"","misc"],
     ["","should_nova_scroll_use_scrollsita",0,0,"","misc"],
     ["ios-sociallistening-configuration-impl","premium_gated_start_jam_buttons_enabled",2,0,"","misc"],
-    // 歌词总开关。真实账号抓包里 is_lyrics_card_element_enabled 是 false，
-    // 但歌词页照常显示 —— 这个开关管的是 Now Playing 里那张「单行歌词」卡片，
-    // 打开后客户端会用卡片替代整页歌词。所以要显式写回 false。
-    ["ios-feature-lyrics","is_lyrics_card_element_enabled",2,0,"","misc"],
+    // 必须开。真实账号抓包里它是 false，但那些歌的 has_lyrics 本来就是 true，
+    // 不需要兜底。对我们这种 has_lyrics=false 的歌，只有这个开关能让客户端
+    // 仍然去拉一次 color-lyrics —— 关掉以后连请求都不发，注入无从谈起。
+    ["ios-feature-lyrics","is_lyrics_card_element_enabled",2,1,"","misc"],
     ["ios-feature-lyrics","is_get_lyrics_v2_enabled",2,1,"","misc"],
     ["ios-feature-lyrics","enable_lyrics",2,1,"","misc"]
   ];
