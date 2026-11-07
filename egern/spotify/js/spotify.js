@@ -1,13 +1,23 @@
-// Spotify Premium — ad-free + shuffle unlock for Loon / Egern.
+// Spotify Premium — 去广告 / 解锁 Premium / 补全歌词的元数据前置。
 //
-// Spotify answers /bootstrap and /user-customization-service with protobuf that
-// carries the account's product state and the remote config flags. This script
-// walks the wire format, rewrites the fields that decide "free or premium", and
-// writes everything else back untouched. Unknown fields and field order survive,
-// and any message we do not rewrite keeps its exact bytes — re-encoding the whole
-// body is what made the older script skip tracks after a few seconds.
+// 一个脚本处理两类接口：
 //
-// Layout (field numbers from EeveeSpotify and the spoti.pw AdBlock module):
+//   1. /bootstrap、/user-customization-service（响应）
+//      改写账号状态与远程配置开关：catalogue / player-license / streaming-rules，
+//      以及广告、试听上限、歌词相关开关。按字段号走进 protobuf，只改目标字段，
+//      其余字节原样写回 —— 整包重编码会让播放几秒后被跳过。
+//
+//   2. /extended-metadata、/context-resolve、/connect-state、/metadata/4/track
+//      把曲目元数据里的 has_lyrics 改成 true。客户端读到 false 就直接显示
+//      「暂无歌词」，连 color-lyrics 都不请求，代理层没有插手的余地。
+//      extended-metadata 的 etag 在请求体里（ExtensionQuery.etag），请求阶段
+//      一并抹掉，否则服务端只回「没变」，客户端继续用本地那份 has_lyrics=false
+//      的实体，响应改得再对也到不了客户端。
+//
+// 字段号来源：
+//   whoeevee/EeveeSpotifyReborn  Sources/EeveeSpotify/Premium（SwiftProtobuf 生成代码）
+//   skopevoj/spoti.pw (v0.21.1)  tweak/Sources/Shared/AdBlock/{Protobuf,Premium}.m
+//
 //   BootstrapMessage 2 { 1 { 1 CustomizeMessage { 1 UcsResponse } } }
 //   CustomizeMessage 1 UcsResponse
 //   UcsResponse 1 ResolveResponse { 1 ResolveConfiguration { 3 AssignedValue } }
@@ -18,44 +28,28 @@
 (() => {
   "use strict";
 
-  const url = ($request && $request.url) || "";
-  const status = Number(($response && $response.status) || 0);
-  if (status >= 300) {
-    $done({});
-    return;
-  }
+  // ---------------------------------------------------------------- options
 
-  let body = $response && $response.body;
-  if (body instanceof ArrayBuffer) body = new Uint8Array(body);
-  if (!body || !ArrayBuffer.isView(body) || !body.length) {
-    $done({});
-    return;
-  }
-  if (body.length > 4 * 1024 * 1024) {
-    $done({});
-    return;
-  }
-
-  // Loon 传位置数组，Egern 传 JSON 字符串，两种都兼容。
+  // Loon 传位置数组，Egern 传 JSON 字符串。
   let opt = {};
   try {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
-    if (Array.isArray(raw)) opt = {spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2]};
-    else if (typeof raw === "string") opt = JSON.parse(raw || "{}") || {};
-    else if (raw && "object" == typeof raw) opt = raw;
+    if (Array.isArray(raw)) {
+      opt = { spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2], enable_lyrics: raw[3] };
+    } else if (typeof raw === "string") {
+      opt = JSON.parse(raw || "{}") || {};
+    } else if (raw && "object" == typeof raw) {
+      opt = raw;
+    }
   } catch (e) {
     opt = {};
   }
   const flag = (v, d) => (v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0"));
 
   const spoof = flag(opt.spoof_premium, true);
-  if (!spoof) {
-    $done({});
-    return;
-  }
   const adsOn = flag(opt.block_ads, true);
   const playOn = flag(opt.unlock_playback, true);
-
+  const lyricsOn = flag(opt.enable_lyrics, true);
 
   // ---------------------------------------------------------------- protobuf
 
@@ -196,6 +190,8 @@
     for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
     return true;
   };
+
+  // ------------------------------------------------------------ remote config
 
   const RULES = [
     ["ios-feature-settings","crossfade_enabled",2,1,"","misc"],
@@ -636,11 +632,264 @@
   const patchCustomize = (b) => edit(b, [1], patchUcs);
   const patchBootstrap = (b) => edit(b, [2, 1, 1, 1], patchUcs);
 
+  // ------------------------------------------------------------------ 歌词
+
+  // Track 的 has_lyrics = 18（metadata.proto）。缺省时补一条。
+  function patchTrack(fields) {
+    const f = first(fields, 18);
+    if (f) {
+      if (f.w !== 0 || f.v === 1) return false;
+      f.v = 1;
+      return true;
+    }
+    fields.push({ no: 18, w: 0, v: 1 });
+    return true;
+  }
+
+  // map entry 就是一条 { 1: key, 2: value } 的小消息。
+  function asEntry(fields) {
+    if (!fields || fields.length < 2 || fields.length > 4) return null;
+    const k = first(fields, 1);
+    const v = first(fields, 2);
+    if (!k || k.w !== 2 || !v || v.w !== 2) return null;
+    const key = text(k);
+    const value = text(v);
+    if (key === null || value === null || key.length > 64) return null;
+    return { key: key, value: value };
+  }
+
+  const encodeEntry = (key, value) => serialize([fieldString(1, key), fieldString(2, value)]);
+
+  // EntityExtensionDataArray：field 2 = extension_kind，field 3 = EntityExtensionData[]
+  // 不按 extension_kind 过滤：只要数组里有 spotify:track: 的实体就当成 Track 数组，
+  // 这样客户端换用别的 extension kind 取 Track 时也能命中。
+  function isTrackArray(fields) {
+    for (const f of fields) {
+      if (f.no !== 3 || f.w !== 2) continue;
+      const ed = parse(f.p);
+      if (!ed) continue;
+      const uri = text(first(ed, 2));
+      if (uri && uri.indexOf("spotify:track:") === 0) return true;
+    }
+    return false;
+  }
+
+  function patchTrackArray(fields) {
+    let changed = false;
+    for (const f of fields) {
+      if (f.no !== 3 || f.w !== 2) continue;
+      const ed = parse(f.p);
+      if (!ed) continue;
+      const uri = text(first(ed, 2));
+      if (!uri || uri.indexOf("spotify:track:") !== 0) continue;
+
+      // EntityExtensionData.extension_data = 3 (Any)，Any.value = 2
+      const anyField = first(ed, 3);
+      if (!anyField || anyField.w !== 2) continue;
+      const any = parse(anyField.p);
+      if (!any) continue;
+      const value = first(any, 2);
+      if (!value || value.w !== 2) continue;
+
+      // 只认 type_url 以 .Track 结尾的 Any，别把 Album / Artist / TrackDescriptor
+      // 当成 Track 改（字段 18 在别的消息里可能是别的东西）。
+      const typeUrl = text(first(any, 1));
+      if (typeUrl && !/\.Track$/.test(typeUrl)) continue;
+
+      const track = parse(value.p);
+      if (!track || !patchTrack(track)) continue;
+      value.p = serialize(track);
+      anyField.p = serialize(any);
+      f.p = serialize(ed);
+      changed = true;
+    }
+    return changed;
+  }
+
+  const KNOWN = [
+    "artist_name", "artist_uri", "album_title", "album_uri",
+    "track_title", "track_uri", "duration", "image_url", "is_explicit", "track_player"
+  ];
+
+  function isContextTrack(fields) {
+    const uri = text(first(fields, 1));
+    if (!uri || !/^spotify:(track|episode|local):/.test(uri)) return false;
+    let known = 0;
+    for (const f of fields) {
+      if (f.no !== 3 || f.w !== 2) continue;
+      const e = asEntry(parse(f.p));
+      if (e && KNOWN.indexOf(e.key) >= 0) known++;
+    }
+    if (known > 0) return true;
+    // 播放器状态里的当前曲目经常只带 uri + uid，metadata 是空的；只按已知 key
+    // 判断会漏掉它，结果改的全是队列里的下一首。
+    const uid = first(fields, 2);
+    return !!uid && uid.w === 2;
+  }
+
+  const MARK = "has_lyrics";
+
+  function patchFields(fields, depth) {
+    let changed = false;
+
+    for (const f of fields) {
+      if (f.w !== 2) continue;
+
+      const sub = parse(f.p);
+      if (!sub) continue;
+
+      const entry = asEntry(sub);
+      if (entry && entry.key === MARK) {
+        if (entry.value !== "true") {
+          f.p = encodeEntry(MARK, "true");
+          changed = true;
+        }
+        continue;
+      }
+
+      if (isTrackArray(sub)) {
+        if (patchTrackArray(sub)) {
+          f.p = serialize(sub);
+          changed = true;
+        }
+        continue;
+      }
+
+      if (depth < 16 && patchFields(sub, depth + 1)) {
+        f.p = serialize(sub);
+        changed = true;
+      }
+    }
+
+    // 上下文里缺这个 entry 时补一条。
+    if (isContextTrack(fields)) {
+      let present = false;
+      for (const f of fields) {
+        if (f.no !== 3 || f.w !== 2) continue;
+        const e = asEntry(parse(f.p));
+        if (e && e.key === MARK) {
+          present = true;
+          break;
+        }
+      }
+      if (!present) {
+        fields.push({ no: 3, w: 2, p: encodeEntry(MARK, "true") });
+        changed = true;
+      }
+    }
+
+    return changed;
+  }
+
+  // extended-metadata 的 etag 在请求体里（ExtensionQuery.etag，字段 2），HTTP 头
+  // 里那个 if-none-match 是另一回事。客户端带上本地缓存的 etag，服务端就只回
+  // 「没变」的空数组，客户端继续用本地那份 has_lyrics=false 的实体。
+  //
+  //   BatchedEntityRequest { header = 1; repeated EntityRequest = 2 }
+  //   EntityRequest       { string entity_uri = 1; repeated ExtensionQuery = 2 }
+  //   ExtensionQuery      { ExtensionKind extension_kind = 1; string etag = 2 }
+  function stripRequestEtags(request, url) {
+    if (url.indexOf("/extended-metadata/") < 0) {
+      $done({});
+      return;
+    }
+    let payload = request.body;
+    if (payload instanceof ArrayBuffer) payload = new Uint8Array(payload);
+    if (!payload || !ArrayBuffer.isView(payload) || !payload.length) {
+      $done({});
+      return;
+    }
+    const top = parse(payload);
+    if (!top) {
+      $done({});
+      return;
+    }
+
+    let dropped = 0;
+    for (const f of top) {
+      if (f.no !== 2 || f.w !== 2) continue;
+      const entity = parse(f.p);
+      if (!entity) continue;
+      let touched = false;
+      for (const q of entity) {
+        if (q.no !== 2 || q.w !== 2) continue;
+        const query = parse(q.p);
+        if (!query) continue;
+        const kept = [];
+        let hit = false;
+        for (const k of query) {
+          if (k.no === 2 && k.w === 2) {
+            hit = true;
+            dropped++;
+            continue;
+          }
+          kept.push(k);
+        }
+        if (hit) {
+          q.p = serialize(kept);
+          touched = true;
+        }
+      }
+      if (touched) f.p = serialize(entity);
+    }
+
+    $done(dropped ? { body: serialize(top) } : {});
+  }
+
+  function patchMeta(buffer, target) {
+    const fields = parse(buffer);
+    if (!fields) return null;
+    if (/\/metadata\/4\/track\//.test(target)) {
+      return patchTrack(fields) ? serialize(fields) : null;
+    }
+    return patchFields(fields, 0) ? serialize(fields) : null;
+  }
+
   // ------------------------------------------------------------------- entry
 
+  const req = (typeof $request !== "undefined" && $request) || {};
+  const res = typeof $response !== "undefined" && $response ? $response : null;
+  const url = (res && res.url) || req.url || "";
+
+  // 请求阶段只做一件事：抹掉 extended-metadata 请求体里的 etag。
+  if (!res) {
+    if (lyricsOn) stripRequestEtags(req, url);
+    else $done({});
+    return;
+  }
+
+  if (Number(res.status) >= 300) {
+    $done({});
+    return;
+  }
+
+  const META_URL = /\/extended-metadata\/|\/context-resolve\/|\/connect-state\/|\/metadata\/4\/track\//;
+  const isMeta = META_URL.test(url);
+  if (isMeta ? !lyricsOn : !spoof) {
+    $done({});
+    return;
+  }
+
+  let body = res.body;
+  if (body instanceof ArrayBuffer) body = new Uint8Array(body);
+  if (!body || !ArrayBuffer.isView(body) || !body.length) {
+    $done({});
+    return;
+  }
+  if (body.length > (isMeta ? 8 : 32) * 1024 * 1024) {
+    $done({});
+    return;
+  }
+
   let out = null;
-  if (url.indexOf("bootstrap") >= 0) out = patchBootstrap(body) || patchCustomize(body);
-  else out = patchCustomize(body) || patchBootstrap(body);
+  if (isMeta) {
+    out = patchMeta(body, url);
+  } else {
+    out =
+      url.indexOf("bootstrap") >= 0
+        ? patchBootstrap(body) || patchCustomize(body)
+        : patchCustomize(body) || patchBootstrap(body);
+  }
 
   if (!out || same(out, body)) {
     $done({});

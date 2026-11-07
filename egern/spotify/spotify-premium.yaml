@@ -1,12 +1,16 @@
 #=======================================================================================
 # Spotify Premium — Egern 模块
 #
-# 去广告 + 解锁 Premium 状态与顺序/随机播放。
+# 去广告 + 解锁 Premium 状态与顺序/随机播放，并可用第三方歌词补全 Now Playing 界面。
 #
 # 做法：Spotify 用 protobuf 在 /bootstrap 与 /user-customization-service 下发账号
 # 状态（catalogue / player-license / streaming-rules …）与远程配置开关。脚本按
 # 字段号走进消息，只改决定「免费还是 Premium」的那些字段，其余字节原样写回，
 # 未知字段、字段顺序、非规范 varint 都不动 —— 这是避免播放几秒被跳过的关键。
+#
+# 歌词分两步：先把曲目元数据里的 has_lyrics 改成 true，客户端才肯请求
+# color-lyrics；官方 404 时再由 spotify_lyrics.js 用第三方歌词补上。
+# 补全的只是 Now Playing 界面，客户端进程内的完整歌词页入口代理层改不到。
 #
 # 字段号来源：
 #   whoeevee/EeveeSpotifyReborn  Sources/EeveeSpotify/Premium（SwiftProtobuf 生成代码）
@@ -19,7 +23,7 @@
 #=======================================================================================
 
 name: "Spotify Premium"
-description: "去广告 + 解锁 Premium 状态与顺序/随机播放。改写 bootstrap 与 user-customization-service 的 protobuf，未知字段原样保留。"
+description: "去广告 + 解锁 Premium 状态与顺序/随机播放，并可用第三方歌词补全 Now Playing 界面。改写 protobuf，未知字段原样保留。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"
 icon: "https://raw.githubusercontent.com/luestr/IconResource/main/App_icon/120px/Spotify.png"
@@ -28,18 +32,20 @@ compat_arguments:
   spoof_premium: "true"
   block_ads: "true"
   unlock_playback: "true"
+  enable_lyrics: "true"
   lyrics_source: "lrclib"
 
 compat_arguments_desc: |
   spoof_premium   — 伪装 Premium（总开关）
   block_ads       — 去除广告
   unlock_playback — 解锁播放限制
+  enable_lyrics   — 补全歌词（只补全 Now Playing 界面）
   lyrics_source   — 歌词来源：lrclib / auto / musixmatch / netease / qq
 
 compat_arguments_schema:
   spoof_premium:
     name: "伪装 Premium"
-    description: "把账号状态改写为 premium。关闭后本插件不做任何修改"
+    description: "把账号状态改写为 premium。关闭后不再伪装 Premium，歌词补全不受影响"
     options: ["true", "false"]
   block_ads:
     name: "去除广告"
@@ -48,6 +54,10 @@ compat_arguments_schema:
   unlock_playback:
     name: "解锁播放限制"
     description: "移除试听时长上限、队列上限与强制随机等免费版限制"
+    options: ["true", "false"]
+  enable_lyrics:
+    name: "补全歌词"
+    description: "官方没有歌词的曲目用第三方歌词补上。只补全 Now Playing 界面（封面下方的同步歌词），不提供完整歌词页"
     options: ["true", "false"]
   lyrics_source:
     name: "歌词来源"
@@ -110,45 +120,51 @@ scriptings:
   - http_request:
       name: "spotify.meta.req"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/extended-metadata\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_meta.js?v=20261107-5"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261107-6"
       body_required: true
       binary_body: true
       max_size: 8388608
       timeout: 10
+      env:
+        _compat.$argument: '{"spoof_premium":{{{spoof_premium}}},"block_ads":{{{block_ads}}},"unlock_playback":{{{unlock_playback}}},"enable_lyrics":{{{enable_lyrics}}}}'
 
+  # 改写 bootstrap / user-customization-service 里的账号状态与远程配置。
   - http_response:
       name: "spotify.premium"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:bootstrap|user-customization-service)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_premium.js?v=20261107-5"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261107-6"
       body_required: true
       binary_body: true
       max_size: 33554432
       timeout: 30
       env:
-        _compat.$argument: '{"spoof_premium":{{{spoof_premium}}},"block_ads":{{{block_ads}}},"unlock_playback":{{{unlock_playback}}}}'
+        _compat.$argument: '{"spoof_premium":{{{spoof_premium}}},"block_ads":{{{block_ads}}},"unlock_playback":{{{unlock_playback}}},"enable_lyrics":{{{enable_lyrics}}}}'
 
   # 把曲目元数据里的 has_lyrics 改成 true，客户端才肯去请求 color-lyrics。
   # extended-metadata 是主路径（TRACK_V4 里的 Track 字段 18），context-resolve 兜底。
   - http_response:
       name: "spotify.meta"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:extended-metadata|context-resolve|connect-state|metadata\\/4\\/track)\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_meta.js?v=20261107-5"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261107-6"
       body_required: true
       binary_body: true
       max_size: 8388608
       timeout: 10
+      env:
+        _compat.$argument: '{"spoof_premium":{{{spoof_premium}}},"block_ads":{{{block_ads}}},"unlock_playback":{{{unlock_playback}}},"enable_lyrics":{{{enable_lyrics}}}}'
 
   # 官方没有歌词时用第三方歌词补上；官方有歌词就原样放行。
   # 不强制 body_required：没有歌词时官方回 404 且 body 为空，强制读 body 脚本就不会执行。
+  # Egern 不支持按参数条件加载脚本，关闭补全歌词时脚本仍会加载，但会立即返回。
   - http_response:
       name: "spotify.lyrics"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261107-5"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261107-6"
       binary_body: true
       max_size: 1048576
       timeout: 10
       env:
-        _compat.$argument: '{"lyrics_source":"{{{lyrics_source}}}"}'
+        _compat.$argument: '{"lyrics_source":"{{{lyrics_source}}}","enable_lyrics":{{{enable_lyrics}}}}'
 
 mitm:
   hostnames:

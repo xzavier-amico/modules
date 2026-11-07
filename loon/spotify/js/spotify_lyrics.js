@@ -1,27 +1,29 @@
-// Spotify Lyrics — 官方没有歌词时，用 LRCLIB 注入第三方歌词。
+// Spotify Lyrics — 官方没有歌词时，用第三方歌词补上。
 //
-// 只处理 color-lyrics/v2/track/{id} 的响应：
-//   官方 200 且 lyrics.lines 非空  -> 原样放行（官方歌词质量更好）
-//   官方 404 / 空歌词 / 解析失败   -> 取曲目元数据，查 LRCLIB，合成同结构的 JSON
+// 只处理 color-lyrics/v{N}/track/{id} 的响应：
+//   200 且歌词非空  -> 清掉额度限制后原样放行（官方歌词质量更好）
+//   404 / 空歌词    -> 取曲目元数据，按配置的歌词源查找，合成同结构响应
+//
+// 补全的只是 Now Playing 界面（封面下方那行同步歌词）。客户端进程内的
+// 「完整歌词页」入口由 Lyrics_NPVCommunicatorImpl.ScrollProvider 决定，
+// 代理层改不到，本脚本也无法创建那个入口。
 //
 // 元数据：open.spotify.com/oembed（公开接口，不需要 token）
-// 歌词：lrclib.net（免费，返回逐行时间轴的 syncedLyrics）
+// 歌词源：LRCLIB / Musixmatch / 网易云 / QQ 音乐
 //
 // 任何一步失败都原样放行，App 仍然显示它自己的「暂无歌词」，不会卡住播放。
 
 (() => {
   "use strict";
 
-  const req = (typeof $request !== "undefined" && $request) || {};
-  const hasResponse = typeof $response !== "undefined" && !!$response;
-  const res = hasResponse ? $response : {};
-  const url = res.url || req.url || "";
+  const res = typeof $response !== "undefined" && $response ? $response : null;
+  const url = (res && res.url) || ($request && $request.url) || "";
 
-  // Loon 传位置数组或对象，Egern 传 JSON 字符串。
+  // Loon 传位置数组，Egern 传 JSON 字符串。
   let opt = {};
   try {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
-    if (Array.isArray(raw)) opt = { lyrics_source: raw[0] };
+    if (Array.isArray(raw)) opt = { lyrics_source: raw[0], enable_lyrics: raw[1] };
     else if (typeof raw === "string") {
       try {
         opt = JSON.parse(raw || "{}") || {};
@@ -29,14 +31,18 @@
         // Loon 单参数时可能直接传字符串
         opt = { lyrics_source: raw };
       }
-    }
-    else if (raw && "object" == typeof raw) opt = raw;
+    } else if (raw && "object" == typeof raw) opt = raw;
   } catch (e) {
     opt = {};
   }
-  // 排查时把这两个空实现换成 console.log / $notification.post。
-  const log = () => {};
-  const notify = () => {};
+  const flag = (v, d) => (v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0"));
+
+  // 这个脚本只在响应阶段被调用；请求阶段或参数关闭时直接放行。
+  // Loon 靠 enable= 决定是否加载脚本，Egern 不支持条件加载，只能在这里早退。
+  if (!res || !flag(opt.enable_lyrics, true)) {
+    $done({});
+    return;
+  }
 
   const match = /\/color-lyrics\/v\d\/track\/([A-Za-z0-9]+)/.exec(url);
   if (!match) {
@@ -45,55 +51,9 @@
   }
   const trackId = match[1];
 
-  // 临时探针：记下当前在播的曲目 id，给 spotify_meta.js 比对用。
-  // 客户端会为列表里的其它曲目预取元数据，光看「改到了几首」分不清改没改到
-  // 正在播的那首。验证通过后连同 meta 那边的读取一起删掉。
-  try {
-    if (typeof $persistentStore !== "undefined" && $persistentStore) {
-      $persistentStore.write(trackId, "spotify_now_track");
-    }
-  } catch (e) {
-    // 存储失败不影响主流程
-  }
-
-  // 临时探针：确认客户端到底有没有请求 color-lyrics、回来什么状态。
-  // 每首歌只提示一次，验证通过后连同调用一起删掉。
-  const notifyOnce = (key, body) => {
-    try {
-      const store = typeof $persistentStore !== "undefined" && $persistentStore;
-      const name = "spotify_lyrics_" + key;
-      if (store && store.read(name)) return;
-      if (typeof $notification !== "undefined" && $notification && "function" == typeof $notification.post) {
-        $notification.post("Spotify 歌词 v5", trackId.slice(0, 8), body);
-        if (store) store.write("1", name);
-      }
-    } catch (e) {
-      // 通知失败不影响主流程
-    }
-  };
-
   const USER_AGENT = "xzavier-modules/1.0 (https://github.com/xzavier-amico/modules)";
   const utf8 = new TextDecoder("utf-8");
   const encoder = new TextEncoder();
-
-  // 临时探针：正在播的这首，元数据到底有没有被 spotify_meta.js 改到。
-  // 「已改」但界面还是不出歌词页 = 卡在客户端进程内的开关上，代理层无解。
-  try {
-    const store = typeof $persistentStore !== "undefined" && $persistentStore;
-    const read = (key) => String((store && store.read(key)) || "").split(",");
-    const patched = read("spotify_patched_ids");
-    const seen = read("spotify_seen_ids");
-    notifyOnce(
-      "meta_" + trackId,
-      patched.indexOf(trackId) >= 0
-        ? "元数据已改"
-        : seen.indexOf(trackId) >= 0
-          ? "元数据本来就是 true"
-          : "元数据没见到",
-    );
-  } catch (e) {
-    // 探针失败不影响主流程
-  }
 
   // 歌词页配色，ARGB。客户端缺省是 0（全透明），必须显式给。
   const COLOR_BG = 0xff121212;
@@ -104,11 +64,6 @@
   const finish = (value) => {
     if (settled) return;
     settled = true;
-    // 请求阶段要短路的话，必须包成 response 字段，Loon/Surge 都是这个约定。
-    if (!hasResponse && value && value.status !== undefined) {
-      $done({ response: value });
-      return;
-    }
     $done(value);
   };
 
@@ -127,26 +82,8 @@
   const wantsProto = /[?&]format=protobuf/i.test(url);
   const protoMode = hasBody ? wantsProto || trimmed.charAt(0) !== "{" : wantsProto || !/[?&]format=json/i.test(url);
 
-  notifyOnce(
-    "hit_" + trackId,
-    (hasResponse ? "响应 " + status : "请求") + (hasBody ? " 有 body" : " 无 body") + (protoMode ? " proto" : " json"),
-  );
-
-  // 请求阶段：先探一下官方有没有歌词，没有才去找第三方。
-  // 之所以不在响应阶段做，是因为没有歌词时官方返回 404 且 body 为空，
-  // 响应脚本在那种情况下根本不会被执行（实测一条通知都收不到）。
-  if (!hasResponse) {
-    runRequestPhase();
-    return;
-  }
-
-  log("命中 " + trackId + "，状态 " + res.status + "，body " + (hasBody ? trimmed.length + " 字节" : "为空") + "，url=" + url);
-  notify("命中，状态 " + res.status + "，" + (hasBody ? "有 body" : "无 body") + (protoMode ? "，protobuf" : "，json"));
-
   // 200 就是「官方有歌词」：拿不到 body 时直接放行，避免把官方歌词顶掉。
   if (status === 200 && !hasBody) {
-    log("200 但没有 body（没开 requires_body），按官方有歌词放行");
-    notify("放行：200 无 body");
     finish({});
     return;
   }
@@ -157,134 +94,51 @@
       const count = rawBytes.length ? protoLineCount(rawBytes) : -1;
       if (count !== 0) {
         // 免费号的歌词有每月额度，用完服务端会在 restriction（字段 14）里回
-        // monthlyLimitReached，客户端就只显示「额度已用完」。抹成 unrestricted 再放行。
-        const cleaned = count > 0 ? stripRestrictionProto(rawBytes) : null;
-        log("官方已有歌词（protobuf " + (count > 0 ? count + " 行" : "无法判断") + "），" + (cleaned ? "清掉 restriction 后放行" : "放行"));
-        notify("放行：官方有歌词（protobuf " + (count > 0 ? count + " 行" : "未知") + "）");
+        // monthlyLimitReached，客户端就只显示「额度已用完」。归一成 showLyrics 再放行。
+        const cleaned = count > 0 ? normalizeRestrictionProto(rawBytes) : null;
         if (cleaned) finish({ status: 200, headers: { "Content-Type": "application/x-protobuf" }, body: cleaned });
         else finish({});
         return;
       }
     } else if (hasLyrics(trimmed)) {
       const cleaned = stripRestrictionJson(trimmed);
-      log("官方已有歌词，" + (cleaned ? "清掉 restriction 后放行" : "放行"));
-      notify("放行：官方已有歌词");
       if (cleaned) finish({ status: 200, headers: { "Content-Type": "application/json; charset=utf-8" }, body: cleaned });
       else finish({});
       return;
     }
-    log("官方 200 但歌词为空，准备注入；前 24 字节: " + hexHead(rawBody));
-    notify("官方歌词为空，开始找第三方歌词");
   }
 
-  resolveLyrics((payload, title, artist) => {
+  resolveLyrics((payload) => {
     if (!payload) {
       finish({});
       return;
     }
-    emit(payload, title, artist);
+    emit(payload);
   });
-
-  // ---- 请求阶段 ---------------------------------------------------------
-
-  function runRequestPhase() {
-    if (isProbeRequest()) {
-      // 自己发出去的探测请求，直接放行，避免递归。
-      $done({});
-      return;
-    }
-
-    log("探测官方歌词接口");
-    probeOfficial((hasOfficial) => {
-      if (hasOfficial === null) {
-        log("探测失败，放行");
-        $done({});
-        return;
-      }
-      if (hasOfficial) {
-        log("官方有歌词，放行");
-        $done({});
-        return;
-      }
-      log("官方没有歌词，开始找第三方");
-      notify("官方没有歌词，开始找第三方");
-      resolveLyrics((payload, title, artist) => {
-        if (!payload) {
-          $done({});
-          return;
-        }
-        emit(payload, title, artist);
-      });
-    });
-  }
-
-  function isProbeRequest() {
-    const headers = req.headers || {};
-    for (const key in headers) {
-      if (!Object.prototype.hasOwnProperty.call(headers, key)) continue;
-      if (key.toLowerCase() === "x-xz-lyrics-probe") return true;
-    }
-    return false;
-  }
-
-  // 原样重放一次官方请求，只看状态码：200 说明官方有歌词。
-  function probeOfficial(cb) {
-    const headers = {};
-    const source = req.headers || {};
-    for (const key in source) {
-      if (Object.prototype.hasOwnProperty.call(source, key)) headers[key] = source[key];
-    }
-    headers["x-xz-lyrics-probe"] = "1";
-
-    try {
-      $httpClient.get({ url: url, headers: headers, timeout: 3000 }, (error, response) => {
-        if (error || !response) {
-          cb(null);
-          return;
-        }
-        const code = Number(response.status) || 0;
-        // 200 = 官方有歌词；404/204 = 明确没有；其他状态说不准，一律当未知处理。
-        if (code === 200) cb(true);
-        else if (code === 404 || code === 204) cb(false);
-        else cb(null);
-      });
-    } catch (e) {
-      cb(null);
-    }
-  }
 
   // 取曲目元数据 -> 按配置的歌词源找 -> 回调 payload
   function resolveLyrics(cb) {
     const oembedUrl = "https://open.spotify.com/oembed?url=" + encodeURIComponent("https://open.spotify.com/track/" + trackId);
     httpGetJson(oembedUrl, (meta) => {
       if (!meta || !meta.title) {
-        log("oembed 没有返回元数据");
-        notify("失败：拿不到曲目元数据");
         cb(null);
         return;
       }
 
       const title = String(meta.title);
       const artist = String(meta.author_name || "").split(",")[0].trim();
-      const order = sourceOrder();
-      log("歌词源顺序: " + order.join(" -> ") + "，曲目 " + title + " / " + artist);
-      notify("查找 " + title + "（" + order.join(" → ") + "）");
 
-      runSource(order, 0, title, artist, (record) => {
+      runSource(sourceOrder(), 0, title, artist, (record) => {
         if (!record) {
-          log("所有歌词源都没有找到 " + title);
-          notify("失败：所有歌词源都没有 " + title);
           cb(null);
           return;
         }
         const payload = buildPayload(record);
         if (!payload) {
-          log("歌词源返回了空内容");
-          notify("失败：歌词源返回空内容");
           cb(null);
           return;
         }
-        cb(payload, title, artist);
+        cb(payload);
       });
     });
   }
@@ -303,14 +157,11 @@
       done(null);
       return;
     }
-    const name = order[index];
-    lookup(name, title, artist, (record) => {
+    lookup(order[index], title, artist, (record) => {
       if (record) {
-        log(name + " 命中");
         done(record);
         return;
       }
-      log(name + " 没有命中，换下一个");
       runSource(order, index + 1, title, artist, done);
     });
   }
@@ -354,7 +205,7 @@
     const headers = { Referer: "https://music.163.com/" };
     httpGetJson("https://music.163.com/api/search/get?s=" + query + "&type=1&limit=5&offset=0", (data) => {
       const songs = data && data.result && data.result.songs;
-      const picked = pickSong(songs, title, (item) => item.name, (item) => (item.artists || []).map((a) => a.name).join(" "));
+      const picked = pickSong(songs, title, (item) => item.name);
       if (!picked) {
         cb(null);
         return;
@@ -376,7 +227,7 @@
     const headers = { Referer: "https://y.qq.com/" };
     httpGetJson("https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=" + query + "&format=json&n=5&p=1", (data) => {
       const list = data && data.data && data.data.song && data.data.song.list;
-      const picked = pickSong(list, title, (item) => item.songname, (item) => (item.singer || []).map((s) => s.name).join(" "));
+      const picked = pickSong(list, title, (item) => item.songname);
       if (!picked) {
         cb(null);
         return;
@@ -448,7 +299,7 @@
     );
   }
 
-  function pickSong(list, title, nameOf, artistOf) {
+  function pickSong(list, title, nameOf) {
     if (!Array.isArray(list) || !list.length) return null;
     const wanted = normalize(title);
     let fallback = null;
@@ -475,17 +326,6 @@
     if (value instanceof ArrayBuffer) return new Uint8Array(value);
     if (value && ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
     return new Uint8Array(0);
-  }
-
-  // 排查用：把响应体开头几个字节打成十六进制，好判断是 protobuf、gzip 还是别的。
-  function hexHead(value) {
-    let bytes;
-    if (value instanceof ArrayBuffer) bytes = new Uint8Array(value, 0, Math.min(24, value.byteLength));
-    else if (value && ArrayBuffer.isView(value)) bytes = new Uint8Array(value.buffer, value.byteOffset, Math.min(24, value.byteLength));
-    else return "(非二进制)";
-    const parts = [];
-    for (let i = 0; i < bytes.length; i += 1) parts.push(("0" + bytes[i].toString(16)).slice(-2));
-    return parts.join(" ");
   }
 
   function hasLyrics(text) {
@@ -535,12 +375,7 @@
     }
   }
 
-  function emit(payload, title, artist) {
-    const kind = payload.lyrics.syncType === "LINE_SYNCED" ? "同步" : "纯文本";
-    log("注入 " + title + " / " + artist + "（" + kind + " " + payload.lyrics.lines.length + " 行）");
-    notify("注入 " + kind + " " + payload.lyrics.lines.length + " 行 · " + title);
-    notifyOnce("inj_" + trackId, "注入 " + kind + " " + payload.lyrics.lines.length + " 行");
-
+  function emit(payload) {
     if (protoMode) {
       const bytes = encodeProto(payload.lyrics.lines, payload.lyrics.syncType, payload.lyrics.provider);
       finish({ status: 200, headers: { "Content-Type": "application/x-protobuf" }, body: bytes });
@@ -567,7 +402,6 @@
   // 和真实响应 0a c2 09 08 01 12 1b 08 b2 3c 12 16 … 对得上：
   // 0a=Response.data，c2 09=长度 1218，08 01=timeSynchronized=true，
   // 12 1b=第一条 line，08 b2 3c=offsetMs 7730，12 16=content 长度 22。
-  // colors 不写：客户端对缺失的 colors 有默认主题，写错反而会把字刷成看不见的颜色。
 
   function encodeProto(lines, syncType, provider) {
     const lineOut = [];
@@ -580,11 +414,11 @@
     const lyrics = pbUint(1, syncType === "LINE_SYNCED" ? 1 : 0)
       .concat(lineOut)
       .concat(pbBytes(5, encoder.encode(provider || "LRCLIB")))
-      // restriction = 1 (showLyrics)。缺省是 0，客户端会当成「没有歌词页」。
+      // restriction = 1 (showLyrics)。官方响应带这个值，缺省时按 0 处理。
       .concat(pbUint(14, 1));
     // colors 必须给：客户端拿它刷歌词页的背景和文字，字段缺失时是 0，alpha 也是 0，
-    // 整页歌词就成了透明的 —— 表现是「封面下面那行有，点进歌词页一片空白」。
-    // 取值是 ARGB（见 EeveeSpotify 的 Color.uInt32），这里用深底浅字，不依赖封面取色。
+    // 整页歌词就成了透明的。取值是 ARGB（见 EeveeSpotify 的 Color.uInt32），
+    // 这里用深底浅字，不依赖封面取色。
     const colors = pbUint(1, COLOR_BG)
       .concat(pbUint(2, COLOR_LINE))
       .concat(pbUint(3, COLOR_ACTIVE));
@@ -616,7 +450,7 @@
   // 枚举：0 unrestricted / 1 showLyrics / 2 showLyricsMonthlyLimit / 3 monthlyLimitReached。
   // 免费号的每月额度用完时服务端回 3，客户端只弹额度提示、不出歌词页；这里一律
   // 改回 1。没有这个字段、或者本来就是 1，就返回 null，调用方原样放行。
-  function stripRestrictionProto(bytes) {
+  function normalizeRestrictionProto(bytes) {
     let top;
     try {
       top = pbFields(bytes);
