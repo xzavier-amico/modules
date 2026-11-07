@@ -98,10 +98,11 @@ scriptings:
       env:
         _compat.$argument: '{"spoof_premium":{{{spoof_premium}}},"block_ads":{{{block_ads}}},"unlock_playback":{{{unlock_playback}}}}'
 
-  # 先把播放上下文里的 has_lyrics 改成 true，客户端才肯去请求 color-lyrics。
+  # 把曲目元数据里的 has_lyrics 改成 true，客户端才肯去请求 color-lyrics。
+  # extended-metadata 是主路径（TRACK_V4 里的 Track 字段 18），context-resolve 兜底。
   - http_response:
       name: "spotify.meta"
-      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:context-resolve|connect-state)\\/"
+      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:extended-metadata|context-resolve|connect-state|metadata\\/4\\/track)\\/"
       script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_meta.js"
       body_required: true
       binary_body: true

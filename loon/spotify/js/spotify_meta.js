@@ -1,24 +1,32 @@
-// Spotify Lyrics Gate — 把播放上下文里的 has_lyrics 改成 true。
+// Spotify Lyrics Gate — 把曲目元数据里的 has_lyrics 改成 true。
 //
-// 客户端在 SPTPlayerTrack.metadata() 里读 has_lyrics：值是 "false" 就直接显示
-// 「暂无歌词」，连 color-lyrics 都不请求，代理层拦不到任何东西。这个字典在
-// Spotify 的 player protobuf 里就是 ContextTrack.metadata：
+// 客户端在 SPTPlayerTrack.metadata() 里读 has_lyrics：值是 false 就直接显示
+// 「暂无歌词」，连 color-lyrics 都不请求，代理层拦不到任何东西。
 //
-//   spotify.player.esperanto.proto.ContextTrack {
-//     string uri = 1; string uid = 2; map<string, string> metadata = 3;
-//   }
+// iOS 上这个值有两个来源，都要处理：
 //
-// 由 context-resolve / connect-state 的响应下发。EeveeSpotify 也是改同一个位置
-// （meta["has_lyrics"] = "true"），只是它在进程内 hook，我们只能改响应字节。
+//   1. extended-metadata/v0/extended-metadata（主路径）
+//      BatchedExtensionResponse
+//        └ extended_metadata[] (EntityExtensionDataArray, extension_kind = TRACK_V4 = 10)
+//            └ extension_data[] (EntityExtensionData)
+//                └ extension_data (google.protobuf.Any)
+//                    └ value = metadata.proto Track，has_lyrics = 18
+//      SPTPlayerTrack.metadata() 里同时有 extracted_color 和 has_lyrics，
+//      说明客户端就是拿这个接口的数据拼出来的。
 //
-// 做法：递归走 protobuf，只改 map entry { 1: "has_lyrics", 2: "false" } 的值；
-// 上下文里有 metadata 但缺这个 entry 时补一条。其余字段、字段顺序、未知字段
-// 全部原样写回 —— 和 spotify_premium.js 一样，不做整包重编码。
+//   2. context-resolve / connect-state 的 ContextTrack.metadata（map<string,string>）
+//      作为兜底：map entry { 1: "has_lyrics", 2: "false" } 直接改值。
+//
+// 另外顺手兼容 /metadata/4/track/ 的顶层 Track（老接口）。
+//
+// 做法和 spotify_premium.js 一样：递归走 protobuf，只改目标字段，其余字节
+// 原样写回，不重编码整包。
 
 (() => {
   "use strict";
 
   const MARK = "has_lyrics";
+  const TRACK_V4 = 10;
 
   function run() {
     const res = (typeof $response !== "undefined" && $response) || {};
@@ -35,29 +43,54 @@
       return;
     }
 
-    // 服务端对没有歌词的歌可能直接省略这个键，所以不能靠字符串查找跳过，
-    // 只能整棵消息树走一遍；这条规则只匹配 context-resolve / connect-state。
-    const out = patch(body, 0, { n: 0 });
+    const stat = { n: 0 };
+    let out = null;
+    let source = "";
+
+    if (/\/metadata\/4\/track\//.test(url)) {
+      // 顶层就是 Track
+      const fields = parse(body);
+      if (fields && patchTrack(fields, stat)) out = serialize(fields);
+      source = "track";
+    } else {
+      const fields = parse(body);
+      if (fields && patchFields(fields, 0, stat)) out = serialize(fields);
+      source = url.indexOf("context-resolve") >= 0 ? "ctx" : "track";
+    }
+
     if (!out) {
       $done({});
       return;
     }
 
-    // 临时探针：确认这条响应里到底有没有 has_lyrics、改了几条。
-    // 只对 context-resolve 提示，避免 connect-state 轮询刷屏；验证通过后删掉。
+    // 临时探针：确认到底哪条响应被改了。验证通过后删掉。
+    // 每个来源只提示一次，避免滚动/轮询刷屏。
     try {
+      const key = "spotify_lyrics_seen_" + source;
+      let seen = false;
+      try {
+        seen = typeof $persistentStore !== "undefined" && $persistentStore && !!$persistentStore.read(key);
+      } catch (e) {
+        seen = false;
+      }
       if (
-        String(url).indexOf("context-resolve") >= 0 &&
+        !seen &&
+        url.indexOf("connect-state") < 0 &&
         typeof $notification !== "undefined" && $notification && "function" == typeof $notification.post
       ) {
+        try {
+          $persistentStore.write("1", key);
+        } catch (e) {
+          // 存储失败就退回每次都提示
+        }
         const path = String(url).replace(/^https?:\/\/[^/]+/, "");
-        $notification.post("Spotify 歌词", "已放开 " + out.count + " 首", path.slice(0, 80));
+        $notification.post("Spotify 歌词", "已放开 " + stat.n + " 首", source + " " + path.slice(0, 72));
       }
     } catch (e) {
       // 通知失败不影响改写
     }
 
-    $done({ body: out.bytes });
+    $done({ body: out });
   }
 
   // ---------------------------------------------------------------- protobuf
@@ -78,7 +111,6 @@
     throw new Error("varint");
   }
 
-  // 解析失败返回 null；调用方据此保持原始字节。
   function parse(b) {
     const out = [];
     const s = { i: 0 };
@@ -178,7 +210,21 @@
     }
   }
 
-  // map entry 已经解析过，这里只认 { 1: key, 2: value } 的形状。
+  // Track 的 has_lyrics = 18（metadata.proto）。缺省时补一条。
+  function patchTrack(fields, stat) {
+    const f = first(fields, 18);
+    if (f) {
+      if (f.w !== 0 || f.v === 1) return false;
+      f.v = 1;
+      stat.n++;
+      return true;
+    }
+    fields.push({ no: 18, w: 0, v: 1 });
+    stat.n++;
+    return true;
+  }
+
+  // map entry 就是一条 { 1: key, 2: value } 的小消息。
   function asEntry(fields) {
     if (!fields || fields.length < 2 || fields.length > 4) return null;
     const k = first(fields, 1);
@@ -192,8 +238,46 @@
 
   const encodeEntry = (key, value) => serialize([fieldString(1, key), fieldString(2, value)]);
 
-  // ContextTrack 的判定：字段 1 是 spotify: URI，且 metadata 里至少有一个已知键。
-  // 只认带 metadata 的上下文，避免往别的消息里塞字段。
+  // EntityExtensionDataArray：field 2 = extension_kind，field 3 = EntityExtensionData[]
+  function isTrackArray(fields) {
+    const kind = first(fields, 2);
+    if (!kind || kind.w !== 0 || kind.v !== TRACK_V4) return false;
+    const data = first(fields, 3);
+    if (!data || data.w !== 2) return false;
+    const ed = parse(data.p);
+    const uri = ed && text(first(ed, 2));
+    return !!uri && uri.indexOf("spotify:track:") === 0;
+  }
+
+  function patchTrackArray(fields, stat) {
+    let changed = false;
+    for (const f of fields) {
+      if (f.no !== 3 || f.w !== 2) continue;
+      const ed = parse(f.p);
+      if (!ed) continue;
+      const uri = text(first(ed, 2));
+      if (!uri || uri.indexOf("spotify:track:") !== 0) continue;
+
+      // EntityExtensionData.extension_data = 3 (Any)，Any.value = 2
+      const anyField = first(ed, 3);
+      if (!anyField || anyField.w !== 2) continue;
+      const any = parse(anyField.p);
+      if (!any) continue;
+      const value = first(any, 2);
+      if (!value || value.w !== 2) continue;
+
+      const track = parse(value.p);
+      if (!track) continue;
+      if (patchTrack(track, stat)) {
+        value.p = serialize(track);
+        anyField.p = serialize(any);
+        f.p = serialize(ed);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
   const KNOWN = [
     "artist_name", "artist_uri", "album_title", "album_uri",
     "track_title", "track_uri", "duration", "image_url", "is_explicit", "track_player"
@@ -217,8 +301,6 @@
     for (const f of fields) {
       if (f.w !== 2) continue;
 
-      // 每条 length-delimited 字段只解析一次：既能当 map entry 判断，
-      // 也能继续往下走，避免对大响应重复扫描。
       const sub = parse(f.p);
       if (!sub) continue;
 
@@ -232,12 +314,21 @@
         continue;
       }
 
+      if (isTrackArray(sub)) {
+        if (patchTrackArray(sub, stat)) {
+          f.p = serialize(sub);
+          changed = true;
+        }
+        continue;
+      }
+
       if (depth < 16 && patchFields(sub, depth + 1, stat)) {
         f.p = serialize(sub);
         changed = true;
       }
     }
 
+    // 上下文里缺这个 entry 时补一条。
     if (isContextTrack(fields)) {
       let present = false;
       for (const f of fields) {
@@ -256,13 +347,6 @@
     }
 
     return changed;
-  }
-
-  function patch(bytes, depth, stat) {
-    const fields = parse(bytes);
-    if (!fields) return null;
-    if (!patchFields(fields, depth, stat)) return null;
-    return { bytes: serialize(fields), count: stat.n };
   }
 
   run();

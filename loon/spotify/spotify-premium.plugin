@@ -28,8 +28,9 @@ DOMAIN-SUFFIX,www.googletagservices.com,REJECT
 
 [Script]
 response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:bootstrap|user-customization-service)/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_premium.js", {${spoof_premium}, ${block_ads}, ${unlock_playback}}) with requires_body=true, binary_body_mode=true, tag="Spotify Premium", timeout=30
-# 先把播放上下文里的 has_lyrics 改成 true，客户端才肯去请求 color-lyrics。
-response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:context-resolve|connect-state)\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_meta.js") with requires_body=true, binary_body_mode=true, tag="spotify.meta", timeout=10
+# 把曲目元数据里的 has_lyrics 改成 true，客户端才肯去请求 color-lyrics。
+# extended-metadata 是主路径（TRACK_V4 里的 Track 字段 18），context-resolve 兜底。
+response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:extended-metadata|context-resolve|connect-state|metadata\/4\/track)\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_meta.js") with requires_body=true, binary_body_mode=true, tag="spotify.meta", timeout=10
 # 官方没有歌词时用第三方歌词补上；官方有歌词就原样放行。
 # 不强制 requires_body：没有歌词时官方回 404 且 body 为空，强制读 body 脚本就不会执行。
 response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/color-lyrics\/v2\/track\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_lyrics.js", {${lyrics_source}}) with binary_body_mode=true, tag="spotify.lyrics", timeout=10

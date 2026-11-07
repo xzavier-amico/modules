@@ -35,12 +35,12 @@ premium、关掉广告位、移除免费版的试听时长上限与队列/随机
 
 两段脚本配合：
 
-1. `js/spotify_meta.js` 处理 `context-resolve` / `connect-state` 的 protobuf，
-   把 `ContextTrack.metadata` 里的 `has_lyrics` 改成 `"true"`。客户端读的是
+1. `js/spotify_meta.js` 把曲目元数据里的 `has_lyrics` 改成 `"true"`。客户端读的是
    `SPTPlayerTrack.metadata()["has_lyrics"]`，值为 false 时直接显示「暂无歌词」，
-   连 `color-lyrics` 都不请求，代理层拦不到任何东西 —— 这也是之前只改
-   `Track.has_lyrics`（字段 18）没效果的原因：那个字段在 `/metadata/4/track/`，
-   iOS 客户端并不走它。
+   连 `color-lyrics` 都不请求，代理层拦不到任何东西。主路径是
+   `extended-metadata` 的 `TRACK_V4`（`Track.has_lyrics`，字段 18）；
+   `context-resolve` / `connect-state` 的 `ContextTrack.metadata` 作为兜底，
+   两处都改。之前只改 `/metadata/4/track/` 没效果，是因为 iOS 客户端不走那个接口。
 2. `js/spotify_lyrics.js` 处理 `color-lyrics/v2/track/{id}`：官方有歌词就原样
    放行；官方没有（404 / 空歌词）就取 `open.spotify.com/oembed` 的曲名歌手，
    去配置的歌词源找，合成 Spotify 的 protobuf 歌词返回。
