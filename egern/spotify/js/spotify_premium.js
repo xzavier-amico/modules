@@ -441,9 +441,10 @@
     ["ios-feature-search","prompted_playlist_merchandizing_enabled",1,0,"","misc"],
     ["","should_nova_scroll_use_scrollsita",0,0,"","misc"],
     ["ios-sociallistening-configuration-impl","premium_gated_start_jam_buttons_enabled",2,0,"","misc"],
-    // 歌词入口：有的版本 is_lyrics_card_element_enabled 下发 false，Now Playing
-    // 里就不出歌词卡片，客户端也不会去请求 color-lyrics。
-    ["ios-feature-lyrics","is_lyrics_card_element_enabled",2,1,"","misc"],
+    // 歌词总开关。真实账号抓包里 is_lyrics_card_element_enabled 是 false，
+    // 但歌词页照常显示 —— 这个开关管的是 Now Playing 里那张「单行歌词」卡片，
+    // 打开后客户端会用卡片替代整页歌词。所以要显式写回 false。
+    ["ios-feature-lyrics","is_lyrics_card_element_enabled",2,0,"","misc"],
     ["ios-feature-lyrics","is_get_lyrics_v2_enabled",2,1,"","misc"],
     ["ios-feature-lyrics","enable_lyrics",2,1,"","misc"]
   ];
@@ -476,6 +477,7 @@
     "mixing-tools": "EDIT",
     "your-library-tags": true,
     "libspotify": true,
+    "lyrics-offline": true,
     "mobile": true,
     "pick-and-shuffle": false
   };

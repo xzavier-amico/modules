@@ -45,12 +45,25 @@ premium、关掉广告位、移除免费版的试听时长上限与队列/随机
    放行；官方没有（404 / 空歌词）就取 `open.spotify.com/oembed` 的曲名歌手，
    去配置的歌词源找，合成 Spotify 的 protobuf 歌词返回。
 
+另外 `js/spotify_premium.js` 改 `ios-feature-lyrics` 下的三个 UCS 开关：
+
+- `enable_lyrics`、`is_get_lyrics_v2_enabled` → true
+- `is_lyrics_card_element_enabled` → **false**
+
+最后这个开关名字容易看反：它管的是 Now Playing 里那张「单行歌词」预览卡片。打开后
+客户端用卡片替代整页歌词，表现就是「能显示一行，但没有专门的歌词页」。真实账号的
+抓包里它是 false，歌词页照常显示。
+
 歌词源：`lrclib`（默认，曲库全但中文偏弱）、`musixmatch`、`netease`、`qq`、
 `auto`（依次尝试 lrclib → musixmatch → 网易云 → QQ）。
 
 注意：
 
 - 逐字歌词（syllables）没有做，只做逐行同步。
+- `user-customization-service` / `extended-metadata` / `color-lyrics` 都带 etag。
+  插件在 `[Rewrite]` 里删掉了请求的 `if-none-match`：不删的话服务端会回 304、
+  响应体为空，脚本只能放行，客户端继续用缓存里的旧值（开关是关的、`has_lyrics`
+  是 false、歌词是 404），表现就是「改了配置没生效」。
 - 元数据在客户端有缓存；改完要重启 App，或换一个没打开过的歌单才会重新拉取。
 - 如果某首歌客户端仍然不请求 `color-lyrics`，说明它的 `has_lyrics` 不是从这两个
   接口来的（客户端本地生成），代理层就无能为力了，只能靠 EeveeSpotify 那种

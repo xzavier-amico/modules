@@ -26,6 +26,13 @@ DOMAIN-SUFFIX,tpc.googlesyndication.com,REJECT
 DOMAIN-SUFFIX,adservice.google.com,REJECT
 DOMAIN-SUFFIX,www.googletagservices.com,REJECT
 
+[Rewrite]
+# UCS / extended-metadata / color-lyrics 都带 etag。客户端带 if-none-match 上来、
+# 服务端回 304 时响应体是空的，脚本拿不到 body 就只能放行，客户端继续用缓存里的
+# 旧值（is_lyrics_card_element_enabled=false、has_lyrics=false、404 无歌词），
+# 于是改了开关也「没生效」。把校验头删掉，强制每次都拿完整响应。
+request if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:user-customization-service|extended-metadata|color-lyrics)\//i then request.header.del("if-none-match")
+
 [Script]
 response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:bootstrap|user-customization-service)/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_premium.js", {${spoof_premium}, ${block_ads}, ${unlock_playback}}) with requires_body=true, binary_body_mode=true, tag="Spotify Premium", timeout=30
 # 把曲目元数据里的 has_lyrics 改成 true，客户端才肯去请求 color-lyrics。

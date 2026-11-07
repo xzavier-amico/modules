@@ -121,15 +121,21 @@
       // 解析不了（拿不到原始字节）时返回 -1，宁可放行也不要顶掉官方歌词。
       const count = rawBytes.length ? protoLineCount(rawBytes) : -1;
       if (count !== 0) {
-        log("官方已有歌词（protobuf " + (count > 0 ? count + " 行" : "无法判断") + "），放行");
+        // 免费号的歌词有每月额度，用完服务端会在 restriction（字段 14）里回
+        // monthlyLimitReached，客户端就只显示「额度已用完」。抹成 unrestricted 再放行。
+        const cleaned = count > 0 ? stripRestrictionProto(rawBytes) : null;
+        log("官方已有歌词（protobuf " + (count > 0 ? count + " 行" : "无法判断") + "），" + (cleaned ? "清掉 restriction 后放行" : "放行"));
         notify("放行：官方有歌词（protobuf " + (count > 0 ? count + " 行" : "未知") + "）");
-        finish({});
+        if (cleaned) finish({ status: 200, headers: { "Content-Type": "application/x-protobuf" }, body: cleaned });
+        else finish({});
         return;
       }
     } else if (hasLyrics(trimmed)) {
-      log("官方已有歌词，放行");
+      const cleaned = stripRestrictionJson(trimmed);
+      log("官方已有歌词，" + (cleaned ? "清掉 restriction 后放行" : "放行"));
       notify("放行：官方已有歌词");
-      finish({});
+      if (cleaned) finish({ status: 200, headers: { "Content-Type": "application/json; charset=utf-8" }, body: cleaned });
+      else finish({});
       return;
     }
     log("官方 200 但歌词为空，准备注入；前 24 字节: " + hexHead(rawBody));
@@ -560,6 +566,61 @@
       return 0;
     }
     return 0;
+  }
+
+  // 把 LyricsData.restriction（字段 14）去掉。没有这个字段就返回 null，
+  // 调用方据此原样放行，不动官方响应的任何一个字节。
+  function stripRestrictionProto(bytes) {
+    let top;
+    try {
+      top = pbFields(bytes);
+    } catch (e) {
+      return null;
+    }
+    if (!top.length) return null;
+    let changed = false;
+    const outTop = [];
+    for (let i = 0; i < top.length; i += 1) {
+      const f = top[i];
+      if (f.field !== 1 || f.wire !== 2) {
+        outTop.push(pbEncodeField(f));
+        continue;
+      }
+      const inner = pbFields(f.bytes);
+      const outInner = [];
+      for (let j = 0; j < inner.length; j += 1) {
+        const g = inner[j];
+        if (g.field === 14 && g.wire === 0) {
+          changed = true;
+          continue;
+        }
+        outInner.push(pbEncodeField(g));
+      }
+      outTop.push(pbBytes(1, pbConcat(outInner)));
+    }
+    return changed ? new Uint8Array(pbConcat(outTop)) : null;
+  }
+
+  function stripRestrictionJson(text) {
+    try {
+      const data = JSON.parse(text);
+      const lyrics = data && data.lyrics;
+      if (!lyrics || !Object.prototype.hasOwnProperty.call(lyrics, "restriction")) return null;
+      delete lyrics.restriction;
+      return JSON.stringify(data);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function pbEncodeField(f) {
+    return f.wire === 0 ? pbUint(f.field, f.value) : pbBytes(f.field, f.bytes);
+  }
+
+  function pbConcat(list) {
+    const out = [];
+    for (let i = 0; i < list.length; i += 1) out.push.apply(out, list[i]);
+    return out;
   }
 
   function pbFields(bytes) {

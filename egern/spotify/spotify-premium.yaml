@@ -86,6 +86,24 @@ rules:
       match: "www.googletagservices.com"
       policy: REJECT
 
+# UCS / extended-metadata / color-lyrics 都带 etag。客户端带 if-none-match 上来、
+# 服务端回 304 时响应体是空的，脚本拿不到 body 就只能放行，客户端继续用缓存里的
+# 旧值（is_lyrics_card_element_enabled=false、has_lyrics=false、404 无歌词），
+# 于是改了开关也「没生效」。把校验头删掉，强制每次都拿完整响应。
+header_rewrites:
+  - delete:
+      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/user-customization-service\\/"
+      name: "if-none-match"
+      type: "request"
+  - delete:
+      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/extended-metadata\\/"
+      name: "if-none-match"
+      type: "request"
+  - delete:
+      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/"
+      name: "if-none-match"
+      type: "request"
+
 scriptings:
   - http_response:
       name: "spotify.premium"
