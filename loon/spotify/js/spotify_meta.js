@@ -74,30 +74,43 @@
       return;
     }
 
-    // 临时探针：确认到底哪条响应被改了、改的是哪首。验证通过后删掉。
-    // 30 秒内只提示一次，避免滚动/轮询刷屏。
+    // 临时探针：确认改到的到底是不是正在播的那首。验证通过后删掉。
+    // 每条 (来源 + 是否含当前曲目 + 当前曲目 id) 只提示一次。
     try {
-      const now = Date.now();
-      let last = 0;
+      let nowId = "";
       try {
-        last = Number(($persistentStore && $persistentStore.read("spotify_lyrics_last")) || 0) || 0;
+        nowId = ($persistentStore && $persistentStore.read("spotify_now_track")) || "";
       } catch (e) {
-        last = 0;
+        nowId = "";
+      }
+      const uris = stat.uris || [];
+      let hitNow = false;
+      for (let i = 0; i < uris.length; i += 1) {
+        if (nowId && uris[i].indexOf(nowId) >= 0) {
+          hitNow = true;
+          break;
+        }
+      }
+      const key = "spotify_meta_seen3_" + source + "_" + (hitNow ? "now" : "other") + "_" + nowId;
+      let seen = false;
+      try {
+        seen = !!($persistentStore && $persistentStore.read(key));
+      } catch (e) {
+        seen = false;
       }
       if (
-        now - last > 30000 &&
-        url.indexOf("connect-state") < 0 &&
+        !seen &&
         typeof $notification !== "undefined" && $notification && "function" == typeof $notification.post
       ) {
         try {
-          $persistentStore.write(String(now), "spotify_lyrics_last");
+          $persistentStore.write("1", key);
         } catch (e) {
           // 存储失败就退回每次都提示
         }
         $notification.post(
           "Spotify 歌词",
           "已放开 " + stat.n + " 首",
-          source + " " + String(stat.last || "").slice(-14),
+          source + " " + (nowId ? (hitNow ? "含当前曲目" : "不含当前曲目") : "未知当前曲目"),
         );
       }
     } catch (e) {
@@ -365,6 +378,8 @@
         anyField.p = serialize(any);
         f.p = serialize(ed);
         stat.last = uri;
+        if (!stat.uris) stat.uris = [];
+        if (stat.uris.length < 64) stat.uris.push(uri);
         changed = true;
       }
     }
@@ -403,7 +418,12 @@
           f.p = encodeEntry(MARK, "true");
           changed = true;
           stat.n++;
-          stat.last = text(first(fields, 1)) || stat.last;
+          const uri = text(first(fields, 1));
+          stat.last = uri || stat.last;
+          if (uri) {
+            if (!stat.uris) stat.uris = [];
+            if (stat.uris.length < 64) stat.uris.push(uri);
+          }
         }
         continue;
       }
@@ -437,7 +457,12 @@
         fields.push({ no: 3, w: 2, p: encodeEntry(MARK, "true") });
         changed = true;
         stat.n++;
-        stat.last = text(first(fields, 1)) || stat.last;
+        const uri = text(first(fields, 1));
+        stat.last = uri || stat.last;
+        if (uri) {
+          if (!stat.uris) stat.uris = [];
+          if (stat.uris.length < 64) stat.uris.push(uri);
+        }
       }
     }
 

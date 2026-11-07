@@ -45,6 +45,17 @@
   }
   const trackId = match[1];
 
+  // 临时探针：记下当前在播的曲目 id，给 spotify_meta.js 比对用。
+  // 客户端会为列表里的其它曲目预取元数据，光看「改到了几首」分不清改没改到
+  // 正在播的那首。验证通过后连同 meta 那边的读取一起删掉。
+  try {
+    if (typeof $persistentStore !== "undefined" && $persistentStore) {
+      $persistentStore.write(trackId, "spotify_now_track");
+    }
+  } catch (e) {
+    // 存储失败不影响主流程
+  }
+
   // 临时探针：确认客户端到底有没有请求 color-lyrics、回来什么状态。
   // 每首歌只提示一次，验证通过后连同调用一起删掉。
   const notifyOnce = (key, body) => {
