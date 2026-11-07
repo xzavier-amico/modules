@@ -449,7 +449,11 @@
       const e = asEntry(parse(f.p));
       if (e && KNOWN.indexOf(e.key) >= 0) known++;
     }
-    return known > 0;
+    if (known > 0) return true;
+    // 播放器状态里的当前曲目经常只带 uri + uid，metadata 是空的；只按已知 key
+    // 判断会漏掉它，结果「已放开 N 首」改的全是队列里的下一首。
+    const uid = first(fields, 2);
+    return !!uid && uid.w === 2;
   }
 
   function patchFields(fields, depth, stat) {
