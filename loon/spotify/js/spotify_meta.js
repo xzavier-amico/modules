@@ -74,6 +74,33 @@
       return;
     }
 
+    const uris = stat.uris || [];
+
+    // 临时探针：把改过的曲目 id 记下来，spotify_lyrics.js 在拿到 color-lyrics
+    // 请求时用它判断「正在播的这首」到底改到没有。
+    try {
+      if (typeof $persistentStore !== "undefined" && $persistentStore && uris.length) {
+        const ids = [];
+        for (let i = 0; i < uris.length; i += 1) {
+          const u = String(uris[i] || "");
+          const at = u.lastIndexOf(":");
+          if (at >= 0 && at < u.length - 1) ids.push(u.slice(at + 1));
+        }
+        const prev = String($persistentStore.read("spotify_patched_ids") || "")
+          .split(",")
+          .filter(Boolean);
+        const merged = [];
+        const all = prev.concat(ids);
+        for (let i = 0; i < all.length; i += 1) {
+          if (all[i] && merged.indexOf(all[i]) < 0) merged.push(all[i]);
+        }
+        while (merged.length > 60) merged.shift();
+        $persistentStore.write(merged.join(","), "spotify_patched_ids");
+      }
+    } catch (e) {
+      // 存储失败不影响改写
+    }
+
     // 临时探针：确认改到的到底是不是正在播的那首。验证通过后删掉。
     // 每条 (来源 + 是否含当前曲目 + 当前曲目 id) 只提示一次。
     try {
@@ -83,7 +110,6 @@
       } catch (e) {
         nowId = "";
       }
-      const uris = stat.uris || [];
       let hitNow = false;
       for (let i = 0; i < uris.length; i += 1) {
         if (nowId && uris[i].indexOf(nowId) >= 0) {
