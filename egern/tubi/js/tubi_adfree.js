@@ -1,14 +1,18 @@
 // Tubi Ad-Free — Loon / Egern.
 //
 // Tubi 的广告是客户端插入（CSAI），不是把广告缝进视频流：内容清单是一份干净的
-// VOD playlist（实测 833 个分片，没有任何 EXT-X-DISCONTINUITY / CUE-OUT），
-// 广告位来自内容元数据里的 monetization.cue_points，播放到该秒数时播放器再单独
-// 向广告服务要一批广告，拿到 { ads: [...] } 后插在中间播。
+// VOD playlist，广告位来自内容元数据里的 monetization.cue_points，播放到该秒数时
+// 播放器再单独向广告服务要一批广告，拿到 { ads: [...] } 后插在中间播。
 //
-// 所以这里不碰视频，只让广告请求返回「没有广告」：
+// 所以这里分两道防线，第一道才是主路径：
 //
-//   rainmaker*.production-public.tubi.io/api/v2/rev/vod/...   → {"ads":[],"metrics":{...}}
-//   ads.adrise.tv / ads.tubi.io / ads.production-public.tubi.io → 空 VAST / 空 VMAP
+//   1. 内容元数据 /oz/videos/<id>/content 里的 cue_points 直接清空。
+//      播放器没有广告位，就不会在 50 分钟那种中途位置发广告请求，也不会走到
+//      「广告服务没返回 → 播备用推广片」的兜底分支。
+//
+//   2. 广告接口一律回答「没有广告」：
+//      rainmaker*.production-public.tubi.io/api/v2/rev/vod/... → {"ads":[],"metrics":{...}}
+//      ads.adrise.tv / ads.tubi.io / ads.production-public.tubi.io → 空 VAST / 空 VMAP
 //
 // 为什么不直接 reject：Tubi 带反广告拦截。网页端会去拉
 // https://mcdn.tubitv.com/js/ads.js 这个诱饵，播放器里还有
@@ -16,8 +20,7 @@
 // AD_REQUEST_BLOCKED_ERROR。返回一个合法的空广告响应走的是「这次没广告」的
 // 正常分支，不触发这些检测。
 //
-// 只改写 JSON 里确实是数组的 ads 字段和 VAST/VMAP 文档，其他响应原样放行，
-// 所以就算 Tubi 换了接口形状，最差也只是这个脚本不生效。
+// 只清空确实是数组的字段、确实是 VAST/VMAP 的文档，其他响应原样放行。
 
 (() => {
   "use strict";
@@ -30,7 +33,7 @@
   let opt = {};
   try {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
-    if (Array.isArray(raw)) opt = {block_ads: raw[0]};
+    if (Array.isArray(raw)) opt = { block_ads: raw[0], debug: raw[1] };
     else if (typeof raw === "string") opt = JSON.parse(raw || "{}") || {};
     else if (raw && "object" == typeof raw) opt = raw;
   } catch (e) {
@@ -39,9 +42,12 @@
   const flag = (v, d) =>
     v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0");
 
-  const finish = (body) => {
-    if (body === undefined) $done({});
-    else $done({ body: body });
+  const debug = flag(opt.debug, false);
+  const log = (m) => {
+    if (!debug) return;
+    try {
+      console.log("[tubi] " + m);
+    } catch (e) {}
   };
 
   if (!flag(opt.block_ads, true)) {
@@ -77,22 +83,73 @@
     $done({});
     return;
   }
-  if (body.length > 1024 * 1024) {
+  // 内容元数据带 video_resources，偶尔会超过 1MB，放宽到 8MB。
+  if (body.length > 8 * 1024 * 1024) {
+    log("skip oversized body " + body.length + "B");
     $done({});
     return;
   }
 
-  const host = ((url.match(/^https?:\/\/([^/?#]+)/i) || [])[1] || "").split(":")[0].toLowerCase();
-  const isRainmaker = /^rainmaker\d*\.production-public\.tubi\.io$/.test(host);
-  const isAdHost = /^(?:ads\.adrise\.tv|ads\.tubi\.io|ads\.production-public\.tubi\.io)$/.test(host);
-  if (!isRainmaker && !isAdHost) {
-    $done({});
-    return;
-  }
+  const parts = url.match(/^https?:\/\/([^/?#]+)([^?#]*)/i) || [];
+  const host = (parts[1] || "").split(":")[0].toLowerCase();
+  const path = parts[2] || "";
+
+  // 广告侧主机：ads.* / rainmaker* 以及 adrise.tv 自家域。
+  const isAdHost =
+    /(^|\.)(tubi\.io|tubitv\.com|tubi\.video|adrise\.tv)$/.test(host) &&
+    (/^ads[.\-]/.test(host) || /^rainmaker/.test(host) || /(^|\.)adrise\.tv$/.test(host));
+
+  // 这些字段是数组时，数组内容就是广告；清空即「这次没有广告」。
+  const AD_KEYS = [
+    "ads",
+    "cue_points",
+    "cuePoints",
+    "ad_breaks",
+    "adBreaks",
+    "ad_pods",
+    "adPods",
+    "ad_list",
+    "adList",
+  ];
+
+  const emptyAdArrays = (node, depth) => {
+    let hits = 0;
+    if (!node || typeof node !== "object" || depth > 16) return 0;
+    if (Array.isArray(node)) {
+      for (let i = 0; i < node.length; i++) hits += emptyAdArrays(node[i], depth + 1);
+      return hits;
+    }
+    for (let i = 0; i < AD_KEYS.length; i++) {
+      const k = AD_KEYS[i];
+      if (Array.isArray(node[k]) && node[k].length > 0) {
+        hits += node[k].length;
+        node[k] = [];
+      }
+    }
+    for (const k in node) {
+      if (node[k] && typeof node[k] === "object") hits += emptyAdArrays(node[k], depth + 1);
+    }
+    return hits;
+  };
+
+  const emptyVast = (s) => {
+    if (/<vmap:VMAP[\s>]|<VMAP[\s>]/i.test(s)) {
+      return (
+        '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<vmap:VMAP xmlns:vmap="http://www.iab.net/videosuite/vmap" version="1.0"></vmap:VMAP>'
+      );
+    }
+    const version = (s.match(/<VAST[^>]*\bversion\s*=\s*"([^"]+)"/i) || [])[1] || "3.0";
+    return '<?xml version="1.0" encoding="UTF-8"?><VAST version="' + version + '"></VAST>';
+  };
+
+  const finish = (out) => {
+    log("rewrite " + out.length + "B <- " + host + path);
+    $done({ body: out });
+  };
 
   const text = body.trim();
 
-  // 1. 广告决策接口：{"ads":[...],"metrics":{...}} —— 清空 ads 保留其余字段。
   if (text.charAt(0) === "{") {
     let data = null;
     try {
@@ -100,35 +157,50 @@
     } catch (e) {
       data = null;
     }
-    if (data && typeof data === "object" && Array.isArray(data.ads)) {
-      const count = data.ads.length;
-      data.ads = [];
-      // 播放器会无条件读 metrics.responseTime，缺了会抛错并被当成广告请求失败。
-      if (!data.metrics || typeof data.metrics !== "object" || Array.isArray(data.metrics)) {
-        data.metrics = { responseTime: 1 };
-      } else if (typeof data.metrics.responseTime !== "number") {
-        data.metrics.responseTime = 1;
+    if (data && typeof data === "object") {
+      const hadAds = Array.isArray(data.ads) && data.ads.length > 0;
+      const hits = emptyAdArrays(data, 0);
+      if (hits > 0) {
+        // 播放器会无条件读 metrics.responseTime，缺了会抛错并被当成广告请求失败。
+        if (hadAds) {
+          if (!data.metrics || typeof data.metrics !== "object" || Array.isArray(data.metrics)) {
+            data.metrics = { responseTime: 1 };
+          } else if (typeof data.metrics.responseTime !== "number") {
+            data.metrics.responseTime = 1;
+          }
+        }
+        log("cleared " + hits + " ad entries: " + host + path);
+        finish(JSON.stringify(data));
+        return;
       }
-      finish(JSON.stringify(data));
+      // JSON 里内嵌 VAST/VMAP 的情况：只替换那个字符串字段，别把 JSON 换成 XML。
+      let embedded = 0;
+      for (const k in data) {
+        if (typeof data[k] === "string" && /<(VAST|VMAP|vmap:VMAP)[\s>]/i.test(data[k])) {
+          data[k] = emptyVast(data[k]);
+          embedded++;
+        }
+      }
+      if (embedded > 0) {
+        finish(JSON.stringify(data));
+        return;
+      }
+      log("json untouched " + text.length + "B: " + host + path);
+      $done({});
       return;
     }
   }
 
-  // 2. VAST：保留原来的版本号，返回一个合法的空文档。
-  if (/<VAST[\s>]/i.test(text)) {
-    const version = (text.match(/<VAST[^>]*\bversion\s*=\s*"([^"]+)"/i) || [])[1] || "3.0";
-    finish('<?xml version="1.0" encoding="UTF-8"?><VAST version="' + version + '"></VAST>');
+  if (/<VAST[\s>]|<vmap:VMAP[\s>]|<VMAP[\s>]/i.test(text)) {
+    if (!isAdHost) {
+      log("xml on non-ad host, skip: " + host + path);
+      $done({});
+      return;
+    }
+    finish(emptyVast(text));
     return;
   }
 
-  // 3. VMAP：广告排期表，空表就是没有广告位。
-  if (/<vmap:VMAP[\s>]|<VMAP[\s>]/i.test(text)) {
-    finish(
-      '<?xml version="1.0" encoding="UTF-8"?>' +
-        '<vmap:VMAP xmlns:vmap="http://www.iab.net/videosuite/vmap" version="1.0"></vmap:VMAP>'
-    );
-    return;
-  }
-
+  log("unhandled " + text.length + "B: " + host + path + " | " + text.slice(0, 120));
   $done({});
 })();
