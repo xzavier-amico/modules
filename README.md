@@ -10,7 +10,7 @@
 | 模块 | Egern | Loon | 说明 |
 | --- | :---: | :---: | --- |
 | YouTube Enhance | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/youtube-enhance.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/youtube-enhance.plugin) | 去广告、后台播放、PiP、最高 4x 倍速、On-the-go；可屏蔽首页 Shorts 货架、过滤会员专属视频 |
-| Spotify Premium | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/spotify-premium.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/spotify-premium.plugin) | 改写 bootstrap 的 protobuf：去广告、伪装 Premium、解锁顺序/随机播放；未知字段原样保留 |
+| Spotify Premium | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/spotify-premium.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/spotify-premium.plugin) | 改写 bootstrap 的 protobuf：去广告、伪装 Premium、解锁顺序/随机播放；官方没有歌词时注入第三方歌词 |
 | Tubi Ad-Free | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/tubi/tubi-adfree.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/tubi/tubi-adfree.plugin) | 去广告：清空内容元数据里的 cue_points，广告接口返回空列表 / 空 VAST，视频流不动，不触发反广告拦截 |
 | Pluto TV Ad-Free | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/pluto-adfree.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/pluto/pluto-adfree.plugin) | 去广告：boot 的 serverSideAds 改成 false，再删掉 HLS 点播清单里的广告段 |
 | Emby Unlock | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/emby/emby-unlock.yaml) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/emby/emby-unlock.plugin) | 解锁 Emby iOS 客户端的完整播放：mock mb3admin.com 授权校验；不含服务器端 Premiere |
