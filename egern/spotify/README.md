@@ -60,10 +60,17 @@ premium、关掉广告位、移除免费版的试听时长上限与队列/随机
 注意：
 
 - 逐字歌词（syllables）没有做，只做逐行同步。
-- `user-customization-service` / `extended-metadata` / `color-lyrics` 都带 etag。
-  插件在 `[Rewrite]` 里删掉了请求的 `if-none-match`：不删的话服务端会回 304、
-  响应体为空，脚本只能放行，客户端继续用缓存里的旧值（开关是关的、`has_lyrics`
-  是 false、歌词是 404），表现就是「改了配置没生效」。
+- `user-customization-service` / `color-lyrics` 的 etag 在 HTTP 头里，插件在
+  `[Rewrite]` / `header_rewrites` 里删掉了 `if-none-match`：不删的话服务端会回
+  304、响应体为空，脚本只能放行，客户端继续用缓存里的旧值（开关是关的、歌词是
+  404），表现就是「改了配置没生效」。
+- `extended-metadata` 的 etag **在请求体里**（`ExtensionQuery.etag`，字段 2），
+  HTTP 头删了也没用。客户端带上本地缓存的 etag，服务端只回「没变」的空数组，
+  客户端继续用本地那份 `has_lyrics = false` 的实体 —— 响应改得再对也到不了客户端。
+  所以 `spotify_meta.js` 还挂了一个 **请求阶段**，把这些 etag 抹掉，强制服务端回
+  完整数据。这条是「歌词页出不来」的真正原因：Now Playing 里那行歌词是界面自己
+  拉的，而「查看完整歌词」的入口看的是元数据里的 `has_lyrics`。
+- 脚本 URL 都带 `?v=日期`，否则 Loon / Egern 会一直用缓存里的旧脚本，改了等于没改。
 - 元数据在客户端有缓存；改完要重启 App，或换一个没打开过的歌单才会重新拉取。
 - 如果某首歌客户端仍然不请求 `color-lyrics`，说明它的 `has_lyrics` 不是从这两个
   接口来的（客户端本地生成），代理层就无能为力了，只能靠 EeveeSpotify 那种

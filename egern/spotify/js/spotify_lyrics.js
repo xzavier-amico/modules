@@ -38,7 +38,7 @@
   const log = () => {};
   const notify = () => {};
 
-  const match = /\/color-lyrics\/v2\/track\/([A-Za-z0-9]+)/.exec(url);
+  const match = /\/color-lyrics\/v\d\/track\/([A-Za-z0-9]+)/.exec(url);
   if (!match) {
     $done({});
     return;
@@ -64,6 +64,11 @@
   const USER_AGENT = "xzavier-modules/1.0 (https://github.com/xzavier-amico/modules)";
   const utf8 = new TextDecoder("utf-8");
   const encoder = new TextEncoder();
+
+  // 歌词页配色，ARGB。客户端缺省是 0（全透明），必须显式给。
+  const COLOR_BG = 0xff121212;
+  const COLOR_LINE = 0xb3ffffff;
+  const COLOR_ACTIVE = 0xffffffff;
 
   let settled = false;
   const finish = (value) => {
@@ -545,7 +550,13 @@
     const lyrics = pbUint(1, syncType === "LINE_SYNCED" ? 1 : 0)
       .concat(lineOut)
       .concat(pbBytes(5, encoder.encode(provider || "LRCLIB")));
-    return new Uint8Array(pbBytes(1, lyrics));
+    // colors 必须给：客户端拿它刷歌词页的背景和文字，字段缺失时是 0，alpha 也是 0，
+    // 整页歌词就成了透明的 —— 表现是「封面下面那行有，点进歌词页一片空白」。
+    // 取值是 ARGB（见 EeveeSpotify 的 Color.uInt32），这里用深底浅字，不依赖封面取色。
+    const colors = pbUint(1, COLOR_BG)
+      .concat(pbUint(2, COLOR_LINE))
+      .concat(pbUint(3, COLOR_ACTIVE));
+    return new Uint8Array(pbBytes(1, lyrics).concat(pbBytes(2, colors)));
   }
 
   function protoLineCount(bytes) {
@@ -711,6 +722,8 @@
   function makePayload(syncType, lines, record) {
     const provider = record.provider || "LRCLIB";
     const id = record.providerId !== undefined ? record.providerId : record.id;
+    // JSON 版把 colors 放在 lyrics 里面，值是 32 位有符号整数。
+    const signed = (v) => (v > 0x7fffffff ? v - 0x100000000 : v);
     return {
       lyrics: {
         syncType: syncType,
@@ -722,8 +735,12 @@
         isDirty: false,
         live: false,
         language: detectLanguage(lines),
+        colors: {
+          background: signed(COLOR_BG),
+          text: signed(COLOR_LINE),
+          highlight: signed(COLOR_ACTIVE),
+        },
       },
-      colors: { background: -1, text: -1, highlight: -1 },
     };
   }
 

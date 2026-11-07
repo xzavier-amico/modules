@@ -29,6 +29,15 @@
   const TRACK_V4 = 10;
 
   function run() {
+    // 请求阶段：extended-metadata 的 etag 在 protobuf body 里（ExtensionQuery.etag，
+    // 字段 2），HTTP 头里那个 if-none-match 是另一回事。客户端带上本地缓存的 etag，
+    // 服务端就只回「没变」的空数组，客户端继续用本地那份 has_lyrics=false 的实体 ——
+    // 响应改得再对也到不了客户端。把 etag 抹掉，强制服务端回完整数据。
+    if (!(typeof $response !== "undefined" && $response)) {
+      stripRequestEtags();
+      return;
+    }
+
     const res = (typeof $response !== "undefined" && $response) || {};
     const url = res.url || ($request && $request.url) || "";
 
@@ -55,7 +64,9 @@
     } else {
       const fields = parse(body);
       if (fields && patchFields(fields, 0, stat)) out = serialize(fields);
-      source = url.indexOf("context-resolve") >= 0 ? "ctx" : "track";
+      if (url.indexOf("extended-metadata") >= 0) source = "ext";
+      else if (url.indexOf("context-resolve") >= 0) source = "ctx";
+      else source = "cs";
     }
 
     if (!out) {
@@ -91,6 +102,76 @@
     }
 
     $done({ body: out });
+  }
+
+  // BatchedEntityRequest { header = 1; repeated EntityRequest entity_request = 2; }
+  // EntityRequest      { string entity_uri = 1; repeated ExtensionQuery query = 2; }
+  // ExtensionQuery     { ExtensionKind extension_kind = 1; string etag = 2; }
+  function stripRequestEtags() {
+    const req = (typeof $request !== "undefined" && $request) || {};
+    const url = req.url || "";
+    if (url.indexOf("/extended-metadata/") < 0) {
+      $done({});
+      return;
+    }
+    let body = req.body;
+    if (body instanceof ArrayBuffer) body = new Uint8Array(body);
+    if (!body || !ArrayBuffer.isView(body) || !body.length) {
+      $done({});
+      return;
+    }
+    const top = parse(body);
+    if (!top) {
+      $done({});
+      return;
+    }
+
+    let n = 0;
+    for (const f of top) {
+      if (f.no !== 2 || f.w !== 2) continue;
+      const er = parse(f.p);
+      if (!er) continue;
+      let erChanged = false;
+      for (const q of er) {
+        if (q.no !== 2 || q.w !== 2) continue;
+        const query = parse(q.p);
+        if (!query) continue;
+        const kept = [];
+        let dropped = false;
+        for (const k of query) {
+          if (k.no === 2 && k.w === 2) {
+            dropped = true;
+            n++;
+            continue;
+          }
+          kept.push(k);
+        }
+        if (dropped) {
+          q.p = serialize(kept);
+          erChanged = true;
+        }
+      }
+      if (erChanged) f.p = serialize(er);
+    }
+
+    if (!n) {
+      $done({});
+      return;
+    }
+
+    // 临时探针：确认客户端确实带了 etag 上来。验证通过后删掉。
+    try {
+      const key = "spotify_meta_etag_seen";
+      const seen = typeof $persistentStore !== "undefined" && $persistentStore && !!$persistentStore.read(key);
+      if (!seen && typeof $notification !== "undefined" && $notification && "function" == typeof $notification.post) {
+        if (typeof $persistentStore !== "undefined" && $persistentStore) $persistentStore.write("1", key);
+        $notification.post("Spotify 歌词", "已清 etag " + n + " 个", "extended-metadata 强制回完整数据");
+      }
+    } catch (e) {
+      // 通知失败不影响改写
+    }
+
+    $done({ body: serialize(top) });
   }
 
   // ---------------------------------------------------------------- protobuf

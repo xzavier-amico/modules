@@ -105,10 +105,21 @@ header_rewrites:
       type: "request"
 
 scriptings:
+  # extended-metadata 的 etag 在请求体里（ExtensionQuery.etag），请求阶段先把它抹掉，
+  # 否则服务端只回「没变」，客户端继续用本地那份 has_lyrics=false 的实体。
+  - http_request:
+      name: "spotify.meta.req"
+      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/extended-metadata\\/"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_meta.js?v=20261106"
+      body_required: true
+      binary_body: true
+      max_size: 8388608
+      timeout: 10
+
   - http_response:
       name: "spotify.premium"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:bootstrap|user-customization-service)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_premium.js"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_premium.js?v=20261106"
       body_required: true
       binary_body: true
       max_size: 33554432
@@ -121,7 +132,7 @@ scriptings:
   - http_response:
       name: "spotify.meta"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:extended-metadata|context-resolve|connect-state|metadata\\/4\\/track)\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_meta.js"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_meta.js?v=20261106"
       body_required: true
       binary_body: true
       max_size: 8388608
@@ -131,8 +142,8 @@ scriptings:
   # 不强制 body_required：没有歌词时官方回 404 且 body 为空，强制读 body 脚本就不会执行。
   - http_response:
       name: "spotify.lyrics"
-      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v2\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js"
+      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261106"
       binary_body: true
       max_size: 1048576
       timeout: 10
