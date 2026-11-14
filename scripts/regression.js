@@ -313,7 +313,7 @@ check("Spotify client plugins route scrollsita to the updated ad filter", () => 
   for (const file of ["loon/spotify/spotify-enhance.plugin", "loon/spotify/spotify-enhance-mac.plugin", "egern/spotify/spotify-enhance.yaml", "shadowrocket/spotify/spotify-enhance.sgmodule"]) {
     const rules = read(file).split("\n").filter((line) => !line.trim().startsWith("#"));
     assert.ok(rules.some((line) => line.includes("scrollsita")), file + " must match scrollsita");
-    assert.ok(rules.some((line) => line.includes("spotify.feed.js?v=20261114-16")));
+    assert.ok(rules.some((line) => /spotify\.feed\.js\?v=\d{8}-\d+/.test(line)));
   }
 });
 
@@ -501,6 +501,9 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.ok(calls > 0);
     const afterFirst = calls;
     assert.ok(map["spotify.lyrics.cache"], platform + " must persist the resolved lyrics");
+    const servedMark = JSON.parse(map["spotify.lyrics.served"] || "null");
+    assert.equal(servedMark && servedMark.id, "id", platform + " must mark the lyrics response as served");
+    assert.ok(!map["spotify.lyrics.pending"], platform + " must clear the pending mark once the response is returned");
 
     const second = run(file, "", url, ["lrclib", true], {
       $response: { status: 404, body: "" },
@@ -603,24 +606,51 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     const noHttp = { get: () => assert.fail(platform + " feed must not query providers itself") };
     const immediate = { setTimeout: (fn) => { fn(); return 1; }, clearTimeout: () => {} };
 
-    // 1) 标志位已就绪（color-lyrics 先跑完）：零等待补卡，feed 自己不发请求。
-    const ready = storeFor({ "spotify.lyrics.cache": readyJson() });
+    // 1) 缓存 + served 都已就绪（color-lyrics 已返回）：只等一个宽限就补卡。
+    const servedJson = JSON.stringify({ id: id, at: Date.now() });
+    const ready = storeFor({ "spotify.lyrics.cache": readyJson(), "spotify.lyrics.served": servedJson });
     const out = run(file, body, scroll, args, { $persistentStore: ready.store, $httpClient: noHttp, ...immediate });
     assert.ok(out.body, platform + " ready flag must add the card immediately");
     const sections = parse(first(parse(out.body), 1).p).filter((field) => field.no === 1);
     assert.ok(sections.some((section) => parse(section.p).some((field) => field.no === 5)), platform);
 
-    // 2) 轮询期间歌词到达：立刻停止轮询并补卡。
+    // 2) 轮询期间歌词到达并返回：停止轮询、等宽限后补卡。
     const during = storeFor();
     let ticks = 0;
     const duringOut = run(file, body, scroll, args, {
       $persistentStore: during.store,
       $httpClient: noHttp,
-      setTimeout: (fn) => { ticks += 1; if (ticks === 2) during.map["spotify.lyrics.cache"] = readyJson(); fn(); return ticks; },
+      setTimeout: (fn) => {
+        ticks += 1;
+        if (ticks === 2) {
+          during.map["spotify.lyrics.cache"] = readyJson();
+          during.map["spotify.lyrics.served"] = servedJson;
+        }
+        fn();
+        return ticks;
+      },
       clearTimeout: () => {},
     });
     assert.ok(duringOut.body, platform + " must add the card as soon as the flag appears");
-    assert.equal(ticks, 2, platform + " must stop polling once the flag is set");
+    assert.equal(ticks, 3, platform + " must stop polling once lyrics are served (plus grace)");
+
+    // 2b) 缓存写入但歌词响应还没返回：继续等 served，不能提前放行 scroll。
+    const notServed = storeFor();
+    let nsTicks = 0;
+    const nsOut = run(file, body, scroll, args, {
+      $persistentStore: notServed.store,
+      $httpClient: noHttp,
+      setTimeout: (fn) => {
+        nsTicks += 1;
+        if (nsTicks === 2) notServed.map["spotify.lyrics.cache"] = readyJson();
+        if (nsTicks === 4) notServed.map["spotify.lyrics.served"] = servedJson;
+        fn();
+        return nsTicks;
+      },
+      clearTimeout: () => {},
+    });
+    assert.ok(nsOut.body, platform + " must add the card once the lyrics response is served");
+    assert.equal(nsTicks, 5, platform + " cache without served must keep waiting");
 
     // 3) 轮询期间确认没歌词：不补卡，从源头避免空白卡。
     const missDuring = storeFor();

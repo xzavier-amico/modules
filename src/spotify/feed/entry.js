@@ -48,13 +48,18 @@
     $done({ body: out });
   };
 
-  // 补卡前卡住 scrollsita 等歌词结果：轮询歌词缓存，命中即补（内容就绪）、
+  // 补卡前卡住 scrollsita 等歌词结果：轮询歌词进度，命中即补（内容就绪）、
   // 读到 miss 不补空卡、超时乐观补卡（内容由 color-lyrics 请求填充）。
-  // 等待上限与步长在这里调整。
+  // 关键是要等歌词响应已经交给客户端（served），只等缓存会让 scroll 先渲染。
+  // 等待上限、步长和宽限在这里调整。
   const CARD_WAIT_MS = 8000;
   const CARD_FAST_MS = 2000;
   const CARD_FAST_POLL_MS = 200;
   const CARD_SLOW_POLL_MS = 500;
+  // 歌词响应发出后再留给客户端处理的时间；歌词请求比 scroll 晚开始时，
+  // 等待窗口最多再顺延 CARD_EXTEND_MS。
+  const CARD_GRACE_MS = 250;
+  const CARD_EXTEND_MS = 4000;
   if (isScroll && wantCard) {
     const card = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsCard : null;
     const hasCard = typeof hasLyricsCard === "function" && hasLyricsCard(body);
@@ -67,7 +72,14 @@
     if (typeof wait === "function") {
       wait(trackId, (ready, timedOut) => {
         finish(patchScroll(body, trackId, wantAds, !!ready || !!timedOut));
-      }, { max: CARD_WAIT_MS, fastUntil: CARD_FAST_MS, fastStep: CARD_FAST_POLL_MS, slowStep: CARD_SLOW_POLL_MS });
+      }, {
+        max: CARD_WAIT_MS,
+        fastUntil: CARD_FAST_MS,
+        fastStep: CARD_FAST_POLL_MS,
+        slowStep: CARD_SLOW_POLL_MS,
+        grace: CARD_GRACE_MS,
+        extendMax: CARD_EXTEND_MS,
+      });
       return;
     }
     finish(patchScroll(body, trackId, wantAds, true));

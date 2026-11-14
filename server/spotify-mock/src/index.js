@@ -48,6 +48,8 @@ const UPSTREAM = "https://spclient.wg.spotify.com";
 const MUSIC_PREFIX = "/music";
 // 滚动页补卡前等待歌词查询的窗口：查到就补，确认没有就不补，超时乐观补卡。
 const SCROLL_CARD_WAIT_MS = 8000;
+// 查到歌词后再等一小会儿，让并行的 color-lyrics 响应先返回客户端。
+const SCROLL_CARD_GRACE_MS = 200;
 
 const ROUTES = [
   // Spotify versions the bootstrap endpoint (/bootstrap/v1/bootstrap,
@@ -515,6 +517,9 @@ async function handle(request, env = {}) {
         });
         const result = await Promise.race([lookup, timeout]);
         clearTimeout(timer);
+        // 歌词查到了也要等歌词响应先回到客户端：color-lyrics 是并行的另一个
+        // 请求，scroll 先到会让列表按「没有歌词」渲染，卡片被丢掉。
+        if (result.lyrics) await new Promise((resolve) => setTimeout(resolve, SCROLL_CARD_GRACE_MS));
         scrollCard = { trackId, wantCard: Boolean(result.lyrics) || Boolean(result.timedOut) };
       }
     }

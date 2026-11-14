@@ -748,6 +748,16 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   const MISS_KEY = "spotify.lyrics.miss";
   const MISS_TTL_MS = 5 * 60 * 1000;
 
+  // 歌词请求进度：请求阶段写 pending，响应阶段写出歌词前写 served。
+  // feed 脚本补卡时要等 served，而不是只等缓存：缓存写入后歌词响应还在编码 /
+  // 返回路上，scroll 先到客户端的话，列表会先按「没有歌词」渲染，歌词卡被丢掉。
+  const PENDING_KEY = "spotify.lyrics.pending";
+  const PENDING_TTL_MS = 15 * 1000;
+  const SERVED_KEY = "spotify.lyrics.served";
+  // served 只表示「这首歌的歌词至少完整交给过客户端一次」，和歌词缓存同寿命；
+  // 它挡住的是缓存写完到响应返回之间的几毫秒，不需要很短的有效期。
+  const SERVED_TTL_MS = LYRICS_CACHE_HIT_TTL;
+
   const storeBackend = () =>
     typeof $persistentStore !== "undefined" && $persistentStore ? $persistentStore : null;
 
@@ -801,6 +811,18 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     const mark = readMark(key);
     return mark && (!id || mark.id === id) && Number(mark.at) && Date.now() - Number(mark.at) < ttl ? mark : null;
   }
+
+  // 歌词请求已经开始（请求阶段放行官方请求之前），feed 据此把等待窗口从
+  // scroll 到达时刻顺延到歌词请求自己的 deadline。
+  const markPending = () => {
+    if (trackId) writeMark(PENDING_KEY, { id: trackId, at: Date.now() });
+  };
+
+  // 歌词已经查好、马上要交给客户端（$done 之前最后一步）。feed 看到它再等一个
+  // 很短的宽限就放行 scroll，尽量让客户端先拿到歌词再渲染卡片列表。
+  const markServed = () => {
+    if (trackId) writeMark(SERVED_KEY, { id: trackId, at: Date.now() });
+  };
 
   function cachedTrackMeta(id) {
     const map = readJsonMap(TRACK_CACHE_KEY);
@@ -998,15 +1020,22 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       $done(value && (value.status || value.body) ? { response: value } : {});
       return;
     }
+    // 响应已经交给客户端，这次歌词请求不会再产出结果；清掉 pending，
+    // 让 feed 不用一直按「还在查」延长等待（超时后晚到的结果仍会写缓存）。
+    writeMark(PENDING_KEY, null);
     $done(value);
   };
 
   if (PREFETCH) {
     // 辅助模式：feed / 元数据脚本只复用缓存查询与补卡判断，不发起歌词查询。
 
-    // 轮询 spotify.lyrics.cache 等歌词结果：命中即返回、读到 miss 不补卡、
-    // 超时乐观补卡（内容由随后到达的 color-lyrics 请求填充）。
-    // 步长分段由 feed 传入：max / fastUntil / fastStep / slowStep。
+    // 轮询歌词进度，直到歌词响应已经交给客户端（served）再放行 scroll。
+    //   * 缓存 + served  -> 再等 grace 毫秒（让客户端先处理歌词响应）后补卡；
+    //   * 只有缓存        -> 歌词还在编码 / 返回路上，继续等 served；
+    //   * 确认没歌词      -> 不补卡；
+    //   * 歌词请求在路上  -> 按 pending 的起始时间顺延等待窗口（最多 extendMax）；
+    //   * 等满窗口        -> 乐观补卡（内容由随后到达的 color-lyrics 请求填充）。
+    // 步长分段由 feed 传入：max / fastUntil / fastStep / slowStep / grace / extendMax。
     globalThis.__spotifyLyricsWait = (id, callback, options) => {
       if (!id || typeof callback !== "function") {
         if (typeof callback === "function") callback(false, true);
@@ -1017,20 +1046,43 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       const fastUntil = Number(conf.fastUntil) > 0 ? Number(conf.fastUntil) : 2000;
       const fastStep = Number(conf.fastStep) > 0 ? Number(conf.fastStep) : 200;
       const slowStep = Number(conf.slowStep) > 0 ? Number(conf.slowStep) : 500;
+      const grace = Number(conf.grace) >= 0 ? Number(conf.grace) : 200;
+      const extendMax = Number(conf.extendMax) > 0 ? Number(conf.extendMax) : 4000;
+      // 歌词请求自己的 deadline 与补卡窗口可能刚好对齐，多留一点余量，
+      // 避免在歌词脚本写出缓存 / served 之前就超时。
+      const settle = Number(conf.settle) > 0 ? Number(conf.settle) : 1000;
       const key = lyricsCacheKey(id);
       const hasTimer = typeof setTimeout === "function";
+      const startedAt = Date.now();
       let elapsed = 0;
+
+      const ready = () => {
+        if (hasTimer && grace > 0) setTimeout(() => callback(true, false), grace);
+        else callback(true, false);
+      };
+
       const poll = () => {
-        if (readLyricsCache(key, id)) {
-          callback(true, false);
+        const cached = readLyricsCache(key, id);
+        const served = activeMark(SERVED_KEY, id, SERVED_TTL_MS);
+        // 歌词已经返回给客户端（缓存里也有内容）：留出一点宽限再放行 scroll。
+        if (cached && served) {
+          ready();
           return;
         }
-        if (activeMark(MISS_KEY, id, MISS_TTL_MS)) {
+        // 歌词请求还在路上时，旧的 miss 标记不作数：这次请求可能就查到了。
+        const pending = activeMark(PENDING_KEY, id, PENDING_TTL_MS);
+        if (!cached && !pending && activeMark(MISS_KEY, id, MISS_TTL_MS)) {
           callback(false, false);
           return;
         }
-        if (!hasTimer || elapsed >= maxMs) {
-          callback(false, true);
+        // 歌词请求比 scroll 晚开始：按请求开始时间顺延，别在歌词 deadline
+        // 之前就放弃。顺延量有上限，避免客户端根本不请求歌词时一直卡住。
+        const lead = pending && pending.at > startedAt ? pending.at - startedAt : 0;
+        const limit = maxMs + (pending ? settle : 0) + Math.min(lead, extendMax);
+        if (!hasTimer || elapsed >= limit) {
+          // 等满窗口：确认没歌词就不补，否则乐观补卡。
+          if (!cached && activeMark(MISS_KEY, id, MISS_TTL_MS)) callback(false, false);
+          else callback(false, true);
           return;
         }
         const step = elapsed < fastUntil ? fastStep : slowStep;
@@ -1040,9 +1092,12 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       poll();
     };
 
-    // 最近确认没有歌词的曲目不再补空卡。
+    // 最近确认没有歌词的曲目不再补空卡；已经查到歌词、或有歌词请求在路上时
+    // 以实际进度为准，避免旧的 miss 标记把这次可能成功的歌词挡掉。
     globalThis.__spotifyLyricsCard = (id) => {
       if (!id || !flag(opt.enable_lyrics, true)) return false;
+      if (readLyricsCache(lyricsCacheKey(id), id)) return true;
+      if (activeMark(PENDING_KEY, id, PENDING_TTL_MS)) return true;
       if (activeMark(MISS_KEY, id, MISS_TTL_MS)) return false;
       return true;
     };
@@ -1056,24 +1111,32 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       const cached = readLyricsCache(cacheKey, trackId);
       if (cached) {
         writeMark(MISS_KEY, null);
+        writeMark(PENDING_KEY, null);
         if (requestedProtoMode()) {
+          const bytes = encodeProto(cached.payload.lyrics.lines, cached.payload.lyrics.syncType,
+            cached.payload.lyrics.provider, cached.payload.lyrics.providerLyricsId,
+            cached.payload.lyrics.language, cached.payload.colors);
+          // 缓存命中时请求阶段直接返回歌词，同样要告诉 feed「歌词已经交给客户端」。
+          markServed();
           finish({
             status: 200,
             headers: { "Content-Type": "application/vnd.google.protobuf" },
-            body: encodeProto(cached.payload.lyrics.lines, cached.payload.lyrics.syncType,
-              cached.payload.lyrics.provider, cached.payload.lyrics.providerLyricsId,
-              cached.payload.lyrics.language, cached.payload.colors),
+            body: bytes,
           });
         } else {
+          const body = JSON.stringify(cached.payload);
+          markServed();
           finish({
             status: 200,
             headers: { "Content-Type": "application/json; charset=utf-8" },
-            body: JSON.stringify(cached.payload),
+            body: body,
           });
         }
         return;
       }
     }
+    // 未命中：官方请求还要飞一会儿，先标 pending，feed 据此延长补卡等待。
+    markPending();
     finish({});
     return;
   }
@@ -1145,14 +1208,25 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         // 免费号的歌词有每月额度，用完服务端会在 restriction（字段 14）里回
         // monthlyLimitReached，客户端就只显示「额度已用完」。归一成 showLyrics 再放行。
         const cleaned = count > 0 ? normalizeRestrictionProto(inspected) : null;
-        if (cleaned) finish({ status: 200, headers: { "Content-Type": "application/x-protobuf" }, body: cleaned });
-        else finish({});
+        if (cleaned) {
+          markServed();
+          finish({ status: 200, headers: { "Content-Type": "application/x-protobuf" }, body: cleaned });
+        } else {
+          // 原样放行，但 count > 0 说明官方歌词确实有内容。
+          if (count > 0) markServed();
+          finish({});
+        }
         return;
       }
     } else if (hasLyrics(trimmed)) {
       const cleaned = stripRestrictionJson(trimmed);
-      if (cleaned) finish({ status: 200, headers: { "Content-Type": "application/json; charset=utf-8" }, body: cleaned });
-      else finish({});
+      if (cleaned) {
+        markServed();
+        finish({ status: 200, headers: { "Content-Type": "application/json; charset=utf-8" }, body: cleaned });
+      } else {
+        markServed();
+        finish({});
+      }
       return;
     }
   }
@@ -1811,15 +1885,20 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     if (protoMode) {
       const bytes = encodeProto(payload.lyrics.lines, payload.lyrics.syncType, payload.lyrics.provider,
         payload.lyrics.providerLyricsId, payload.lyrics.language, payload.colors);
+      // 编码完成、马上 $done 时才标 served：feed 看到它说明歌词响应即将交给
+      // 客户端，再等一个宽限就可以放行 scroll。
+      markServed();
       // 与官方响应头保持一致。
       finish({ status: 200, headers: { "Content-Type": "application/vnd.google.protobuf" }, body: bytes });
       return;
     }
 
+    const body = JSON.stringify(payload);
+    markServed();
     finish({
       status: 200,
       headers: { "Content-Type": "application/json; charset=utf-8" },
-      body: JSON.stringify(payload),
+      body: body,
     });
   }
 
@@ -2420,13 +2499,18 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     $done({ body: out });
   };
 
-  // 补卡前卡住 scrollsita 等歌词结果：轮询歌词缓存，命中即补（内容就绪）、
+  // 补卡前卡住 scrollsita 等歌词结果：轮询歌词进度，命中即补（内容就绪）、
   // 读到 miss 不补空卡、超时乐观补卡（内容由 color-lyrics 请求填充）。
-  // 等待上限与步长在这里调整。
+  // 关键是要等歌词响应已经交给客户端（served），只等缓存会让 scroll 先渲染。
+  // 等待上限、步长和宽限在这里调整。
   const CARD_WAIT_MS = 8000;
   const CARD_FAST_MS = 2000;
   const CARD_FAST_POLL_MS = 200;
   const CARD_SLOW_POLL_MS = 500;
+  // 歌词响应发出后再留给客户端处理的时间；歌词请求比 scroll 晚开始时，
+  // 等待窗口最多再顺延 CARD_EXTEND_MS。
+  const CARD_GRACE_MS = 250;
+  const CARD_EXTEND_MS = 4000;
   if (isScroll && wantCard) {
     const card = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsCard : null;
     const hasCard = typeof hasLyricsCard === "function" && hasLyricsCard(body);
@@ -2439,7 +2523,14 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     if (typeof wait === "function") {
       wait(trackId, (ready, timedOut) => {
         finish(patchScroll(body, trackId, wantAds, !!ready || !!timedOut));
-      }, { max: CARD_WAIT_MS, fastUntil: CARD_FAST_MS, fastStep: CARD_FAST_POLL_MS, slowStep: CARD_SLOW_POLL_MS });
+      }, {
+        max: CARD_WAIT_MS,
+        fastUntil: CARD_FAST_MS,
+        fastStep: CARD_FAST_POLL_MS,
+        slowStep: CARD_SLOW_POLL_MS,
+        grace: CARD_GRACE_MS,
+        extendMax: CARD_EXTEND_MS,
+      });
       return;
     }
     finish(patchScroll(body, trackId, wantAds, true));

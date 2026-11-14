@@ -16,10 +16,17 @@ section {
 
 - 标志位是 `spotify.lyrics.cache`：`color-lyrics` 响应阶段拿到歌词就会写它；
   `spotify.lyrics.miss` 表示已经确认没有歌词。
+- 光有缓存还不够：缓存写完到 `$done` 之间歌词响应还在返回路上，scroll 先到
+  客户端时列表会按「没有歌词」渲染，卡片被丢掉。所以还看两个进度标记：
+  - `spotify.lyrics.pending`：请求阶段开始查歌词时写，feed 据此把等待窗口
+    从 scroll 到达时刻顺延到歌词请求自己的 deadline（最多再顺延 4 秒）；
+  - `spotify.lyrics.served`：歌词响应编码完成、`$done` 之前写。feed 等到它
+    之后再留 250ms 宽限才放行 scroll。
 - 前 2 秒每 200ms 读一次，之后每 500ms 读一次，最多 8 秒（`feed/entry.js` 的
   `CARD_*` 常量）：
-  - 歌词已就绪 -> 立即补卡，内容同时到位；
-  - 确认没歌词 -> 不补卡，避免空白卡；
+  - 缓存与 `served` 都就绪 -> 等宽限后补卡，内容同时到位；
+  - 只有缓存、还没 `served` -> 继续等，不提前放行；
+  - 确认没歌词 -> 不补卡，避免空白卡；有请求在路上时旧的 miss 标记不作数；
   - 等满窗口仍没结果 -> 乐观补卡，内容随后由 `color-lyrics` 请求填充。
 - 确认没歌词的曲目 5 分钟内不再补卡；查到歌词 / 官方有歌词 / 缓存命中会清掉标记。
 - 官方已有歌词 section 时不重复补；`section_id` 复用真实歌词 section 的值。
@@ -35,7 +42,8 @@ section {
 - 查不到 / 超时不写缓存，下次请求会重试。
 
 自建的 `server/spotify-mock` 在服务端完成同样的事，且官方请求与第三方查询并行
-（`LYRICS_PARALLEL=false` 可退回串行）；滚动页同样等歌词查询后再决定补不补卡。
+（`LYRICS_PARALLEL=false` 可退回串行）；滚动页同样等歌词查询后再决定补不补卡，
+查到歌词后再等 200ms 才返回 scroll，让并行的 `color-lyrics` 响应先回到客户端。
 
 ## 赞助卡
 
