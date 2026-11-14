@@ -43,7 +43,7 @@ import {
 } from "./lyrics.js";
 
 const SERVICE = "spotify-mock";
-const VERSION = "1.1.3";
+const VERSION = "1.1.4";
 const UPSTREAM = "https://spclient.wg.spotify.com";
 const MUSIC_PREFIX = "/music";
 

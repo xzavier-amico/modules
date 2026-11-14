@@ -64,14 +64,11 @@ crossfade；这两项保持服务端与 App 自己的设置。AutoMix 仍在远�
 - `lyrics.served`：歌词响应已经交给客户端（格式 + 曲名）；
 - `lyrics.done`：最终返回的状态 / 字节数；
 - `meta.cache` / `meta.none`：客户端自己的 connect-state / context-resolve / metadata 响应里抄到的曲目元数据；`meta.none` 只在 `metadata/4/track` 里取不到曲名时打印；
-- `feed.scroll`：scroll 请求的曲目、字节数、是否已有官方卡片；
-- `feed.top` / `feed.sections` / `feed.section`：顶层字段号、每个 section 的字段号（最多前 8 个）、每个 section 前 120 字节的 hex，用来看真实结构；
-- `LYRICS_SECTION_HEX`：官方歌词 section 的原始字节，用来和脚本合成的 section 对比；
-- `feed.card`：插入位置、section 数量变化、插入的 section hex；
-- `feed.meta`：从 scroll 里抄到的曲名 / 歌手（写进元数据缓存，下次同一首不用回源）；
-- `feed.topfield`：顶层除 section 列表之外的字段（客户端可能拿它校验列表）。
+- `feed.scroll`：scroll 请求的曲目、字节数、是否已有官方卡片、是否补卡、总耗时；
+- `feed.card`：删掉几个 section、补卡后列表里有几个 section；
+- `feed.meta`：从 scroll 里抄到的曲名 / 歌手（写进元数据缓存，下次同一首不用回源）。
 
-判断方法：`feed.scroll` 的 `total` 应该在 1 秒以内；超过 1.5 秒说明响应到达时客户端已经渲染完列表，补进去的卡片会被丢掉。如果 `total` 很小、`card=add patched=1` 但卡片仍然缺失，就把 `feed.card` 的 `hex=` 和 `LYRICS_SECTION_HEX` 对比，问题在 section 结构而不在时序。日志包含曲名，排查完请关闭。
+判断方法：`feed.scroll` 的 `total` 应该是几毫秒到几十毫秒。补卡不等歌词，响应越早越可能赶在客户端第一次渲染之前；如果 `total` 很大，卡片就要收起再展开才出现。日志包含曲名，排查完请关闭。
 
 ### 没有歌词时的排查
 

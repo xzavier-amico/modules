@@ -57,16 +57,22 @@
     const card = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsCard : null;
     const hasCard = typeof hasLyricsCard === "function" && hasLyricsCard(body);
     const allowed = !!trackId && !hasCard && (typeof card === "function" ? card(trackId) : true);
-    spotifyLog("feed.scroll", "track=" + trackId + " title=" + trackLabel(trackId)
-      + " bytes=" + body.length + " hasCard=" + hasCard + " allowed=" + allowed);
+    if (debugOn) {
+      spotifyLog("feed.scroll", "track=" + trackId + " title=" + trackLabel(trackId)
+        + " bytes=" + body.length + " hasCard=" + hasCard + " allowed=" + allowed);
+    }
     if (!allowed) {
-      spotifyLog("feed.scroll", "track=" + trackId + " card=skip reason=" + (!trackId ? "no-track" : hasCard ? "official-card" : "miss-mark"));
+      if (debugOn) {
+        spotifyLog("feed.scroll", "track=" + trackId + " card=skip reason=" + (!trackId ? "no-track" : hasCard ? "official-card" : "miss-mark"));
+      }
       finish(patchScroll(body, trackId, wantAds, false));
       return;
     }
     const out = patchScroll(body, trackId, wantAds, true);
-    spotifyLog("feed.scroll", "track=" + trackId + " title=" + trackLabel(trackId)
-      + " card=add patched=" + (out ? 1 : 0) + " total=" + (Date.now() - feedStartedAt) + "ms");
+    if (debugOn) {
+      spotifyLog("feed.scroll", "track=" + trackId + " title=" + trackLabel(trackId)
+        + " card=add patched=" + (out ? 1 : 0) + " total=" + (Date.now() - feedStartedAt) + "ms");
+    }
     finish(out);
     return;
   }

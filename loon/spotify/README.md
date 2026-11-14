@@ -32,8 +32,7 @@
 - `lyrics.req` / `lyrics.res` / `lyrics.served` / `lyrics.done`：歌词请求、官方响应、歌词交给客户端的时刻、最终返回；
 - `lyrics.meta`：`source=cache/oembed/embed`，`waited=` 与 `oembed=` / `embed=` 各自的耗时；
 - `meta.cache` / `meta.none`：客户端元数据响应里抄到的曲目信息；
-- `feed.top` / `feed.sections` / `feed.section`：顶层字段号、每个 section 的字段号与前 120 字节；
-- `LYRICS_SECTION_HEX` / `feed.card`：官方歌词 section 的字节、脚本补卡的位置与合成字节；
+- `feed.card`：删掉几个 section、补卡后列表里有几个 section；
 - `feed.meta`：从 scroll 里抄到的曲名 / 歌手；
 - `feed.scroll`：补卡决策与耗时，`total` 越小越好（客户端先渲染列表，响应晚到不会重绘）。
 

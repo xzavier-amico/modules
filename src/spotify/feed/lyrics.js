@@ -103,42 +103,6 @@
     remember(trackId, found.title, found.artist, 0, null);
   }
 
-  // ---- 排障：列表结构 ---------------------------------------------------
-  //
-  // 卡片补进去了但客户端不显示时，要能回答两个问题：真实的 section 长什么样、
-  // 我们插在第几位。debug_log 打开时把每个 section 的字段号压成一行，
-  // 官方歌词 section 存在时再打一份 hex，用来和 lyricsSection() 逐字节对比。
-  function hexOf(bytes, limit) {
-    let out = "";
-    const size = Math.min(bytes.length, limit || 240);
-    for (let i = 0; i < size; i += 1) out += (bytes[i] < 16 ? "0" : "") + bytes[i].toString(16);
-    return out + (bytes.length > size ? "…(" + bytes.length + "B)" : "");
-  }
-
-  function describeSections(sections) {
-    const parts = [];
-    const limit = Math.min(sections.length, 8);
-    for (let i = 0; i < limit; i += 1) {
-      const section = sections[i];
-      if (section.no !== 1 || section.wire !== 2) {
-        parts.push("#" + section.no);
-        continue;
-      }
-      const nos = [];
-      try {
-        wireScanFields(section.data, (no) => {
-          nos.push(no);
-          return nos.length >= 8;
-        });
-      } catch (e) {
-        // 单个 section 解析失败不影响日志
-      }
-      parts.push(nos.join("+"));
-    }
-    return sections.length + " [" + parts.join(" | ") + "]";
-  }
-
-
   // 滚动页一次遍历：删广告 section + 补歌词 section。
   //
   // 只重建顶层字段 1 的 payload，保留的 section 和其余字段直接复用原始字节，
@@ -167,26 +131,6 @@
     let removed = 0;
     let hasLyrics = false;
     const trackRef = trackId ? new TextEncoder().encode("spotify:track:" + trackId) : null;
-    if (debugOn) {
-      const topNos = [];
-      for (const f of top) topNos.push(f.no);
-      spotifyLog("feed.top", "fields=" + topNos.join("+") + " bytes=" + buffer.length);
-      spotifyLog("feed.sections", "track=" + trackId + " " + describeSections(sections));
-      // 顶层除字段 1（section 列表）之外的字段也打一份：客户端可能拿它校验
-      // 列表（页信息 / section 顺序），补卡时没有同步改。
-      for (const f of top) {
-        if (f === structure) continue;
-        spotifyLog("feed.topfield", "no=" + f.no + " w=" + f.wire + " len=" + f.raw.length + " hex=" + hexOf(f.raw, 64));
-      }
-      // 每个 section 的前 120 字节：字段号 + 关键字符串足够看清真实结构，
-      // 比整包 hex 小得多，也不至于把日志刷爆。
-      const dump = Math.min(sections.length, 6);
-      for (let i = 0; i < dump; i += 1) {
-        const section = sections[i];
-        spotifyLog("feed.section", i + " no=" + section.no + " w=" + section.wire + " len=" + section.raw.length
-          + " hex=" + hexOf(section.raw, 120));
-      }
-    }
     for (const section of sections) {
       if (section.no !== 1 || section.wire !== 2) {
         kept.push(section.raw);
@@ -208,10 +152,7 @@
         return null;
       }
       // 官方歌词 section 的真实字节：和 lyricsSection() 的合成结果对比用。
-      if (hasTrack && hasSectionId) {
-        hasLyrics = true;
-        if (debugOn) spotifyLog("LYRICS_SECTION_HEX", hexOf(section.raw));
-      }
+      if (hasTrack && hasSectionId) hasLyrics = true;
       // 当前曲目的 section 里通常带 track_title / artist_name，抄进元数据缓存。
       if (trackRef && hasTrack && containsBytes(section.data, trackRef)) {
         rememberScrollMeta(section.data, trackId);
@@ -226,15 +167,10 @@
     const addCard = wantCard && !!trackId && !hasLyrics;
     if (!removed && !addCard) return null;
     if (addCard) {
-      const card = wireEncodeField(1, 2, lyricsSection(trackId));
-      // 插在头部 section 之后，而不是列表最前面：Now Playing 的第一个 section
-      // 是固定的头部（曲目 + 封面），歌词卡排到它前面会落在头部上面看不见。
-      // 没有头部（空列表 / 结构变了）时才退回到第 0 位。
-      const at = kept.length ? 1 : 0;
-      kept.splice(at, 0, card);
+      kept.unshift(wireEncodeField(1, 2, lyricsSection(trackId)));
       if (debugOn) {
-        spotifyLog("feed.card", "track=" + trackId + " insert=" + at + " removed=" + removed
-          + " sections=" + sections.length + "->" + kept.length + " hex=" + hexOf(card));
+        spotifyLog("feed.card", "track=" + trackId + " removed=" + removed
+          + " sections=" + sections.length + "->" + kept.length);
       }
     }
 
