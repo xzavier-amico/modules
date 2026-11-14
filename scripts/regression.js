@@ -1553,7 +1553,7 @@ check("Loon uses normal arguments and retains legacy mode compatibility", () => 
   assert.equal(scriptRules.length, 7);
   for (const line of scriptRules) {
     const version = line.includes("spotify_lyrics.js") ? "20261114-13"
-      : line.includes("spotify.feed.js") ? "20261114-11" : "20261114-11";
+      : line.includes("spotify.feed.js") ? "20261114-11" : "20261114-12";
     assert.ok(line.includes("?v=" + version));
     const tuple = /then script\("[^"]+", (\{.*\})\) with/.exec(line)[1];
     assert.match(tuple, /^\{\$\{\w+\}(?:, \$\{\w+\})*\}$/, "Loon tuple must contain only declared argument references");
@@ -1615,33 +1615,44 @@ check("Loon Premium uses the plugin's original arguments independently of lyric 
 });
 
 for (const platform of ["loon", "egern", "shadowrocket"]) {
-  check(platform + " Spotify keeps crossfade configurable but forces AutoMix off", () => {
+  check(platform + " Spotify leaves crossfade settings alone but forces AutoMix off", () => {
     const assigned = (scope, name, on) =>
       b(3, serialize([b(1, serialize([s(1, scope), s(2, name)])), b(3, on ? serialize([v(1, 1)]) : new Uint8Array(0))]));
+    const readValues = (out) => {
+      const values = {};
+      for (const f of parse(out.body)) {
+        if (f.no !== 3 || f.w !== 2) continue;
+        const value = parse(f.p);
+        const identifier = parse(first(value, 1).p);
+        const name = text(first(identifier, 2));
+        const bool = first(value, 3);
+        const inner = bool && bool.p.length ? parse(bool.p) : [];
+        values[name] = inner.some((item) => item.no === 1 && item.v === 1n);
+      }
+      return values;
+    };
+    const args = { spoof_premium: true, block_ads: true, unlock_playback: true, enable_lyrics: false };
     const config = serialize([
       assigned("ios-feature-settings", "crossfade_enabled", true),
       assigned("core-automix", "automix_enabled", true),
       assigned("ios-feature-settings", "use_playback_settings_crossfade", false),
       assigned("ios-feature-settings", "use_playback_settings_gapless", false),
     ]);
-    const args = { spoof_premium: true, block_ads: true, unlock_playback: true, enable_lyrics: false };
     const out = run(platform + "/spotify/js/spotify.js", config,
       "https://spclient.wg.spotify.com/remote-config-resolver/v3/configuration", args);
     assert.ok(out.body, platform + " must still patch the remote configuration");
-    const values = {};
-    for (const f of parse(out.body)) {
-      if (f.no !== 3 || f.w !== 2) continue;
-      const value = parse(f.p);
-      const identifier = parse(first(value, 1).p);
-      const name = text(first(identifier, 2));
-      const bool = first(value, 3);
-      const inner = bool && bool.p.length ? parse(bool.p) : [];
-      values[name] = inner.some((item) => item.no === 1 && item.v === 1n);
-    }
-    assert.equal(values.crossfade_enabled, true, platform + " must keep the crossfade setting available");
+    const values = readValues(out);
+    assert.equal(values.crossfade_enabled, true, platform + " must not change the crossfade feature flag");
     assert.equal(values.automix_enabled, false, platform + " must force AutoMix off");
-    assert.equal(values.use_playback_settings_crossfade, true, platform + " must honour the app crossfade setting");
-    assert.equal(values.use_playback_settings_gapless, true, platform);
+    assert.equal(values.use_playback_settings_crossfade, false, platform + " must not enable crossfade");
+    assert.equal(values.use_playback_settings_gapless, false, platform + " must not enable gapless");
+
+    // 服务端没下发时也不能自己补 crossfade 开关，否则免费号会被默认 4 秒淡入淡出。
+    const bare = run(platform + "/spotify/js/spotify.js", serialize([assigned("core", "ads", true)]),
+      "https://spclient.wg.spotify.com/remote-config-resolver/v3/configuration", args);
+    const bareValues = readValues(bare);
+    assert.equal(bareValues.crossfade_enabled, undefined, platform + " must not add crossfade");
+    assert.equal(bareValues.automix_enabled, false, platform + " must still add AutoMix off");
 
     const attrs = serialize([
       b(1, serialize([s(1, "enable-crossfade-product-state"), b(2, serialize([s(4, "0")]))])),
@@ -1655,10 +1666,10 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
       const entry = f.no === 1 ? parse(f.p) : null;
       return entry && text(first(entry, 1)) === "enable-crossfade-product-state";
     });
-    assert.ok(crossfade, platform + " must write the crossfade capability");
+    assert.ok(crossfade, platform + " must preserve the server crossfade capability");
     const crossfadeValue = parse(first(parse(crossfade.p), 2).p);
-    assert.equal(text(first(crossfadeValue, 4)), "1",
-      platform + " must keep the crossfade setting visible");
+    assert.equal(text(first(crossfadeValue, 4)), "0",
+      platform + " must not force the crossfade capability on");
   });
 }
 

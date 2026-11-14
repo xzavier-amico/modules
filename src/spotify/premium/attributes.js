@@ -3,9 +3,8 @@
   const yearOn = new Date(Date.now() + 365 * 86400000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
   const ATTR_CORE = {
-    // 交叉淡入淡出只开能力，是否生效由 App 里的播放设置决定；AutoMix 已在远程
-    // 配置里强制关闭，避免下一首提前混进来。
-    "enable-crossfade-product-state": "1",
+    // 不写 enable-crossfade-product-state：免费号被强行解锁交叉淡入淡出后，
+    // App 会按本地滑杆把下一首提前混进来。保留服务端下发的值，只解锁 Gapless。
     "enable-gapless-product-state": "1",
     "catalogue": "premium",
     "financial-product": "pr:premium,tc:0",

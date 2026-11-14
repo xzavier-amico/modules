@@ -65,11 +65,10 @@
 
 ## 播放衔接
 
-模块保留「交叉淡入淡出」开关，并让客户端读取 App 里的播放设置
-（`use_playback_settings_crossfade=1`）；AutoMix 在远程配置里强制关闭
-（`automix_enabled=0`）。这样「设置 → 播放 → 交叉淡入淡出」不会消失，滑杆关到 0
-就不会再出现下一首提前混进来。修改后需要重启 App（或切换网络）让客户端重新拉取
-bootstrap / 远程配置，旧缓存里的开关才会被覆盖。
+模块不再改写「交叉淡入淡出 / Gapless」相关开关，也不会给免费号强行解锁
+crossfade；这两项保持服务端与 App 自己的设置。AutoMix 仍在远程配置里强制关闭
+（`automix_enabled=0`），避免下一首按节拍提前混进来。修改后需要重启 App（或切换
+网络）让客户端重新拉取 bootstrap / 远程配置，旧缓存里的开关才会被覆盖。
 
 ## iPhone / iPad 与 macOS
 

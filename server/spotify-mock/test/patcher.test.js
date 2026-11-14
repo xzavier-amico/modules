@@ -405,7 +405,7 @@ test("remote configuration turns ad switches off", () => {
   assert.equal(values.unrelated, true);
 });
 
-test("remote configuration keeps crossfade available but forces AutoMix off", () => {
+test("remote configuration leaves crossfade alone but forces AutoMix off", () => {
   const input = concat([
     assigned("ios-feature-settings", "crossfade_enabled", true),
     assigned("core-automix", "automix_enabled", true),
@@ -418,15 +418,20 @@ test("remote configuration keeps crossfade available but forces AutoMix off", ()
   assert.ok(patched, "the configuration response is still patched for other switches");
   const values = configValues(patched);
   assert.equal(values.ads, false);
-  // AutoMix blends the next track into the end of the current one; crossfade is
-  // left visible and honours the app's playback setting.
+  // Crossfade stays exactly as the server / app configured it; only AutoMix is
+  // disabled, because AutoMix is what blends the next track in early.
   assert.equal(values.crossfade_enabled, true);
   assert.equal(values.automix_enabled, false);
-  assert.equal(values.use_playback_settings_crossfade, true);
-  assert.equal(values.use_playback_settings_gapless, true);
+  assert.equal(values.use_playback_settings_crossfade, false);
+  assert.equal(values.use_playback_settings_gapless, false);
+
+  const bare = patcher.patchConfigurationResponse(concat([assigned("core", "ads", true)]));
+  const bareValues = configValues(bare);
+  assert.equal(bareValues.crossfade_enabled, undefined, "must not add a crossfade switch");
+  assert.equal(bareValues.automix_enabled, false, "must still add AutoMix off");
 });
 
-test("attribute configuration keeps the crossfade setting available", () => {
+test("attribute configuration does not force the crossfade capability on", () => {
   const input = concat([
     attrEntry("enable-crossfade-product-state", "0"),
     attrEntry("type", "free"),
@@ -435,7 +440,8 @@ test("attribute configuration keeps the crossfade setting available", () => {
   const patched = patcher.patchAttributesResponse(input);
   assert.ok(patched);
   const values = attributeMap(patched);
-  assert.equal(values["enable-crossfade-product-state"], "1");
+  assert.equal(values["enable-crossfade-product-state"], "0");
+  assert.equal(values["enable-gapless-product-state"], "1");
   assert.equal(values.type, "premium");
 });
 

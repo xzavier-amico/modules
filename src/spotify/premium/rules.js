@@ -1,13 +1,10 @@
   // ------------------------------------------------------------ remote config
 
-  // 播放衔接：让客户端继续显示「交叉淡入淡出」设置，但 AutoMix 强制关闭，并让
-  // 交叉淡入淡出遵循 App 里的播放设置。之前把 use_playback_settings_crossfade
-  // 置 0 会绕过用户的设置，AutoMix 再把下一首提前混进来，表现成上一首被顶掉。
+  // 播放衔接：不再改写交叉淡入淡出 / Gapless 相关开关。免费号被强制打开
+  // crossfade 后，App 会直接按本地滑杆（常见默认 4 秒）把下一首提前混进来，
+  // 表现为倒计时结束又响了 1–2 秒。只强制关闭 AutoMix，它才是按节拍提前
+  // 混入下一首的元凶；Crossfade 仍由 App 自己的设置决定。
   const RULES = [
-    ["ios-feature-settings","crossfade_enabled",2,1,"","misc"],
-    ["core-playback-setup","crossfade_enabled",2,1,"","misc"],
-    ["ios-feature-settings","use_playback_settings_crossfade",2,1,"","misc"],
-    ["ios-feature-settings","use_playback_settings_gapless",2,1,"","misc"],
     ["ios-feature-settings","automix_enabled",2,0,"","misc"],
     ["core-automix","automix_enabled",2,0,"","misc"],
     ["","enable_common_capping",0,0,"","cap"],
