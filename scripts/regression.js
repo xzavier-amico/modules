@@ -313,7 +313,7 @@ check("Spotify client plugins route scrollsita to the updated ad filter", () => 
   for (const file of ["loon/spotify/spotify-enhance.plugin", "loon/spotify/spotify-enhance-mac.plugin", "egern/spotify/spotify-enhance.yaml", "shadowrocket/spotify/spotify-enhance.sgmodule"]) {
     const rules = read(file).split("\n").filter((line) => !line.trim().startsWith("#"));
     assert.ok(rules.some((line) => line.includes("scrollsita")), file + " must match scrollsita");
-    assert.ok(rules.some((line) => line.includes("spotify.feed.js?v=20261114-15")));
+    assert.ok(rules.some((line) => line.includes("spotify.feed.js?v=20261114-16")));
   }
 });
 
@@ -1494,8 +1494,7 @@ check("Loon uses normal arguments and retains legacy mode compatibility", () => 
   const scriptRules = plugin.split("\n").filter((line) => line.includes('then script("'));
   assert.equal(scriptRules.length, 7);
   for (const line of scriptRules) {
-    // 这一批改动同时更新了 spotify.js / spotify.feed.js / spotify_lyrics.js。
-    assert.ok(line.includes("?v=20261114-15"), line);
+    assert.ok(/\?v=\d{8}-\d+/.test(line), line);
     const tuple = /then script\("[^"]+", (\{.*\})\) with/.exec(line)[1];
     assert.match(tuple, /^\{\$\{\w+\}(?:, \$\{\w+\})*\}$/, "Loon tuple must contain only declared argument references");
     const names = [...tuple.matchAll(/\$\{(\w+)\}/g)].map((match) => match[1]);

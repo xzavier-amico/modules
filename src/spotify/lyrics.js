@@ -112,8 +112,8 @@
   const LYRICS_CACHE_HIT_TTL = 24 * 60 * 60 * 1000;
   const LYRICS_CACHE_MAX_LINES = 400;
   const LYRICS_CACHE_MAX_BYTES = 400 * 1024;
-  const LYRICS_DEADLINE_MS = 5000;
-  const PLAIN_FALLBACK_MS = 4000;
+  const LYRICS_DEADLINE_MS = 8000;
+  const PLAIN_FALLBACK_MS = 6000;
 
   // 确认没有歌词的曲目，短期内不再补空卡。
   const MISS_KEY = "spotify.lyrics.miss";
@@ -538,7 +538,9 @@
     return;
   }
 
-  // 总时限；超时后用纯文本兜底，没有就按「没有歌词」放行。
+  // 总时限；超时后用纯文本兜底，没有就放行。超时不写 miss 标记：第三方歌词
+  // 可能还在路上，feed 脚本的 8s 轮询窗口比这里的 5s deadline 长，后续到达
+  // 的歌词会写进缓存供轮询命中。只有所有第三方源都确认没歌词时才写 miss。
   if (typeof setTimeout === "function") deadline = setTimeout(() => {
     if (settled) return;
     if (plainFallback) {
@@ -546,14 +548,16 @@
       writeMark(MISS_KEY, null);
       emit(plainFallback);
     } else {
-      // 这张卡已经乐观补上了：确认没歌词后短期内不再补，避免空卡一直出现。
-      writeMark(MISS_KEY, { id: trackId, at: Date.now() });
       finish({});
     }
   }, LYRICS_DEADLINE_MS);
   resolveLyrics((payload) => {
-    if (settled) return;
-    // 只有真正拿到歌词才写缓存；查不到 / 超时 / 网络失败都留给下次重试。
+    if (settled) {
+      // deadline 超时放行后，所有源都确认没歌词时补写 miss 标记，
+      // feed 轮询读到 miss 就不再乐观补空卡。拿到了歌词则由 runSource 写缓存。
+      if (!payload) writeMark(MISS_KEY, { id: trackId, at: Date.now() });
+      return;
+    }
     writeLyricsCache(cacheKey, payload);
     if (!payload) {
       writeMark(MISS_KEY, { id: trackId, at: Date.now() });
@@ -669,6 +673,9 @@
   }
 
   // 并发查询所有来源：首个通过校验的同步歌词胜出；只有纯文本时等全部结束。
+  // settled 后不再 emit（响应已放行），但仍然写缓存：feed 脚本的轮询窗口比
+  // deadline 长，后续到达的歌词写进缓存供轮询命中。全部源都确认没歌词时
+  // 写 miss 标记，feed 轮询读到 miss 就不再乐观补空卡。
   function runSource(order, title, artist, done, duration, colorOf) {
     if (settled) return;
     if (!order.length) {
@@ -677,10 +684,25 @@
     }
     let remaining = order.length;
     let finished = false;
+    const checkAllDone = () => {
+      if (!remaining && !finished) {
+        finished = true;
+        done(plainFallback);
+      }
+    };
     for (const name of order) {
       if (settled || finished) return;
       lookup(name, title, artist, duration, (record) => {
-        if (settled || finished) return;
+        if (settled) {
+          // deadline 超时放行：歌词晚到时写缓存供 feed 轮询命中。
+          if (record && colorOf) record.albumColor = colorOf();
+          const latePayload = buildPayload(record);
+          if (latePayload) writeLyricsCache(cacheKey, latePayload);
+          remaining -= 1;
+          checkAllDone();
+          return;
+        }
+        if (finished) return;
         if (record && colorOf) record.albumColor = colorOf();
         const payload = buildPayload(record);
         if (payload && (payload.lyrics.syncType === "LINE_SYNCED" || order.length === 1)) {
@@ -690,19 +712,16 @@
         }
         if (payload && !plainFallback) {
           plainFallback = payload;
-          // 有纯文本但同步歌词还在路上时，别让用户干等到总超时：
-          // 5 秒内还没有同步版本就先把纯文本发出去，后续结果不再覆盖。
+          // 有纯文本但同步歌词还在路上时，先把纯文本发出去，后续结果不再覆盖。
+          // deadline 超时放行后仍然写缓存，供 feed 轮询命中。
           if (typeof setTimeout === "function") plainTimer = setTimeout(() => {
-            if (settled || !plainFallback) return;
+            if (!plainFallback) return;
             writeLyricsCache(cacheKey, plainFallback);
-            emit(plainFallback);
+            if (!settled) emit(plainFallback);
           }, PLAIN_FALLBACK_MS);
         }
         remaining -= 1;
-        if (!remaining) {
-          finished = true;
-          done(plainFallback);
-        }
+        checkAllDone();
       });
     }
   }
