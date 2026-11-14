@@ -41,7 +41,7 @@
 - 歌词页总时限 8 秒，单个外部请求 4 秒；scrollsita 补卡最多等 8 秒（前 2 秒每 200ms、之后每 500ms），歌词请求晚开始时按请求开始时间顺延（最多 4 秒），超时乐观补卡。
 - protobuf 补齐官方字段（含歌词卡使用的 `previewLines`），并将歌词额度限制归一为可显示状态。
 - 配色：未激活行黑字，当前 / 已唱行白字；命中元数据缓存时不再请求 embed，用缓存里的封面色，没有缓存时用默认中灰底。
-- scrollsita 列表缺少歌词 section 时轮询歌词进度：缓存和 `spotify.lyrics.served`（歌词响应已返回）都就绪后，再留 250ms 宽限才补一格，确保客户端先拿到歌词；只有缓存、歌词响应还没返回时继续等；读到 `spotify.lyrics.miss` 不补（有请求在路上时旧标记不作数）；超时乐观补卡。官方已有则不重复补。
+- scrollsita 列表缺少歌词 section 时轮询歌词进度：缓存和 `spotify.lyrics.served`（歌词响应已返回）都就绪、且没有新的歌词请求在途后，再留 250ms 宽限才补一格，确保客户端先拿到歌词；只有缓存、歌词响应还没返回时继续等；读到 `spotify.lyrics.miss` 不补（有请求在路上时旧标记不作数）；超时乐观补卡。官方已有则不重复补。
 
 歌词源：`lrclib`、`musixmatch`、`netease`、`qq`、`auto`（默认）。
 - LRCLIB 先按完整曲名查，再用去掉 `feat.` / `remaster` 等后缀的曲名重试（对应 EeveeSpotify 的 `strippedTrackTitle`），返回结果仍会重新校验歌手 / Live / 时长。

@@ -752,7 +752,8 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // feed 脚本补卡时要等 served，而不是只等缓存：缓存写入后歌词响应还在编码 /
   // 返回路上，scroll 先到客户端的话，列表会先按「没有歌词」渲染，歌词卡被丢掉。
   const PENDING_KEY = "spotify.lyrics.pending";
-  const PENDING_TTL_MS = 15 * 1000;
+  // 歌词脚本自己的 deadline 是 8s；超过 10s 还没清掉就是脚本被杀了，按失效处理。
+  const PENDING_TTL_MS = 10 * 1000;
   const SERVED_KEY = "spotify.lyrics.served";
   // served 只表示「这首歌的歌词至少完整交给过客户端一次」，和歌词缓存同寿命；
   // 它挡住的是缓存写完到响应返回之间的几毫秒，不需要很短的有效期。
@@ -1064,13 +1065,15 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       const poll = () => {
         const cached = readLyricsCache(key, id);
         const served = activeMark(SERVED_KEY, id, SERVED_TTL_MS);
-        // 歌词已经返回给客户端（缓存里也有内容）：留出一点宽限再放行 scroll。
-        if (cached && served) {
+        const pending = activeMark(PENDING_KEY, id, PENDING_TTL_MS);
+        // 还有歌词请求在路上时继续等：客户端可能先查了歌词页、再查卡片，
+        // 只看到上一次的 served 就放行，卡片那次响应仍可能晚于 scroll。
+        // 歌词已经返回给客户端（缓存里也有内容）且没有新请求：留宽限后放行。
+        if (!pending && cached && served) {
           ready();
           return;
         }
         // 歌词请求还在路上时，旧的 miss 标记不作数：这次请求可能就查到了。
-        const pending = activeMark(PENDING_KEY, id, PENDING_TTL_MS);
         if (!cached && !pending && activeMark(MISS_KEY, id, MISS_TTL_MS)) {
           callback(false, false);
           return;
