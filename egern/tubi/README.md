@@ -86,6 +86,18 @@ Tubi 只在美国可用。模块**不再在 `rules` 里指定 `PROXY`**：Egern 
 这样不会被「国内直连」之类的规则带走，导致 MITM 看不到流量、插件静默失效。
 如果你本身在美国，把这些域名指向 `DIRECT` 即可。
 
+## 网页版
+
+网页版读 `tubitv.com/oz/videos/<id>/content` 的内容元数据，和 App 的
+`/api/v2/mobile/contents` 共用同一套 `cue_points` / `subtitles` 结构，所以模块默认
+同时处理两者：
+
+- `web=true`（默认）：网页版内容元数据也会清空 `cue_points` 并追加中文轨；
+- `web=false`：只处理 App 接口，网页版内容原样放行。
+
+广告域名（`ads.*`、`rainmaker*`、`adrise.tv`）与空 VAST / VMAP 是网页版和 App 共用
+的，不受 `web` 影响。
+
 ## 参数
 
 | 参数 | 默认 | 说明 |
@@ -95,6 +107,7 @@ Tubi 只在美国可用。模块**不再在 `rules` 里指定 `PROXY`**：Egern 
 | `bilingual` | true | 双语字幕：中文轨保留英文原句并在下方显示翻译；`false` 只显示中文 |
 | `translate_key` | 空 | DeepL Auth Key 或 Google Cloud Translation API Key（`AIza` 开头）；留空用免费 Edge |
 | `translate_provider` | `auto` | `auto` / `edge` / `deepl` / `google` |
+| `web` | true | 同时处理网页版 `tubitv.com/oz/` 的内容元数据；关闭后只改 App |
 
 ## 注意
 

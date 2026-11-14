@@ -42,6 +42,7 @@
         bilingual: raw[2],
         translate_key: raw[3],
         translate_provider: raw[4],
+        web: raw[5],
       };
     } else if (typeof raw === "string") opt = JSON.parse(raw || "{}") || {};
     else if (raw && "object" == typeof raw) opt = raw;
@@ -105,6 +106,14 @@
 
   const parts = url.match(/^https?:\/\/([^/?#]+)/i) || [];
   const host = (parts[1] || "").split(":")[0].toLowerCase();
+
+  // 网页版读 tubitv.com/oz/...，App 读 api.tubitv.com/api/v2/mobile/...
+  // 关闭网页版后只放行网页版内容接口；广告域名与空 VAST 仍共用同一套处理。
+  const isWeb = /(^|\.)tubitv\.com$/.test(host) && /^\/oz\//i.test(url.replace(/^https?:\/\/[^/]+/i, ""));
+  if (!flag(opt.web, true) && isWeb) {
+    $done({});
+    return;
+  }
 
   // 广告侧主机：ads.* / rainmaker* 以及 adrise.tv 自家域。
   const isAdHost =

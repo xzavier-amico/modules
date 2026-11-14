@@ -237,6 +237,18 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.ok(out.includes("part-two") && !out.includes("spot_ad"));
     assert.equal(Object.keys(run(hls, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nindex.m3u8\n", vodUrl)).length, 0);
   });
+  check(platform + " Pluto web manifests obey the web switch", () => {
+    const playlist = header + segments("film", 6) + segments("spot_ad", 2) + "#EXT-X-ENDLIST\n";
+    const webUrl = vodUrl + "?appName=web&deviceType=web";
+    const on = run(hls, playlist, webUrl, { block_ads: true, web: true });
+    assert.ok(on.body && !on.body.includes("spot_ad"));
+    assert.equal(Object.keys(run(hls, playlist, webUrl, { block_ads: true, web: false })).length, 0,
+      "web=false must leave web manifests untouched");
+    const appUrl = vodUrl + "?appName=android&deviceType=phone";
+    const app = run(hls, playlist, appUrl, { block_ads: true, web: false });
+    assert.ok(app.body && !app.body.includes("spot_ad"),
+      "web=false must still filter the app manifests");
+  });
   check(platform + " Tubi combined traversal: nested ad arrays, captions and metrics", () => {
     const data = { ads: [1], items: [{ monetization: { cue_points: [30, 60] }, subtitles: [{ url: "https://cdn.adrise.tv/en.srt", lang: "English" }] }] };
     const out = JSON.parse(run(platform + "/tubi/js/tubi_adfree.js", JSON.stringify(data), "https://api.tubitv.com/api/v2/mobile/contents", { caption_lang: "zh-Hans" }).body);
@@ -245,6 +257,23 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.equal(out.items[0].subtitles.length, 2);
     assert.ok(out.items[0].subtitles[1].url.includes("tlang=zh-Hans"));
     assert.equal(out.metrics.responseTime, 1);
+  });
+  check(platform + " Tubi web metadata obeys the web switch", () => {
+    const data = {
+      monetization: { cue_points: [30, 60] },
+      subtitles: [{ url: "https://cdn.adrise.tv/en.srt", lang: "English" }],
+    };
+    const file = platform + "/tubi/js/tubi_adfree.js";
+    const webUrl = "https://tubitv.com/oz/videos/123/content";
+    const args = { block_ads: true, caption_lang: "zh-Hans", web: true };
+    const on = JSON.parse(run(file, JSON.stringify(data), webUrl, args).body);
+    assert.equal(on.monetization.cue_points.length, 0);
+    assert.equal(on.subtitles.length, 2);
+    assert.equal(Object.keys(run(file, JSON.stringify(data), webUrl, { ...args, web: false })).length, 0,
+      "web=false must leave the web content metadata untouched");
+    const app = JSON.parse(run(file, JSON.stringify({ "123": data }), "https://api.tubitv.com/api/v2/mobile/contents", { ...args, web: false }).body);
+    assert.equal(app["123"].monetization.cue_points.length, 0);
+    assert.equal(app["123"].subtitles.length, 2, "web=false must still patch the app API");
   });
 }
 
@@ -729,6 +758,43 @@ check("Bilibili web playurl gets 4K query behind the web toggle", () => {
     assert.ok(on.url.includes("fnval=144"));
     const off = run(file, new Uint8Array(), url, { auto_quality: true, web: false });
     assert.ok(off === undefined || Object.keys(off).length === 0);
+  }
+});
+
+check("Pluto / Tubi Loon plugins pass the web switch in order", () => {
+  const tuple = (file, tag) => {
+    const line = read(file).split("\n").find((item) => item.includes('tag="' + tag + '"'));
+    assert.ok(line, tag);
+    const raw = /then script\("[^"]+", (\{.*\})\) with/.exec(line)[1];
+    return [...raw.matchAll(/\$\{(\w+)\}/g)].map((match) => match[1]);
+  };
+  for (const tag of ["Pluto TV Ad-Free", "Pluto TV HLS", "Pluto TV Session"]) {
+    assert.deepEqual(tuple("loon/pluto/pluto-adfree.plugin", tag), ["block_ads", "web"], tag);
+  }
+  for (const tag of ["Pluto TV Caption", "Pluto TV Subtitle"]) {
+    assert.deepEqual(
+      tuple("loon/pluto/pluto-adfree.plugin", tag),
+      ["block_ads", "caption_lang", "bilingual", "translate_key", "translate_provider", "web"],
+      tag,
+    );
+  }
+  assert.deepEqual(
+    tuple("loon/tubi/tubi-adfree.plugin", "Tubi Ad-Free"),
+    ["block_ads", "caption_lang", "bilingual", "translate_key", "translate_provider", "web"],
+  );
+});
+
+check("Shadowrocket Pluto / Tubi argument JSON stays valid with the web switch", () => {
+  // {{{变量}}} 在客户端里由参数值替换；这里先替换成 true 再按 JSON 解析。
+  for (const [file, name] of [
+    ["shadowrocket/pluto/pluto-adfree.sgmodule", "pluto.hls"],
+    ["shadowrocket/pluto/pluto-adfree.sgmodule", "pluto.manifest"],
+    ["shadowrocket/tubi/tubi-adfree.sgmodule", "tubi.adfree"],
+  ]) {
+    const line = read(file).split("\n").find((item) => item.startsWith(name + " ="));
+    assert.ok(line, file + " " + name);
+    const raw = /argument="(.*)"$/.exec(line)[1].replace(/\{\{\{[^}]*\}\}\}/g, "true");
+    assert.equal(JSON.parse(raw).web, true, file + " " + name);
   }
 });
 

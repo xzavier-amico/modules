@@ -58,13 +58,18 @@ env_schema:
     description: "auto：有密钥时优先 DeepL / Google Cloud，无密钥或密钥接口失败时回退到 Edge"
     default_value: "auto"
     options: ["auto", "edge", "deepl", "google"]
+  web:
+    name: "支持网页版"
+    description: "同时处理网页版 tubitv.com/oz/ 的内容元数据（cue_points 与中文轨）；关闭后只改 App"
+    default_value: "true"
+    options: ["true", "false"]
 
 scriptings:
   - http_response:
       name: "tubi.adfree"
       # 前半段：广告侧主机；后半段：内容元数据 / API（cue_points 从这里来）。
       match: "^https?:\\/\\/(?:(?:[a-z0-9-]+\\.)*(?:ads|rainmaker)[a-z0-9.-]*\\.(?:tubi\\.io|tubitv\\.com|tubi\\.video|adrise\\.tv)\\/|(?:[a-z0-9-]+\\.)*(?:tubitv\\.com|tubi\\.io)\\/(?:oz|api)\\/)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/tubi/js/tubi_adfree.js"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/tubi/js/tubi_adfree.js?v=20261114-1"
       body_required: true
       timeout: 10
 

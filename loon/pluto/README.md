@@ -126,6 +126,16 @@ cue 里。
 美国内容需要美国节点；不在美国，或想指定别的策略组，把前两条的 `PROXY`
 改成 `DIRECT` 或你的策略组名。
 
+## 网页版
+
+网页版播放器的 stitcher 请求带 `appName=web` / `deviceType=web`，而且网页版 boot 本来
+就把 `serverSideAds` 设成 false，所以服务端广告拼接在网页版上通常已经关闭。本模块对
+网页版仍然处理清单、会话与字幕；把 `web` 关掉后只处理 App（`appName` 不是 `web`）
+的请求。
+
+网页端自己的 IMA 广告（`doubleclick.net` / `springserve.com`）不在这些脚本的控制
+范围内，由 ADBlock 模块的通用广告域名规则拦截。
+
 ## 参数
 
 | 参数 | 默认 | 说明 |
@@ -135,6 +145,7 @@ cue 里。
 | `bilingual` | true | 双语字幕：英文原句在上、中文翻译在下；`false` 只显示中文 |
 | `translate_key` | 空 | DeepL Auth Key 或 Google Cloud Translation API Key（`AIza` 开头）；留空用免费 Edge |
 | `translate_provider` | `auto` | `auto` / `edge` / `deepl` / `google` |
+| `web` | true | 同时处理网页版（`appName=web` / `deviceType=web`）；关闭后只改 App |
 
 ## 注意
 

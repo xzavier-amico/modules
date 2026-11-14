@@ -2,8 +2,8 @@
 #!desc=去广告：清空内容元数据里的 cue_points，广告接口返回空广告列表 / 空 VAST。字幕翻译：在内容元数据里加一条中文 SRT 轨并翻译，默认英文原句 + 中文双语显示。不改动视频流，不触发 Tubi 的广告拦截检测。
 #!author=xzavier-amico
 #!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/tubi.png
-#!arguments=去除广告:true, 字幕翻译:zh-Hans, 双语字幕:true, 翻译密钥:none, 翻译接口:auto
-#!arguments-desc=去除广告：关闭后 cue_points、ads 列表与 VAST / VMAP 都不再改写。\n字幕翻译：zh-Hans / zh-Hant / off。\n双语字幕：中文轨保留英文原句并在下方显示中文翻译；关闭后只显示中文。\n翻译密钥：DeepL Auth Key 或 Google Cloud Translation API Key（AIza 开头）；保持 none 表示使用免费的 Edge 接口。\n翻译接口：auto / edge / deepl / google。auto 有密钥时优先 DeepL / Google Cloud，无密钥或密钥接口失败时回退到 Edge。
+#!arguments=去除广告:true, 字幕翻译:zh-Hans, 双语字幕:true, 翻译密钥:none, 翻译接口:auto, 支持网页版:true
+#!arguments-desc=去除广告：关闭后 cue_points、ads 列表与 VAST / VMAP 都不再改写。\n字幕翻译：zh-Hans / zh-Hant / off。\n双语字幕：中文轨保留英文原句并在下方显示中文翻译；关闭后只显示中文。\n翻译密钥：DeepL Auth Key 或 Google Cloud Translation API Key（AIza 开头）；保持 none 表示使用免费的 Edge 接口。\n翻译接口：auto / edge / deepl / google。auto 有密钥时优先 DeepL / Google Cloud，无密钥或密钥接口失败时回退到 Edge。\n支持网页版：同时处理网页版 tubitv.com/oz/ 的内容元数据（cue_points 与中文轨）；关闭后只改 App。
 
 # Tubi 只在美国可用。模块不再自带 [Rule] 段：请在主配置里把
 # tubitv.com / tubi.com / tubi.tv / tubi.video / tubi.io / adrise.tv
@@ -11,7 +11,7 @@
 
 [Script]
 # 前半段：广告侧主机；后半段：内容元数据 / API（cue_points 从这里来）。
-tubi.adfree = type=http-response,pattern=^https?:\/\/(?:(?:[a-z0-9-]+\.)*(?:ads|rainmaker)[a-z0-9.-]*\.(?:tubi\.io|tubitv\.com|tubi\.video|adrise\.tv)\/|(?:[a-z0-9-]+\.)*(?:tubitv\.com|tubi\.io)\/(?:oz|api)\/),requires-body=1,max-size=8388608,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/tubi/js/tubi_adfree.js,argument="{"block_ads":{{{去除广告}}},"caption_lang":"{{{字幕翻译}}}","bilingual":{{{双语字幕}}},"translate_key":"{{{翻译密钥}}}","translate_provider":"{{{翻译接口}}}"}"
+tubi.adfree = type=http-response,pattern=^https?:\/\/(?:(?:[a-z0-9-]+\.)*(?:ads|rainmaker)[a-z0-9.-]*\.(?:tubi\.io|tubitv\.com|tubi\.video|adrise\.tv)\/|(?:[a-z0-9-]+\.)*(?:tubitv\.com|tubi\.io)\/(?:oz|api)\/),requires-body=1,max-size=8388608,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/tubi/js/tubi_adfree.js?v=20261114-1,argument="{"block_ads":{{{去除广告}}},"caption_lang":"{{{字幕翻译}}}","bilingual":{{{双语字幕}}},"translate_key":"{{{翻译密钥}}}","translate_provider":"{{{翻译接口}}}","web":{{{支持网页版}}}}"
 
 # 带 tlang 标记的字幕轨：把 SRT 文本送去翻译，时间轴 / 序号保持原样。
 tubi.caption = type=http-response,pattern=^https?:\/\/(?:[a-z0-9-]+\.)*(?:adrise\.tv|tubitv\.com|tubi\.io)\/.*\.srt(?:\?.*)?$,requires-body=1,max-size=2097152,timeout=60,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/tubi/js/tubi_caption.js,argument="{"block_ads":{{{去除广告}}},"caption_lang":"{{{字幕翻译}}}","bilingual":{{{双语字幕}}},"translate_key":"{{{翻译密钥}}}","translate_provider":"{{{翻译接口}}}"}"

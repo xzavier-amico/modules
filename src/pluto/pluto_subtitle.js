@@ -40,6 +40,7 @@
         bilingual: raw[2],
         translate_key: raw[3],
         translate_provider: raw[4],
+        web: raw[5],
       };
     } else if (typeof raw === "string") opt = JSON.parse(raw || "{}") || {};
     else if (raw && "object" == typeof raw) opt = raw;
@@ -65,6 +66,11 @@
     v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0");
   // 默认双语：英文原句在上、中文翻译在下；关掉后只显示中文。
   const bilingual = flag(opt.bilingual, true);
+  // 网页版请求带 appName=web / deviceType=web；关闭网页版后只翻译 App 的字幕。
+  if (!flag(opt.web, true) && /[?&](?:appName|deviceType)=web(?:[&#]|$)/i.test(url)) {
+    $done({});
+    return;
+  }
 
   // 只处理 Pluto 自己的 .vtt 分片；分片在 siloh-*.plutotv.net，清单在 *.pluto.tv。
   if (!/\.vtt(?:[?#]|$)/i.test(url)) {

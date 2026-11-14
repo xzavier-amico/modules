@@ -12,6 +12,7 @@ caption_lang = select,"zh-Hans","zh-Hant","off",type=string,tag=字幕翻译,des
 bilingual = switch,true,type=boolean,tag=双语字幕,desc=中文轨保留英文原句并在下方显示中文翻译；关闭后只显示中文。
 translate_key = input,"",type=string,tag=翻译密钥,desc=DeepL Auth Key 或 Google Cloud Translation API Key（AIza 开头）。留空使用免费的 Edge 接口。
 translate_provider = select,"auto","edge","deepl","google",type=string,tag=翻译接口,desc=auto：有密钥时优先 DeepL / Google Cloud，无密钥或密钥接口失败时回退到 Edge。
+web = switch,true,type=boolean,tag=支持网页版,desc=同时处理网页版 tubitv.com/oz/ 的内容元数据（cue_points 与中文轨）；关闭后只改 App。
 
 [Rule]
 # Tubi 只在美国可用。这里把它的域名固定走代理，避免被「国内直连」类规则带走，
@@ -27,7 +28,7 @@ DOMAIN-SUFFIX,adrise.tv,PROXY
 
 [Script]
 # 前半段：广告侧主机；后半段：内容元数据 / API（cue_points 从这里来）。
-response if ${url} ~= /^https?:\/\/(?:(?:[a-z0-9-]+\.)*(?:ads|rainmaker)[a-z0-9.-]*\.(?:tubi\.io|tubitv\.com|tubi\.video|adrise\.tv)\/|(?:[a-z0-9-]+\.)*(?:tubitv\.com|tubi\.io)\/(?:oz|api)\/)/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/tubi/js/tubi_adfree.js", {${block_ads}, ${caption_lang}, ${bilingual}, ${translate_key}, ${translate_provider}}) with requires_body=true, tag="Tubi Ad-Free", timeout=10
+response if ${url} ~= /^https?:\/\/(?:(?:[a-z0-9-]+\.)*(?:ads|rainmaker)[a-z0-9.-]*\.(?:tubi\.io|tubitv\.com|tubi\.video|adrise\.tv)\/|(?:[a-z0-9-]+\.)*(?:tubitv\.com|tubi\.io)\/(?:oz|api)\/)/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/tubi/js/tubi_adfree.js?v=20261114-1", {${block_ads}, ${caption_lang}, ${bilingual}, ${translate_key}, ${translate_provider}, ${web}}) with requires_body=true, tag="Tubi Ad-Free", timeout=10
 
 # 带 tlang 标记的字幕轨：把 SRT 文本送去翻译，时间轴 / 序号保持原样。
 response if ${url} ~= /^https?:\/\/(?:[a-z0-9-]+\.)*(?:adrise\.tv|tubitv\.com|tubi\.io)\/.*\.srt(?:\?.*)?$/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/tubi/js/tubi_caption.js", {${block_ads}, ${caption_lang}, ${bilingual}, ${translate_key}, ${translate_provider}}) with requires_body=true, tag="Tubi Caption", timeout=60

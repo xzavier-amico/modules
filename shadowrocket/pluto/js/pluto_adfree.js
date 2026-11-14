@@ -159,7 +159,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   let opt = {};
   try {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
-    if (Array.isArray(raw)) opt = {block_ads: raw[0]};
+    if (Array.isArray(raw)) opt = {block_ads: raw[0], web: raw[1]};
     else if (typeof raw === "string") opt = JSON.parse(raw || "{}") || {};
     else if (raw && "object" == typeof raw) opt = raw;
   } catch (e) {
@@ -170,6 +170,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
 
   if (!flag(opt.block_ads, true)) {
+    $done({});
+    return;
+  }
+  // 网页版（appName=web / deviceType=web）单独开关；App 的 appName=android / ios 不受影响。
+  if (!flag(opt.web, true) && /[?&](?:appName|deviceType)=web(?:[&#]|$)/i.test(url)) {
     $done({});
     return;
   }

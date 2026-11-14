@@ -52,25 +52,30 @@ env_schema:
     description: "auto：有密钥时优先 DeepL / Google Cloud，无密钥或密钥接口失败时回退到 Edge"
     default_value: "auto"
     options: ["auto", "edge", "deepl", "google"]
+  web:
+    name: "支持网页版"
+    description: "同时处理网页版（appName=web / deviceType=web）的 stitcher 清单、会话与字幕；关闭后只改 App"
+    default_value: "true"
+    options: ["true", "false"]
 
 scriptings:
   - http_request:
       name: "pluto.adfree"
       match: "^https?:\\/\\/boot\\.pluto\\.tv\\/v4\\/start"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_adfree.js"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_adfree.js?v=20261114-1"
       body_required: true
       timeout: 10
   # 字幕：主清单里把英文字幕轨改名，外挂 WebVTT 分片翻译成双语。
   - http_response:
       name: "pluto.manifest"
       match: "^https?:\\/\\/[^\\/]*(?:pluto\\.tv|plutotv\\.net)\\/[^?]*\\/master\\.m3u8"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_manifest.js"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_manifest.js?v=20261114-1"
       body_required: true
       timeout: 10
   - http_response:
       name: "pluto.subtitle"
       match: "^https?:\\/\\/[^\\/]*(?:pluto\\.tv|plutotv\\.net)\\/[^?]*\\.vtt(?:\\?|$)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_subtitle.js"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_subtitle.js?v=20261114-1"
       body_required: true
       max_size: 2097152
       timeout: 60
@@ -78,14 +83,14 @@ scriptings:
   - http_response:
       name: "pluto.hls"
       match: "^https?:\\/\\/[^\\/]*(?:pluto\\.tv|plutotv\\.net)\\/[^?]*\\.m3u8"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_hls.js"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_hls.js?v=20261114-1"
       body_required: true
       timeout: 10
   # 第三道：把会话里的 adBreaks 清空，进度条广告块和左上角 Ad 角标跟着消失（直播跳过）。
   - http_response:
       name: "pluto.session"
       match: "^https?:\\/\\/[^\\/]*pluto\\.tv\\/[^?]*session\\.json"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_session.js"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_session.js?v=20261114-1"
       body_required: true
       timeout: 10
 
