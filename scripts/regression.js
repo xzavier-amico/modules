@@ -726,6 +726,34 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.ok(dbgLogs.some((line) => line.includes("feed.scroll") && line.includes("title=Song / Artist")), platform + " must log the track name");
     assert.ok(dbgLogs.some((line) => line.includes("feed.wait") && line.includes("served(json)")), platform + " must log the served format");
     assert.ok(dbgLogs.some((line) => line.includes("feed.scroll") && line.includes("card=add")), platform + " must log the card decision");
+    assert.ok(dbgLogs.some((line) => line.includes("feed.sections") && line.includes("1 [2]")), platform + " must log the section layout");
+  });
+}
+
+for (const platform of ["loon", "egern", "shadowrocket"]) {
+  check(platform + " Spotify feed caches the scroll track metadata", () => {
+    const file = platform + "/spotify/js/spotify.feed.js";
+    const id = "0VjIjW4GlUZAMYd2vXMi3b";
+    // 当前曲目的 section 里带 track_title / artist_name 的 metadata map。
+    const section = b(1, serialize([
+      b(5, serialize([s(1, "spotify:track:" + id)])),
+      b(4, serialize([s(1, "track_title"), s(2, "Song")])),
+      b(4, serialize([s(1, "artist_name"), s(2, "Artist")])),
+    ]));
+    const body = serialize([b(1, serialize([section]))]);
+    const map = {};
+    const store = {
+      read: (key) => (key in map ? map[key] : null),
+      write: (value, key) => { map[key] = value; return true; },
+    };
+    run(file, body, scroll, { block_ads: false, enable_lyrics: true }, {
+      $persistentStore: store,
+      $httpClient: { get: () => assert.fail(platform + " feed must not query providers itself") },
+      setTimeout: (fn) => { fn(); return 1; },
+      clearTimeout: () => {},
+    });
+    const cached = JSON.parse(map["spotify.track.meta"] || "{}")[id];
+    assert.ok(cached && cached[0] === "Song" && cached[1] === "Artist", platform + " must cache scroll metadata");
   });
 }
 
@@ -752,6 +780,28 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.deepEqual(first(nestedTrack, 3).p, gid, "GID must survive the actual Context -> page -> track wrapper");
     assert.equal(nestedTrack.filter((f) => f.no === 3).length, 1);
     assert.equal(Object.keys(run(file, wrapped, url, { enable_lyrics: false })).length, 0);
+  });
+
+  check(platform + " Spotify meta cache logs what it stored when debug_log is on", () => {
+    const file = platform + "/spotify/js/spotify.js";
+    const url = "https://spclient.wg.spotify.com/context-resolve/v1/context";
+    const metadata = (key, value) => b(4, serialize([s(1, key), s(2, value)]));
+    const context = serialize([s(1, track), s(2, "uid"), metadata("track_title", "Song"), metadata("artist_name", "Artist")]);
+    const map = {};
+    const logs = [];
+    const store = { read: (key) => (key in map ? map[key] : null), write: (value, key) => { map[key] = value; return true; } };
+    run(file, context, url, { enable_lyrics: true, debug_log: true }, {
+      console: { log: (line) => logs.push(line) },
+      $persistentStore: store,
+    });
+    assert.ok(logs.some((line) => line.includes("meta.cache") && line.includes("title=Song") && line.includes("from=context")),
+      platform + " must log the cached track metadata");
+    const quiet = [];
+    run(file, context, url, { enable_lyrics: true }, {
+      console: { log: (line) => quiet.push(line) },
+      $persistentStore: { read: () => null, write: () => true },
+    });
+    assert.equal(quiet.length, 0, platform + " must stay quiet without debug_log");
   });
 }
 
@@ -1565,11 +1615,9 @@ check("Loon uses normal arguments and retains legacy mode compatibility", () => 
     const names = [...tuple.matchAll(/\$\{(\w+)\}/g)].map((match) => match[1]);
     for (const name of names) assert.ok(new RegExp("^" + name + " = ", "m").test(plugin));
     if (line.includes("spotify_lyrics.js")) {
-      assert.deepEqual(names, ["lyrics_source", "enable_lyrics", "desktop"]);
-    } else if (line.includes("spotify.feed")) {
-      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source"]);
+      assert.deepEqual(names, ["lyrics_source", "enable_lyrics", "desktop", "debug_log"]);
     } else {
-      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source"]);
+      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source", "debug_log"]);
     }
   }
   const context = serialize([s(1, track), s(2, "uid"), b(3, serialize([s(1, "has_lyrics"), s(2, "false")]))]);
@@ -1874,8 +1922,11 @@ check("Spotify deadline prevents late HTTP callbacks from launching more request
     $httpClient: { get: (request, callback) => { requests++; reply = callback; } } });
   vm.runInContext(read("loon/spotify/js/spotify_lyrics.js"), context);
   timeout();
+  // oEmbed 与 embed 并行发出：超时之后这两个回调都不许再触发新请求。
+  const afterDeadline = requests;
   reply(null, { status: 200 }, JSON.stringify({ title: "Late song" }));
-  assert.equal(requests, 1);
+  assert.equal(afterDeadline, 2);
+  assert.equal(requests, afterDeadline);
   assert.equal(calls, 1);
 });
 

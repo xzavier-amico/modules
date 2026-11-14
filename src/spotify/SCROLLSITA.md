@@ -36,6 +36,17 @@ section {
 - 官方已有歌词 section 时不重复补；`section_id` 复用真实歌词 section 的值。
 - 只处理当前曲目的列表；无法逐字节重建响应时原样放行。
 
+## 曲目元数据回填
+
+歌词脚本取曲名 / 歌手要先读 `spotify.track.meta`；没命中就只能回源 `open.spotify.com`
+（oEmbed 与 embed 并行，实测各 2.6 秒）。滚动页的当前曲目 section 里本来就带着
+`track_title` / `artist_name` 的 metadata map，feed 顺手抄一份写进同一个缓存，
+下次同一首再进 Now Playing 就是零请求。
+
+回填只在「section 里确实有当前曲目的 track 引用」时递归，并限制遍历节点数，
+避免把 12MB 的列表整个走一遍。oEmbed / embed 两个请求并行发出、单次上限 2.5 秒：
+其中一个卡住时不会再多等一轮。
+
 ## 歌词请求
 
 `js/spotify_lyrics.js` 处理 `color-lyrics`：

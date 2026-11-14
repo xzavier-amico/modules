@@ -321,7 +321,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
     if (Array.isArray(raw)) {
       const modeInFifth = ["full", "no_card", "metadata_only", "response_only", "card_only"].indexOf(raw[4]) >= 0;
-      opt = { spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2], enable_lyrics: raw[3], desktop: modeInFifth ? false : raw[4], lyrics_mode: modeInFifth ? raw[4] : raw[5] };
+      opt = { spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2], enable_lyrics: raw[3], desktop: modeInFifth ? false : raw[4], lyrics_mode: modeInFifth ? raw[4] : raw[5], debug_log: raw[6] };
     } else if (typeof raw === "string") {
       opt = JSON.parse(raw || "{}") || {};
     } else if (raw && "object" == typeof raw) {
@@ -690,8 +690,12 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       if (Array.isArray(raw)) {
         const modes = ["full", "no_card", "metadata_only", "response_only", "card_only"];
         const modeInThird = modes.indexOf(raw[2]) >= 0;
+        // Loon 位置参数：歌词源, 补全歌词, 设备类型, 模式 / 排障日志。
+        // 第 4 个位置既是旧版的 lyrics_mode，也可能是 debug_log，按取值区分。
+        const modeInFourth = modes.indexOf(raw[3]) >= 0;
         opt = { lyrics_source: raw[0], enable_lyrics: raw[1], desktop: modeInThird ? false : raw[2],
-          lyrics_mode: modeInThird ? raw[2] : modes.includes(raw[3]) ? raw[3] : undefined };
+          lyrics_mode: modeInThird ? raw[2] : modeInFourth ? raw[3] : undefined,
+          debug_log: modeInThird || modeInFourth ? undefined : raw[3] };
       }
       else if (typeof raw === "string") {
         try {
@@ -768,6 +772,9 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   const LYRICS_CACHE_MAX_BYTES = 400 * 1024;
   const LYRICS_DEADLINE_MS = 8000;
   const PLAIN_FALLBACK_MS = 6000;
+  // 元数据回源（open.spotify.com 的 oEmbed / embed 页面）单次上限。两个请求
+  // 并行发出，超时不会让整条链路多等一轮；卡住不返回的请求最多拖 2.5 秒。
+  const META_TIMEOUT_MS = 2500;
 
   // 确认没有歌词的曲目，短期内不再补空卡。
   const MISS_KEY = "spotify.lyrics.miss";
@@ -1067,6 +1074,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     // feed/entry.js 在本 IIFE 之外，日志和曲名标签通过 globalThis 传出去。
     globalThis.__spotifyLog = spotifyLog;
     globalThis.__spotifyTrackLabel = trackLabel;
+    // 排障开关也传出去：feed 侧有开销较大的结构 dump（遍历 section、打 hex），
+    // 只在打开 debug_log 时执行。
+    globalThis.__spotifyDebug = DEBUG_LOG;
+    // 曲目元数据回填：feed 从 scrollsita 里抄到的曲名 / 歌手写进同一份缓存。
+    globalThis.__spotifyRememberTrackMeta = rememberTrackMeta;
 
     // 轮询歌词进度，直到歌词响应已经交给客户端（served）再放行 scroll。
     //   * 缓存 + served  -> 再等 grace 毫秒（让客户端先处理歌词响应）后补卡；
@@ -1361,6 +1373,8 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     let embedDone = false;
     let started = false;
     const metaStartedAt = Date.now();
+    let oembedMs = 0;
+    let embedMs = 0;
     const merged = () => {
       const oembed = {
         title: String((meta && meta.title) || ""),
@@ -1389,16 +1403,19 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       const source = meta && meta.title ? (embed && embed.title ? "oembed+embed" : "oembed")
         : embed && embed.title ? "embed" : "none";
       spotifyLog("lyrics.meta", "track=" + trackId + " title=" + info.title + " artist=" + (info.artist || "-")
-        + " source=" + source + " waited=" + (Date.now() - metaStartedAt) + "ms");
+        + " source=" + source + " waited=" + (Date.now() - metaStartedAt) + "ms"
+        + " oembed=" + (oembedMs || "-") + "ms embed=" + (embedMs || "-") + "ms");
       rememberTrackMeta(trackId, info.title, info.artist, info.duration ? info.duration * 1000 : 0, colorOf());
       runSource(sourceOrder(info.title, info.artist), info.title, info.artist,
         (payload) => cb(payload), info.duration, colorOf);
     };
-    // embed 提供封面主色与兜底元数据；请求与歌词查询并行，不阻塞歌词响应。
+    // embed 提供封面主色与兜底元数据；与 oEmbed 并行发出，谁先到用谁。
     const beginEmbed = () => {
       if (embedStarted) return;
       embedStarted = true;
+      const at = Date.now();
       httpGetText(embedUrl, (html) => {
+        embedMs = Date.now() - at;
         embed = parseEmbedTrack(html);
         embedDone = true;
         // 歌词可能已经先返回了；embed 晚到时只补一份封面配色与更准确的元数据。
@@ -1407,7 +1424,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
           rememberTrackMeta(trackId, info.title, info.artist, info.duration ? info.duration * 1000 : 0, embed.color);
         }
         maybeStart();
-      });
+      }, null, META_TIMEOUT_MS);
     };
     const maybeStart = () => {
       if (started) return;
@@ -1431,11 +1448,15 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       beginEmbed();
       start();
     };
+    // 两个来源并行：oEmbed 有曲名 / 歌手，embed 有封面色和更规范的写法。
+    // 串行时 open.spotify.com 慢一次就白等两轮（实测各 2.6s），并行至少拿到先到的那个。
+    beginEmbed();
     httpGetJson(oembedUrl, (data) => {
+      oembedMs = Date.now() - metaStartedAt;
       meta = data;
       metaDone = true;
       maybeStart();
-    });
+    }, null, META_TIMEOUT_MS);
   }
 
   // ---- 歌词源 -----------------------------------------------------------
@@ -1891,12 +1912,12 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     }
   }
 
-  function httpGetJson(target, callback, extraHeaders) {
+  function httpGetJson(target, callback, extraHeaders, timeoutMs) {
     httpGetText(target, (data) => {
       let parsed = null;
       try { parsed = data ? JSON.parse(data) : null; } catch (e) {}
       callback(parsed);
-    }, extraHeaders);
+    }, extraHeaders, timeoutMs);
   }
 
   function httpGetText(target, callback, extraHeaders, timeoutMs) {
@@ -2417,6 +2438,12 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 })();
 
+  // 日志与曲名标签由 lyrics.js 的辅助模式通过 globalThis 暴露；没有时静默降级。
+  // 定义在这里而不是 entry.js：补卡、元数据回填的排障日志都在本文件里。
+  const spotifyLog = (typeof globalThis !== "undefined" && globalThis.__spotifyLog) || (() => {});
+  const trackLabel = (typeof globalThis !== "undefined" && globalThis.__spotifyTrackLabel) || ((id) => id || "?");
+  const debugOn = !!(typeof globalThis !== "undefined" && globalThis.__spotifyDebug);
+
   // ------------------------------------------------------------ lyrics card
   //
   // 歌词卡是 Now Playing 滚动列表里的一格：列表里必须存在一个「歌词 section」，
@@ -2462,6 +2489,96 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     ]);
   }
 
+  // ---- 曲目元数据回填 ---------------------------------------------------
+  //
+  // 歌词脚本取曲名 / 歌手要先读 spotify.track.meta；没命中就只能回源
+  // open.spotify.com（oEmbed / embed，实测 2.6s），整条歌词链路跟着变慢。
+  // scrollsita 的当前曲目 section 里本来就带着 track_title / artist_name
+  // 的 metadata map，顺手抄一份写进同一个缓存：下次同一首再进 Now Playing
+  // 就是零请求。
+  //
+  // 只在「section 里确实有当前曲目的 track 引用」时递归，并且限制遍历节点数，
+  // 避免把 12MB 的列表整个走一遍。
+  const META_TITLE_KEYS = ["track_title", "title", "track_name"];
+  const META_ARTIST_KEYS = ["artist_name", "artist"];
+  const META_WALK_LIMIT = 4000;
+
+  function collectMetaPairs(bytes, found, depth, budget) {
+    if (depth > 6 || budget.left <= 0) return;
+    let fields;
+    try {
+      fields = parse(bytes);
+    } catch (e) {
+      return;
+    }
+    if (!fields) return;
+    budget.left -= fields.length;
+    // metadata map 的一项：{ 1: key, 2: value }
+    if (fields.length === 2 && fields[0].w === 2 && fields[1].w === 2) {
+      const key = fields[0].no === 1 ? text(fields[0]) : null;
+      const value = fields[1].no === 2 ? text(fields[1]) : null;
+      if (key && value && value.length <= 200) {
+        if (!found.title && META_TITLE_KEYS.indexOf(key) >= 0) found.title = value;
+        else if (!found.artist && META_ARTIST_KEYS.indexOf(key) >= 0) found.artist = value;
+      }
+    }
+    if (found.title && found.artist) return;
+    for (const f of fields) {
+      if (f.w !== 2 || !f.p || f.p.length < 2) continue;
+      collectMetaPairs(f.p, found, depth + 1, budget);
+      if (found.title && found.artist) return;
+    }
+  }
+
+  function rememberScrollMeta(bytes, trackId) {
+    const remember = typeof globalThis !== "undefined" ? globalThis.__spotifyRememberTrackMeta : null;
+    if (typeof remember !== "function" || !trackId) return;
+    const found = { title: "", artist: "" };
+    collectMetaPairs(bytes, found, 0, { left: META_WALK_LIMIT });
+    if (!found.title) {
+      spotifyLog("feed.meta", "track=" + trackId + " title=-");
+      return;
+    }
+    spotifyLog("feed.meta", "track=" + trackId + " title=" + found.title + " artist=" + (found.artist || "-"));
+    remember(trackId, found.title, found.artist, 0, null);
+  }
+
+  // ---- 排障：列表结构 ---------------------------------------------------
+  //
+  // 卡片补进去了但客户端不显示时，要能回答两个问题：真实的 section 长什么样、
+  // 我们插在第几位。debug_log 打开时把每个 section 的字段号压成一行，
+  // 官方歌词 section 存在时再打一份 hex，用来和 lyricsSection() 逐字节对比。
+  function hexOf(bytes, limit) {
+    let out = "";
+    const size = Math.min(bytes.length, limit || 240);
+    for (let i = 0; i < size; i += 1) out += (bytes[i] < 16 ? "0" : "") + bytes[i].toString(16);
+    return out + (bytes.length > size ? "…(" + bytes.length + "B)" : "");
+  }
+
+  function describeSections(sections) {
+    const parts = [];
+    const limit = Math.min(sections.length, 8);
+    for (let i = 0; i < limit; i += 1) {
+      const section = sections[i];
+      if (section.no !== 1 || section.wire !== 2) {
+        parts.push("#" + section.no);
+        continue;
+      }
+      const nos = [];
+      try {
+        wireScanFields(section.data, (no) => {
+          nos.push(no);
+          return nos.length >= 8;
+        });
+      } catch (e) {
+        // 单个 section 解析失败不影响日志
+      }
+      parts.push(nos.join("+"));
+    }
+    return sections.length + " [" + parts.join(" | ") + "]";
+  }
+
+
   // 滚动页一次遍历：删广告 section + 补歌词 section。
   //
   // 只重建顶层字段 1 的 payload，保留的 section 和其余字段直接复用原始字节，
@@ -2489,6 +2606,8 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     const kept = [];
     let removed = 0;
     let hasLyrics = false;
+    const trackRef = trackId ? new TextEncoder().encode("spotify:track:" + trackId) : null;
+    if (debugOn) spotifyLog("feed.sections", "track=" + trackId + " " + describeSections(sections));
     for (const section of sections) {
       if (section.no !== 1 || section.wire !== 2) {
         kept.push(section.raw);
@@ -2509,17 +2628,31 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       } catch (e) {
         return null;
       }
+      // 官方歌词 section 的真实字节：和 lyricsSection() 的合成结果对比用。
+      if (hasTrack && hasSectionId) {
+        hasLyrics = true;
+        if (debugOn) spotifyLog("LYRICS_SECTION_HEX", hexOf(section.raw));
+      }
+      // 当前曲目的 section 里通常带 track_title / artist_name，抄进元数据缓存。
+      if (trackRef && hasTrack && containsBytes(section.data, trackRef)) {
+        rememberScrollMeta(section.data, trackId);
+      }
       if (wantAds && ad) {
         removed++;
         continue;
       }
-      if (hasTrack && hasSectionId) hasLyrics = true;
       kept.push(section.raw);
     }
 
     const addCard = wantCard && !!trackId && !hasLyrics;
     if (!removed && !addCard) return null;
-    if (addCard) kept.unshift(wireEncodeField(1, 2, lyricsSection(trackId)));
+    if (addCard) {
+      kept.unshift(wireEncodeField(1, 2, lyricsSection(trackId)));
+      if (debugOn) {
+        spotifyLog("feed.card", "track=" + trackId + " insert=0 sections=" + sections.length + "->" + kept.length
+          + " hex=" + hexOf(lyricsSection(trackId)));
+      }
+    }
 
     const rebuilt = wireEncodeField(1, 2, wireConcat(kept));
     const parts = [];
@@ -2530,9 +2663,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
   // 入口：首页 / 搜索 / 滚动页的赞助内容过滤，滚动页额外补歌词卡对应的 section。
   const res = (typeof $response !== "undefined" && $response) || null;
-  // 日志与曲名标签由 lyrics.js 的辅助模式通过 globalThis 暴露；没有时静默降级。
-  const spotifyLog = (typeof globalThis !== "undefined" && globalThis.__spotifyLog) || (() => {});
-  const trackLabel = (typeof globalThis !== "undefined" && globalThis.__spotifyTrackLabel) || ((id) => id || "?");
   if (!res) {
     $done({});
     return;

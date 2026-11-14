@@ -60,14 +60,18 @@ crossfade；这两项保持服务端与 App 自己的设置。AutoMix 仍在远�
 
 - `lyrics.req`：color-lyrics 请求阶段，`want=` 是客户端请求的格式，`cache=hit/miss`；
 - `lyrics.res`：官方响应状态、实际格式、字节数；`official=` 是官方歌词的命中情况；
-- `lyrics.meta` / `lyrics.source`：曲名 / 歌手来自缓存还是 oEmbed，以及各歌词源的命中结果；
+- `lyrics.meta` / `lyrics.source`：曲名 / 歌手来自缓存还是 oEmbed，以及各歌词源的命中结果；`waited=` 是元数据阶段总耗时，`oembed=` / `embed=` 是两次回源各自的耗时（两者并行发出）；
 - `lyrics.served`：歌词响应已经交给客户端（格式 + 曲名）；
 - `lyrics.done`：最终返回的状态 / 字节数；
+- `meta.cache` / `meta.none`：客户端自己的 connect-state / context-resolve / metadata 响应里抄到的曲目元数据；`meta.none` 只在 `metadata/4/track` 里取不到曲名时打印；
 - `feed.scroll`：scroll 请求的曲目、字节数、是否已有官方卡片；
-- `feed.wait`：等待状态（pending / cache / served / miss）只在变化时打印，`done` 行给出最终等待时长；
-- `feed.card`：是否补卡、是否乐观补卡、响应是否被改写、总耗时。
+- `feed.sections`：列表里每个 section 的字段号（最多前 8 个），用来看真实结构；
+- `LYRICS_SECTION_HEX`：官方歌词 section 的原始字节，用来和脚本合成的 section 对比；
+- `feed.card`：插入位置、section 数量变化、插入的 section hex；
+- `feed.meta`：从 scroll 里抄到的曲名 / 歌手（写进元数据缓存，下次同一首不用回源）；
+- `feed.wait`：等待状态（pending / cache / served / miss）只在变化时打印，`done` 行给出最终等待时长。
 
-判断方法：`feed.scroll` 的 `total` 应该晚于 `lyrics.served` 的时间戳。如果 scroll 早于 `lyrics.served`，说明还在抢跑；如果已经晚于但卡片仍然缺失，问题就不在时序。日志包含曲名，排查完请关闭。
+判断方法：`feed.scroll` 的 `total` 应该在 1 秒以内；超过 1.5 秒说明响应到达时客户端已经渲染完列表，补进去的卡片会被丢掉。如果 `total` 很小、`card=add patched=1` 但卡片仍然缺失，就把 `feed.card` 的 `hex=` 和 `LYRICS_SECTION_HEX` 对比，问题在 section 结构而不在时序。日志包含曲名，排查完请关闭。
 
 ### 没有歌词时的排查
 

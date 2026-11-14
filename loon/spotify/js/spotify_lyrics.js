@@ -67,8 +67,12 @@
       if (Array.isArray(raw)) {
         const modes = ["full", "no_card", "metadata_only", "response_only", "card_only"];
         const modeInThird = modes.indexOf(raw[2]) >= 0;
+        // Loon 位置参数：歌词源, 补全歌词, 设备类型, 模式 / 排障日志。
+        // 第 4 个位置既是旧版的 lyrics_mode，也可能是 debug_log，按取值区分。
+        const modeInFourth = modes.indexOf(raw[3]) >= 0;
         opt = { lyrics_source: raw[0], enable_lyrics: raw[1], desktop: modeInThird ? false : raw[2],
-          lyrics_mode: modeInThird ? raw[2] : modes.includes(raw[3]) ? raw[3] : undefined };
+          lyrics_mode: modeInThird ? raw[2] : modeInFourth ? raw[3] : undefined,
+          debug_log: modeInThird || modeInFourth ? undefined : raw[3] };
       }
       else if (typeof raw === "string") {
         try {
@@ -145,6 +149,9 @@
   const LYRICS_CACHE_MAX_BYTES = 400 * 1024;
   const LYRICS_DEADLINE_MS = 8000;
   const PLAIN_FALLBACK_MS = 6000;
+  // 元数据回源（open.spotify.com 的 oEmbed / embed 页面）单次上限。两个请求
+  // 并行发出，超时不会让整条链路多等一轮；卡住不返回的请求最多拖 2.5 秒。
+  const META_TIMEOUT_MS = 2500;
 
   // 确认没有歌词的曲目，短期内不再补空卡。
   const MISS_KEY = "spotify.lyrics.miss";
@@ -444,6 +451,11 @@
     // feed/entry.js 在本 IIFE 之外，日志和曲名标签通过 globalThis 传出去。
     globalThis.__spotifyLog = spotifyLog;
     globalThis.__spotifyTrackLabel = trackLabel;
+    // 排障开关也传出去：feed 侧有开销较大的结构 dump（遍历 section、打 hex），
+    // 只在打开 debug_log 时执行。
+    globalThis.__spotifyDebug = DEBUG_LOG;
+    // 曲目元数据回填：feed 从 scrollsita 里抄到的曲名 / 歌手写进同一份缓存。
+    globalThis.__spotifyRememberTrackMeta = rememberTrackMeta;
 
     // 轮询歌词进度，直到歌词响应已经交给客户端（served）再放行 scroll。
     //   * 缓存 + served  -> 再等 grace 毫秒（让客户端先处理歌词响应）后补卡；
@@ -738,6 +750,8 @@
     let embedDone = false;
     let started = false;
     const metaStartedAt = Date.now();
+    let oembedMs = 0;
+    let embedMs = 0;
     const merged = () => {
       const oembed = {
         title: String((meta && meta.title) || ""),
@@ -766,16 +780,19 @@
       const source = meta && meta.title ? (embed && embed.title ? "oembed+embed" : "oembed")
         : embed && embed.title ? "embed" : "none";
       spotifyLog("lyrics.meta", "track=" + trackId + " title=" + info.title + " artist=" + (info.artist || "-")
-        + " source=" + source + " waited=" + (Date.now() - metaStartedAt) + "ms");
+        + " source=" + source + " waited=" + (Date.now() - metaStartedAt) + "ms"
+        + " oembed=" + (oembedMs || "-") + "ms embed=" + (embedMs || "-") + "ms");
       rememberTrackMeta(trackId, info.title, info.artist, info.duration ? info.duration * 1000 : 0, colorOf());
       runSource(sourceOrder(info.title, info.artist), info.title, info.artist,
         (payload) => cb(payload), info.duration, colorOf);
     };
-    // embed 提供封面主色与兜底元数据；请求与歌词查询并行，不阻塞歌词响应。
+    // embed 提供封面主色与兜底元数据；与 oEmbed 并行发出，谁先到用谁。
     const beginEmbed = () => {
       if (embedStarted) return;
       embedStarted = true;
+      const at = Date.now();
       httpGetText(embedUrl, (html) => {
+        embedMs = Date.now() - at;
         embed = parseEmbedTrack(html);
         embedDone = true;
         // 歌词可能已经先返回了；embed 晚到时只补一份封面配色与更准确的元数据。
@@ -784,7 +801,7 @@
           rememberTrackMeta(trackId, info.title, info.artist, info.duration ? info.duration * 1000 : 0, embed.color);
         }
         maybeStart();
-      });
+      }, null, META_TIMEOUT_MS);
     };
     const maybeStart = () => {
       if (started) return;
@@ -808,11 +825,15 @@
       beginEmbed();
       start();
     };
+    // 两个来源并行：oEmbed 有曲名 / 歌手，embed 有封面色和更规范的写法。
+    // 串行时 open.spotify.com 慢一次就白等两轮（实测各 2.6s），并行至少拿到先到的那个。
+    beginEmbed();
     httpGetJson(oembedUrl, (data) => {
+      oembedMs = Date.now() - metaStartedAt;
       meta = data;
       metaDone = true;
       maybeStart();
-    });
+    }, null, META_TIMEOUT_MS);
   }
 
   // ---- 歌词源 -----------------------------------------------------------
@@ -1268,12 +1289,12 @@
     }
   }
 
-  function httpGetJson(target, callback, extraHeaders) {
+  function httpGetJson(target, callback, extraHeaders, timeoutMs) {
     httpGetText(target, (data) => {
       let parsed = null;
       try { parsed = data ? JSON.parse(data) : null; } catch (e) {}
       callback(parsed);
-    }, extraHeaders);
+    }, extraHeaders, timeoutMs);
   }
 
   function httpGetText(target, callback, extraHeaders, timeoutMs) {

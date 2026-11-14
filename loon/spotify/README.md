@@ -23,6 +23,20 @@
 | `enable_lyrics` | true | 补全歌词；关闭后不加载歌词脚本 |
 | `lyrics_source` | auto | 歌词源；`auto` 并发查询网易云 / QQ / LRCLIB，不自动查 Musixmatch |
 | `desktop` | auto | `auto` 按 User-Agent 识别 iPhone / iPad 与 Loon for Mac；识别不准时手动指定 `ios` / `macos` |
+| `debug_log` | false | 输出歌词卡、元数据缓存的时序日志（含曲名），排查完关闭 |
+
+## 排障日志
+
+打开 `debug_log` 后，`js/spotify.js`、`js/spotify.feed.js`、`js/spotify_lyrics.js` 都会输出 `[spotify] <毫秒时间戳> <事件> ...` 格式的日志，时间戳可以把三段脚本对齐。常用事件：
+
+- `lyrics.req` / `lyrics.res` / `lyrics.served` / `lyrics.done`：歌词请求、官方响应、歌词交给客户端的时刻、最终返回；
+- `lyrics.meta`：`source=cache/oembed/embed`，`waited=` 与 `oembed=` / `embed=` 各自的耗时；
+- `meta.cache` / `meta.none`：客户端元数据响应里抄到的曲目信息；
+- `feed.sections` / `LYRICS_SECTION_HEX` / `feed.card`：列表真实结构、官方歌词 section 的字节、脚本补卡的位置与合成字节；
+- `feed.meta`：从 scroll 里抄到的曲名 / 歌手；
+- `feed.scroll` / `feed.wait`：补卡决策与等待时长，`total` 超过 1.5 秒说明响应到达时客户端已渲染完列表。
+
+日志包含曲名，排查完请关闭。
 
 ## 歌词
 

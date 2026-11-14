@@ -193,7 +193,7 @@
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
     if (Array.isArray(raw)) {
       const modeInFifth = ["full", "no_card", "metadata_only", "response_only", "card_only"].indexOf(raw[4]) >= 0;
-      opt = { spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2], enable_lyrics: raw[3], desktop: modeInFifth ? false : raw[4], lyrics_mode: modeInFifth ? raw[4] : raw[5] };
+      opt = { spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2], enable_lyrics: raw[3], desktop: modeInFifth ? false : raw[4], lyrics_mode: modeInFifth ? raw[4] : raw[5], debug_log: raw[6] };
     } else if (typeof raw === "string") {
       opt = JSON.parse(raw || "{}") || {};
     } else if (raw && "object" == typeof raw) {
@@ -1333,7 +1333,19 @@
     out[id] = [name, artists.join(", "), duration && duration.w === 0 ? Number(duration.v) : 0];
   }
 
-  function rememberTracks(found) {
+  // 元数据缓存排障日志：歌词脚本回源 open.spotify.com 时要 2.6s，如果客户端
+  // 自己的 connect-state / metadata 响应里明明有曲名却没写进缓存，就得能看出来。
+  // 只在「写入发生变化」时输出，connect-state 每几秒轮询一次也不会刷屏。
+  const metaLog = (event, message) => {
+    if (!flag(opt.debug_log, false)) return;
+    try {
+      if (typeof console !== "undefined" && console.log) console.log("[spotify] " + Date.now() + " " + event + " " + message);
+    } catch (e) {
+      // 日志失败不影响响应改写
+    }
+  };
+
+  function rememberTracks(found, from) {
     const store = cacheStore();
     const ids = Object.keys(found);
     if (!store || !ids.length) return;
@@ -1352,6 +1364,7 @@
       const old = map[id];
       if (old && old[0] === next[0] && old[1] === next[1] && Number(old[2]) === next[2]) continue;
       map[id] = [next[0], next[1], next[2], now];
+      metaLog("meta.cache", "track=" + id + " title=" + next[0] + " artist=" + (next[1] || "-") + " from=" + (from || "?"));
       changed = true;
     }
     if (!changed) return;
@@ -1367,11 +1380,15 @@
 
   function cacheTrackMeta(target, fields) {
     if (!cacheStore()) return;
+    const from = target.indexOf("/metadata/4/track/") >= 0 ? "metadata"
+      : target.indexOf("/connect-state/") >= 0 ? "connect"
+      : target.indexOf("/context-resolve/") >= 0 ? "context" : "other";
     const trackUrl = /\/metadata\/4\/track\/([A-Za-z0-9]{22})/.exec(target);
     if (trackUrl) {
       const found = Object.create(null);
       collectTrackEntity(fields, trackUrl[1], found);
-      rememberTracks(found);
+      if (!found[trackUrl[1]]) metaLog("meta.none", "track=" + trackUrl[1] + " from=" + from + " fields=" + fields.length);
+      rememberTracks(found, from);
       return;
     }
     // extended-metadata 体积大且不含 track_title；当前曲目在
@@ -1379,7 +1396,7 @@
     if (target.indexOf("/extended-metadata/") >= 0) return;
     const found = Object.create(null);
     collectTracks(fields, found, 0);
-    rememberTracks(found);
+    rememberTracks(found, from);
   }
 
   function patchMeta(buffer, target) {
