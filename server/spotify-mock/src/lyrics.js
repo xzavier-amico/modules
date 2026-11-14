@@ -17,7 +17,7 @@ const USER_AGENT = "xzavier-modules/1.0 (https://github.com/xzavier-amico/module
 const SOURCES = ["lrclib", "musixmatch", "netease", "qq"];
 const AUTO_SOURCES = ["lrclib", "musixmatch", "netease", "qq"];
 
-const DEFAULT_TIMEOUT_MS = 8000;
+const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_CACHE_TTL = 21600;
 const MAX_CACHE_ENTRIES = 500;
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
@@ -180,7 +180,7 @@ async function lookupQq(title, artist, ctx) {
   const query = encodeURIComponent(queryTitle(title) + (artist ? " " + artist : ""));
   const headers = { Referer: "https://y.qq.com/" };
   const data = await getJson(
-    "https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=" + query + "&format=json&n=5&p=1",
+    "https://c.y.qq.com/soso/fcgi-bin/search_for_qq_cp?w=" + query + "&format=json&n=5&p=1",
     ctx,
     headers,
   );

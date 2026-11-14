@@ -16,8 +16,8 @@ DESKTOP=auto
 # LYRICS_ENABLED=true
 # lrclib / musixmatch / netease / qq，或 auto 依次尝试
 # LYRICS_SOURCE=lrclib
-# 一次歌词解析的总超时（毫秒），默认 8000
-# LYRICS_TIMEOUT_MS=8000
+# 一次歌词解析的总超时（毫秒），默认 5000
+# LYRICS_TIMEOUT_MS=5000
 # 命中缓存的有效期（秒），默认 21600；查不到 / 超时不缓存
 # LYRICS_CACHE_TTL=21600
 

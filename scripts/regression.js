@@ -281,8 +281,19 @@ check("Spotify client plugins route scrollsita to the updated ad filter", () => 
   for (const file of ["loon/spotify/spotify-premium.plugin", "loon/spotify/spotify-premium-mac.plugin", "egern/spotify/spotify-premium.yaml", "shadowrocket/spotify/spotify-premium.sgmodule"]) {
     const rules = read(file).split("\n").filter((line) => !line.trim().startsWith("#"));
     assert.ok(rules.some((line) => line.includes("scrollsita")), file + " must match scrollsita");
-    assert.ok(rules.some((line) => line.includes("spotify.feed.js?v=20261114-8")));
+    assert.ok(rules.some((line) => line.includes("spotify.feed.js?v=20261114-11")));
   }
+});
+
+check("Spotify modules route domestic lyrics sources directly", () => {
+  for (const file of ["loon/spotify/spotify-premium.plugin", "loon/spotify/spotify-premium-mac.plugin", "shadowrocket/spotify/spotify-premium.sgmodule"]) {
+    const text = read(file);
+    assert.ok(text.includes("DOMAIN,music.163.com,DIRECT"), file + " must route NetEase directly");
+    assert.ok(text.includes("DOMAIN,c.y.qq.com,DIRECT"), file + " must route QQ Music directly");
+  }
+  const egern = read("egern/spotify/spotify-premium.yaml");
+  assert.match(egern, /match: "music\.163\.com"\s*\n\s*policy: DIRECT/);
+  assert.match(egern, /match: "c\.y\.qq\.com"\s*\n\s*policy: DIRECT/);
 });
 
 check("Shadowrocket Spotify feed argument JSON exposes prefetch", () => {
@@ -301,6 +312,47 @@ check("Egern lyrics script declares body_required", () => {
   const response = entries.find((entry) => /^http_response:/.test(entry) && entry.includes("spotify_lyrics.js"));
   assert.ok(response, "lyrics response entry must exist");
   assert.ok(/body_required:\s*true/.test(response), "lyrics response entry must set body_required");
+});
+
+check("Spotify client plugins short-circuit cached lyrics at request phase", () => {
+  // 请求阶段命中缓存时直接返回歌词，跳过可能很慢的官方 color-lyrics 请求。
+  for (const file of ["loon/spotify/spotify-premium.plugin", "loon/spotify/spotify-premium-mac.plugin", "shadowrocket/spotify/spotify-premium.sgmodule"]) {
+    const rules = read(file).split("\n").filter((line) => line.includes("spotify_lyrics.js"));
+    assert.equal(rules.length, 2, file + " must have request and response lyrics entries");
+    assert.equal(rules.filter((line) => /tag="spotify(?:\.mac)?\.lyrics\.req"/.test(line) || line.startsWith("spotify.lyrics.req =")).length, 1, file);
+  }
+  const entries = read("egern/spotify/spotify-premium.yaml").split(/\n\s*-\s+(?=http_request:|http_response:)/)
+    .filter((entry) => entry.includes("color-lyrics") && entry.includes("spotify_lyrics.js"));
+  assert.equal(entries.filter((entry) => /^http_request:/.test(entry)).length, 1, "egern request entry");
+  assert.equal(entries.filter((entry) => /^http_response:/.test(entry)).length, 1, "egern response entry");
+});
+
+check("Spotify request phase returns cached lyrics without hitting providers", () => {
+  const id = "0VjIjW4GlUZAMYd2vXMi3b";
+  const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json";
+  for (const platform of ["loon", "shadowrocket"]) {
+    const out = run(platform + "/spotify/js/spotify_lyrics.js", "", url, ["auto", true], {
+      $response: undefined,
+      $persistentStore: lyricsStore(id),
+      $httpClient: { get: () => assert.fail(platform + " cache hit must not query providers") },
+    });
+    assert.equal(out.response.status, 200, platform);
+    const payload = JSON.parse(out.response.body);
+    assert.equal(payload.lyrics.lines[0].words, "line", platform);
+    assert.equal(payload.lyrics.provider, "LRCLIB", platform);
+  }
+});
+
+check("Spotify request phase passes through when the cache is empty", () => {
+  const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/id?format=json";
+  for (const platform of ["loon", "shadowrocket"]) {
+    const out = run(platform + "/spotify/js/spotify_lyrics.js", "", url, ["auto", true], {
+      $response: undefined,
+      $persistentStore: { read: () => null, write: () => true },
+      $httpClient: { get: () => assert.fail(platform + " cache miss must let the official request through") },
+    });
+    assert.equal(Object.keys(out).length, 0, platform);
+  }
 });
 
 check("Spotify feed scripts get a 30s timeout", () => {
@@ -1037,7 +1089,7 @@ check("Spotify auto can finish with QQ when NetEase has no match", () => {
       if (request.url.includes("oembed")) data = { title: "晚秋", author_name: "毛宁" };
       else if (request.url.includes("/embed/track/")) data = {};
       else if (request.url.includes("music.163.com")) data = { result: { songs: [] } };
-      else if (request.url.includes("client_search_cp")) data = { data: { song: { list: [{ songmid: "qq-id", songname: "晚秋", singer: [{ name: "毛宁" }], interval: 212 }] } } };
+      else if (request.url.includes("search_for_qq_cp")) data = { data: { song: { list: [{ songmid: "qq-id", songname: "晚秋", singer: [{ name: "毛宁" }], interval: 212 }] } } };
       else if (request.url.includes("fcg_query_lyric")) data = { lyric: "[00:01.00]QQ result" };
       else assert.fail("slow fallback must not precede QQ: " + request.url);
       callback(null, { status: 200 }, JSON.stringify(data));
@@ -1072,7 +1124,8 @@ check("Spotify auto queries the three sources concurrently, skips Musixmatch and
   assert.ok(providers.some((url) => url.includes("lrclib.net/api/get")));
   assert.ok(providers.some((url) => url.includes("lrclib.net/api/search")));
   assert.ok(providers.some((url) => url.includes("music.163.com/api/search")));
-  assert.ok(providers.some((url) => url.includes("client_search_cp")));
+  assert.ok(providers.some((url) => url.includes("search_for_qq_cp")));
+  assert.ok(!providers.some((url) => url.includes("client_search_cp")), "the legacy QQ search endpoint is unreliable");
   assert.ok(!requests.some((url) => url.includes("musixmatch")), "auto must skip Spotify's own upstream");
 
   const reply = (part) => [...pending.entries()].find(([url]) => url.includes(part));
@@ -1227,7 +1280,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
           else if (request.url.includes("/api/get?")) data = { ...record, syncedLyrics: "[00:01.00]Wrong result" };
           else if (request.url.includes("/api/search?")) data = [{ ...record, syncedLyrics: "[00:01.00]Wrong result" }];
           else if (request.url.includes("/search/get")) data = { result: { songs: [{ id: 1, name: "Other Song", artists: [{ name: "Artist" }] }] } };
-          else if (request.url.includes("client_search_cp")) data = { data: { song: { list: [
+          else if (request.url.includes("search_for_qq_cp")) data = { data: { song: { list: [
             { songmid: "wrong", songname: "Song", singer: [{ name: "Other Artist" }] },
             { songmid: "right", songname: "Song", singer: [{ name: "Artist" }] },
           ] } } };
@@ -1497,15 +1550,16 @@ check("Loon uses normal arguments and retains legacy mode compatibility", () => 
   const plugin = read("loon/spotify/spotify-premium.plugin");
   assert.ok(!plugin.includes("lyrics_mode"), "plugin must not expose diagnostic modes");
   const scriptRules = plugin.split("\n").filter((line) => line.includes('then script("'));
-  assert.equal(scriptRules.length, 6);
+  assert.equal(scriptRules.length, 7);
   for (const line of scriptRules) {
-    const version = line.includes('tag="spotify.lyrics"') ? "20261114-9" : line.includes("spotify.feed") ? "20261114-8" : "20261114-8";
+    const version = line.includes("spotify_lyrics.js") ? "20261114-13"
+      : line.includes("spotify.feed.js") ? "20261114-11" : "20261114-11";
     assert.ok(line.includes("?v=" + version));
     const tuple = /then script\("[^"]+", (\{.*\})\) with/.exec(line)[1];
     assert.match(tuple, /^\{\$\{\w+\}(?:, \$\{\w+\})*\}$/, "Loon tuple must contain only declared argument references");
     const names = [...tuple.matchAll(/\$\{(\w+)\}/g)].map((match) => match[1]);
     for (const name of names) assert.ok(new RegExp("^" + name + " = ", "m").test(plugin));
-    if (line.includes('tag="spotify.lyrics"')) {
+    if (line.includes("spotify_lyrics.js")) {
       assert.deepEqual(names, ["lyrics_source", "enable_lyrics", "desktop"]);
     } else if (line.includes("spotify.feed")) {
       assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source", "prefetch"]);

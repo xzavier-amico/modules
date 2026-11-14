@@ -373,7 +373,7 @@ test("health reports the lyrics options", async () => {
   const body = await response.json();
   assert.equal(body.options.lyrics.enabled, true);
   assert.equal(body.options.lyrics.source, "auto");
-  assert.equal(body.options.lyrics.timeoutMs, 8000);
+  assert.equal(body.options.lyrics.timeoutMs, 5000);
 });
 
 test("legacy /color-lyricsv2 paths are normalized before routing", async () => {

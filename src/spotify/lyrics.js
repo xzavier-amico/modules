@@ -82,12 +82,8 @@
   };
   const desktop = desktopMode(opt.desktop);
 
-  // 这个脚本只在响应阶段被调用；请求阶段或参数关闭时直接放行。
+  // 参数关闭时直接放行；请求阶段的缓存命中在下面处理，未命中同样立即放行。
   // Loon 靠 enable= 决定是否加载脚本，Egern 不支持条件加载，只能在这里早退。
-  if (!PREFETCH && !res) {
-    $done({});
-    return;
-  }
   if (!PREFETCH && (!flag(opt.enable_lyrics, true) || opt.lyrics_mode === "metadata_only" || opt.lyrics_mode === "card_only")) {
     $done({});
     return;
@@ -117,11 +113,11 @@
   const LYRICS_CACHE_HIT_TTL = 24 * 60 * 60 * 1000;
   const LYRICS_CACHE_MAX_LINES = 400;
   const LYRICS_CACHE_MAX_BYTES = 400 * 1024;
-  const LYRICS_DEADLINE_MS = 15000;
-  const PLAIN_FALLBACK_MS = 5000;
-  // feed 脚本在返回 scrollsita 之前等歌词；比歌词页的 15 秒短，避免 Now Playing
+  const LYRICS_DEADLINE_MS = 5000;
+  const PLAIN_FALLBACK_MS = 4000;
+  // feed 脚本在返回 scrollsita 之前等歌词；和歌词页共用 5 秒预算，避免 Now Playing
   // 卡片列表等太久。超时就不补卡，歌词页之后仍可正常重试。
-  const PREFETCH_DEADLINE_MS = 8000;
+  const PREFETCH_DEADLINE_MS = 4000;
 
   const storeBackend = () =>
     typeof $persistentStore !== "undefined" && $persistentStore ? $persistentStore : null;
@@ -341,6 +337,12 @@
     settled = true;
     if (deadline !== undefined && typeof clearTimeout === "function") clearTimeout(deadline);
     if (plainTimer !== undefined && typeof clearTimeout === "function") clearTimeout(plainTimer);
+    // 请求阶段没有 $response：Loon / Egern / Shadowrocket 用 { response } 直接
+    // 返回合成结果，跳过官方 color-lyrics 请求。
+    if (!res) {
+      $done(value && (value.status || value.body) ? { response: value } : {});
+      return;
+    }
     $done(value);
   };
 
@@ -394,6 +396,35 @@
     return;
   }
 
+  // 请求阶段：缓存里已经有这首歌的第三方歌词时，直接返回，完全跳过官方请求。
+  // 官方歌词接口本身可能很慢；既然之前已经确认官方没有歌词，就不必再等它。
+  if (!res) {
+    if (!PREFETCH && trackId && flag(opt.enable_lyrics, true)) {
+      cacheKey = lyricsCacheKey(trackId);
+      const cached = readLyricsCache(cacheKey, trackId);
+      if (cached) {
+        if (requestedProtoMode()) {
+          finish({
+            status: 200,
+            headers: { "Content-Type": "application/vnd.google.protobuf" },
+            body: encodeProto(cached.payload.lyrics.lines, cached.payload.lyrics.syncType,
+              cached.payload.lyrics.provider, cached.payload.lyrics.providerLyricsId,
+              cached.payload.lyrics.language, cached.payload.colors),
+          });
+        } else {
+          finish({
+            status: 200,
+            headers: { "Content-Type": "application/json; charset=utf-8" },
+            body: JSON.stringify(cached.payload),
+          });
+        }
+        return;
+      }
+    }
+    finish({});
+    return;
+  }
+
   const rawBody = res.body;
   const rawBytes = toBytes(rawBody);
   const rawLength = "string" == typeof rawBody ? rawBody.length : rawBytes.length;
@@ -423,15 +454,18 @@
 
   // 404 的 body 和 Content-Type 都描述错误，不能用来推断歌词响应格式。
   // 补全时遵循请求的 format / Accept；没有提示则用客户端默认格式。
-  const accept = headerValue(req && req.headers, "accept").toLowerCase();
-  const format = /[?&]format=(json|protobuf)(?:&|$)/i.exec(url);
-  const requestedProto = format ? format[1].toLowerCase() === "protobuf"
-    : accept.indexOf("protobuf") >= 0 ? true
-    : accept.indexOf("json") >= 0 ? false
-    : null;
+  function requestedProtoMode() {
+    const accept = headerValue(req && req.headers, "accept").toLowerCase();
+    const format = /[?&]format=(json|protobuf)(?:&|$)/i.exec(url);
+    const requested = format ? format[1].toLowerCase() === "protobuf"
+      : accept.indexOf("protobuf") >= 0 ? true
+      : accept.indexOf("json") >= 0 ? false
+      : null;
+    return requested !== null ? requested : !desktop;
+  }
   const protoMode = status === 200 && hasBody
     ? trimmed.charAt(0) !== "{"
-    : requestedProto !== null ? requestedProto : !desktop;
+    : requestedProtoMode();
 
   // 不把登录、限流或服务端错误伪装成有歌词。
   if (status !== 200 && status !== 404) {
@@ -780,7 +814,9 @@
   function lookupQq(title, artist, duration, cb) {
     const query = encodeURIComponent(queryTitle(title) + (artist ? " " + artist : ""));
     const headers = { Referer: "https://y.qq.com/" };
-    httpGetJson("https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=" + query + "&format=json&n=10&p=1", (data) => {
+    // QQ 旧版 client_search_cp 在部分网络下会直接 500 且要等 5 秒；
+    // search_for_qq_cp 是同一个搜索服务的移动端入口，返回结构一致。
+    httpGetJson("https://c.y.qq.com/soso/fcgi-bin/search_for_qq_cp?w=" + query + "&format=json&n=10&p=1", (data) => {
       const list = data && data.data && data.data.song && data.data.song.list;
       const candidates = rankSongs(list, title, artist, duration, (item) => item.songname,
         (item) => (item.singer || []).reduce((names, a) => names.concat(artistNames(a)), []), (item) => Number(item.interval));
@@ -941,6 +977,13 @@
     return names.some((name) => wanted.has(key(name)));
   }
 
+  // LRCLIB 用秒，网易云搜索用毫秒，QQ 用秒；时长可能来自任一方。
+  // 大于 10000 的值按毫秒归一，避免同一首歌因为单位不同被判成两首。
+  function durationSeconds(value) {
+    const number = Number(value);
+    return Number.isFinite(number) && number > 10000 ? number / 1000 : number;
+  }
+
   function matchesSong(title, artist, duration, candidateTitle, candidateArtist, candidateDuration) {
     if (!candidateTitle || !matchTitles(title, candidateTitle)) return false;
     if (isLive(title) !== isLive(candidateTitle)) return false;
@@ -950,11 +993,19 @@
     const stage = STAGE_MARK.exec(title);
     const otherStage = STAGE_MARK.exec(candidateTitle);
     if (stage && otherStage && stage[1] !== otherStage[1]) return false;
+    // 时长是最便宜的「同名翻唱 / 伴奏 / 剪辑版」过滤器：两边都有时长时，
+    // 相差超过 10 秒基本不是同一版。缺时长（Spotify 元数据没拿到）时不拦。
+    const wantedDuration = durationSeconds(duration);
+    const candidateSeconds = durationSeconds(candidateDuration);
+    const timed = Number.isFinite(wantedDuration) && wantedDuration > 0 &&
+      Number.isFinite(candidateSeconds) && candidateSeconds > 0;
+    const delta = timed ? Math.abs(candidateSeconds - wantedDuration) : 0;
     // 仅凭 “Live” 无法确定具体场次，需再核对时长和场次信息。
     if (isLive(title)) {
-      const timed = Number.isFinite(duration) && duration > 0 && Number.isFinite(candidateDuration) && candidateDuration > 0;
-      if (timed && Math.abs(candidateDuration - duration) > 8) return false;
+      if (timed && delta > 8) return false;
       if (stage && !otherStage && (!timed || !singer)) return false;
+    } else if (timed && delta > 10) {
+      return false;
     }
     return true;
   }
@@ -1032,7 +1083,7 @@
           if (Object.prototype.hasOwnProperty.call(extraHeaders, key)) headers[key] = extraHeaders[key];
         }
       }
-      const options = { url: target, headers: headers, timeout: timeoutMs || 8000 };
+      const options = { url: target, headers: headers, timeout: timeoutMs || 4000 };
       const onReply = (error, response, data) => {
         if (done || settled) return;
         const statusCode = Number(response && response.status);
@@ -1059,7 +1110,7 @@
         return;
       }
       if (typeof $task !== "undefined" && $task && typeof $task.fetch === "function") {
-        $task.fetch({ url: target, headers: headers, timeout: timeoutMs || 8000 }).then(
+        $task.fetch({ url: target, headers: headers, timeout: timeoutMs || 4000 }).then(
           (res) => onReply(null, { status: res.statusCode || res.status }, res.body),
           (err) => onReply(err, null, null),
         );

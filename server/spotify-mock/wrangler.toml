@@ -15,7 +15,7 @@ workers_dev = true
 # LYRICS_ENABLED = "true"
 # lrclib / musixmatch / netease / qq / auto
 # LYRICS_SOURCE = "lrclib"
-# LYRICS_TIMEOUT_MS = "8000"
+# LYRICS_TIMEOUT_MS = "5000"
 # LYRICS_CACHE_TTL = "21600"
 # MOCK_PREFIX = ""
 
