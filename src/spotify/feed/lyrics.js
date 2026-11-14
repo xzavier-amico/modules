@@ -172,6 +172,12 @@
       for (const f of top) topNos.push(f.no);
       spotifyLog("feed.top", "fields=" + topNos.join("+") + " bytes=" + buffer.length);
       spotifyLog("feed.sections", "track=" + trackId + " " + describeSections(sections));
+      // 顶层除字段 1（section 列表）之外的字段也打一份：客户端可能拿它校验
+      // 列表（页信息 / section 顺序），补卡时没有同步改。
+      for (const f of top) {
+        if (f === structure) continue;
+        spotifyLog("feed.topfield", "no=" + f.no + " w=" + f.wire + " len=" + f.raw.length + " hex=" + hexOf(f.raw, 64));
+      }
       // 每个 section 的前 120 字节：字段号 + 关键字符串足够看清真实结构，
       // 比整包 hex 小得多，也不至于把日志刷爆。
       const dump = Math.min(sections.length, 6);

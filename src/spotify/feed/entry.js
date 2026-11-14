@@ -48,19 +48,10 @@
     $done({ body: out });
   };
 
-  // 补卡前短暂卡住 scrollsita 等歌词结果：轮询歌词进度，命中即补（内容就绪）、
-  // 读到 miss 不补空卡、超预算乐观补卡（内容由 color-lyrics 请求填充）。
-  //
-  // 预算必须短。歌词一旦要走 open.spotify.com 取元数据，实测整条链路 3 秒以上，
-  // 而 Now Playing 的列表是客户端先本地渲染、再合并服务端结果的：响应晚于合并
-  // 就会被丢掉，补进去的卡片照样不显示（用户看到的「列表出来了、没有歌词卡」）。
-  // 所以只在「歌词马上就到」的窗口里等，超时就带卡放行。
-  const CARD_WAIT_MS = 800;
-  const CARD_FAST_MS = 400;
-  const CARD_FAST_POLL_MS = 100;
-  const CARD_SLOW_POLL_MS = 200;
-  // 歌词响应发出后再留给客户端处理的时间。
-  const CARD_GRACE_MS = 200;
+  // 补卡不等歌词：Now Playing 打开时客户端先渲染列表，之后才合并 scrollsita 的
+  // 响应；响应晚到只更新模型、不重绘列表，卡片要收起再展开才出现（实测）。
+  // 所以立刻补卡，内容由随后的 color-lyrics 响应填充——歌词已经在缓存里时，
+  // 客户端拿到卡片就会直接取到内容。
   const feedStartedAt = Date.now();
   if (isScroll && wantCard) {
     const card = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsCard : null;
@@ -73,26 +64,10 @@
       finish(patchScroll(body, trackId, wantAds, false));
       return;
     }
-    const wait = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsWait : null;
-    if (typeof wait === "function") {
-      wait(trackId, (ready, timedOut) => {
-        const addCard = !!ready || !!timedOut;
-        const out = patchScroll(body, trackId, wantAds, addCard);
-        spotifyLog("feed.scroll", "track=" + trackId + " title=" + trackLabel(trackId)
-          + " card=" + (addCard ? "add" : "skip") + " optimistic=" + (!ready && timedOut)
-          + " patched=" + (out ? 1 : 0) + " total=" + (Date.now() - feedStartedAt) + "ms");
-        finish(out);
-      }, {
-        max: CARD_WAIT_MS,
-        fastUntil: CARD_FAST_MS,
-        fastStep: CARD_FAST_POLL_MS,
-        slowStep: CARD_SLOW_POLL_MS,
-        grace: CARD_GRACE_MS,
-      });
-      return;
-    }
-    spotifyLog("feed.scroll", "track=" + trackId + " card=add reason=no-wait-fn");
-    finish(patchScroll(body, trackId, wantAds, true));
+    const out = patchScroll(body, trackId, wantAds, true);
+    spotifyLog("feed.scroll", "track=" + trackId + " title=" + trackLabel(trackId)
+      + " card=add patched=" + (out ? 1 : 0) + " total=" + (Date.now() - feedStartedAt) + "ms");
+    finish(out);
     return;
   }
 

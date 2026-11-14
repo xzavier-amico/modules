@@ -46,10 +46,6 @@ const SERVICE = "spotify-mock";
 const VERSION = "1.1.3";
 const UPSTREAM = "https://spclient.wg.spotify.com";
 const MUSIC_PREFIX = "/music";
-// 滚动页补卡前等待歌词查询的窗口：查到就补，确认没有就不补，超时乐观补卡。
-const SCROLL_CARD_WAIT_MS = 8000;
-// 查到歌词后再等一小会儿，让并行的 color-lyrics 响应先返回客户端。
-const SCROLL_CARD_GRACE_MS = 200;
 
 const ROUTES = [
   // Spotify versions the bootstrap endpoint (/bootstrap/v1/bootstrap,
@@ -505,22 +501,13 @@ async function handle(request, env = {}) {
       const trackId = scrollTrackId(targetPath);
       const lyrics = lyricsOptions(env);
       if (trackId && lyrics.enabled && !patcher.hasLyricsCard(original) && !lyricsMiss(trackId)) {
-        // 第一次渲染就要有这一格：先等查询给出结论，超时再乐观补卡。
-        // 查询不取消，超时后仍会写缓存供 color-lyrics 复用。
-        const lookup = findLyrics(trackId, lyrics).catch((error) => {
+        // 不等歌词：客户端打开 Now Playing 时就渲染列表，晚到的 scroll 只更新
+        // 模型、不重绘，卡片要收起再展开才出现。查询照常发起，结果写进缓存供
+        // color-lyrics 复用；查不到由 miss 标记挡住下一次的空卡。
+        findLyrics(trackId, lyrics).catch((error) => {
           console.warn(`${SERVICE}: scroll lyrics lookup failed:`, error && (error.message || error));
-          return { lyrics: null };
         });
-        let timer;
-        const timeout = new Promise((resolve) => {
-          timer = setTimeout(() => resolve({ lyrics: null, timedOut: true }), SCROLL_CARD_WAIT_MS);
-        });
-        const result = await Promise.race([lookup, timeout]);
-        clearTimeout(timer);
-        // 歌词查到了也要等歌词响应先回到客户端：color-lyrics 是并行的另一个
-        // 请求，scroll 先到会让列表按「没有歌词」渲染，卡片被丢掉。
-        if (result.lyrics) await new Promise((resolve) => setTimeout(resolve, SCROLL_CARD_GRACE_MS));
-        scrollCard = { trackId, wantCard: Boolean(result.lyrics) || Boolean(result.timedOut) };
+        scrollCard = { trackId, wantCard: true };
       }
     }
     const result = patchResponse(patcher, desktopPatcher, route, targetPath, original, contentType, scrollCard);

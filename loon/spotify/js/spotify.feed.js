@@ -652,16 +652,11 @@
   const MISS_KEY = "spotify.lyrics.miss";
   const MISS_TTL_MS = 5 * 60 * 1000;
 
-  // 歌词请求进度：请求阶段写 pending，响应阶段写出歌词前写 served。
-  // feed 脚本补卡时要等 served，而不是只等缓存：缓存写入后歌词响应还在编码 /
-  // 返回路上，scroll 先到客户端的话，列表会先按「没有歌词」渲染，歌词卡被丢掉。
+  // 歌词请求进度：请求阶段写 pending。feed 补卡时据此判断「这首歌的歌词正在查」，
+  // 有请求在路上时旧的 miss 标记不作数，避免把这次可能成功的歌词挡掉。
   const PENDING_KEY = "spotify.lyrics.pending";
   // 歌词脚本自己的 deadline 是 8s；超过 10s 还没清掉就是脚本被杀了，按失效处理。
   const PENDING_TTL_MS = 10 * 1000;
-  const SERVED_KEY = "spotify.lyrics.served";
-  // served 只表示「这首歌的歌词至少完整交给过客户端一次」，和歌词缓存同寿命；
-  // 它挡住的是缓存写完到响应返回之间的几毫秒，不需要很短的有效期。
-  const SERVED_TTL_MS = LYRICS_CACHE_HIT_TTL;
 
   const storeBackend = () =>
     typeof $persistentStore !== "undefined" && $persistentStore ? $persistentStore : null;
@@ -723,11 +718,10 @@
     if (trackId) writeMark(PENDING_KEY, { id: trackId, at: Date.now() });
   };
 
-  // 歌词已经查好、马上要交给客户端（$done 之前最后一步）。feed 看到它再等一个
-  // 很短的宽限就放行 scroll，尽量让客户端先拿到歌词再渲染卡片列表。
+  // 歌词响应马上要交给客户端（$done 之前最后一步）：只打一条日志，用来和
+  // feed 的 scroll 时间戳对齐。feed 补卡不再等它（等不起，见 feed/entry.js）。
   const markServed = (proto) => {
     if (!trackId) return;
-    writeMark(SERVED_KEY, { id: trackId, at: Date.now(), p: proto ? 1 : 0 });
     spotifyLog("lyrics.served", "track=" + trackId + " title=" + trackLabel(trackId)
       + " format=" + (proto ? "protobuf" : "json"));
   };
@@ -951,81 +945,6 @@
     globalThis.__spotifyDebug = DEBUG_LOG;
     // 曲目元数据回填：feed 从 scrollsita 里抄到的曲名 / 歌手写进同一份缓存。
     globalThis.__spotifyRememberTrackMeta = rememberTrackMeta;
-
-    // 轮询歌词进度，直到歌词响应已经交给客户端（served）再放行 scroll。
-    //   * 缓存 + served  -> 再等 grace 毫秒（让客户端先处理歌词响应）后补卡；
-    //   * 只有缓存        -> 歌词还在编码 / 返回路上，继续等 served；
-    //   * 确认没歌词      -> 不补卡；
-    //   * 超过预算        -> 乐观补卡（内容由随后到达的 color-lyrics 请求填充）。
-    // 预算是硬上限，不按歌词请求开始时间顺延：响应拖到 3 秒以上时客户端已经
-    // 渲染完列表，晚到的 scroll 会被丢弃，等多久都没用。
-    // 步长分段由 feed 传入：max / fastUntil / fastStep / slowStep / grace。
-    globalThis.__spotifyLyricsWait = (id, callback, options) => {
-      if (!id || typeof callback !== "function") {
-        if (typeof callback === "function") callback(false, true);
-        return;
-      }
-      const conf = options && "object" == typeof options ? options : {};
-      const maxMs = Number(conf.max) > 0 ? Number(conf.max) : 800;
-      const fastUntil = Number(conf.fastUntil) > 0 ? Number(conf.fastUntil) : 400;
-      const fastStep = Number(conf.fastStep) > 0 ? Number(conf.fastStep) : 100;
-      const slowStep = Number(conf.slowStep) > 0 ? Number(conf.slowStep) : 200;
-      const grace = Number(conf.grace) >= 0 ? Number(conf.grace) : 200;
-      const key = lyricsCacheKey(id);
-      const hasTimer = typeof setTimeout === "function";
-      const startedAt = Date.now();
-      let elapsed = 0;
-      let lastState = "";
-
-      const done = (ready, timedOut) => {
-        spotifyLog("feed.wait", "track=" + id + " title=" + trackLabel(id)
-          + " done ready=" + ready + " timedOut=" + timedOut
-          + " elapsed=" + elapsed + "ms waited=" + (Date.now() - startedAt) + "ms");
-        callback(ready, timedOut);
-      };
-
-      const ready = () => {
-        if (hasTimer && grace > 0) setTimeout(() => done(true, false), grace);
-        else done(true, false);
-      };
-
-      const poll = () => {
-        const cached = readLyricsCache(key, id);
-        const served = activeMark(SERVED_KEY, id, SERVED_TTL_MS);
-        const pending = activeMark(PENDING_KEY, id, PENDING_TTL_MS);
-        const miss = activeMark(MISS_KEY, id, MISS_TTL_MS);
-        // 状态只在变化时打一行，避免整个等待窗口里反复刷日志。
-        const state = (pending ? "pending" : "-") + (cached ? "|cache" : "")
-          + (served ? "|served" + (served.p ? "(protobuf)" : "(json)") : "") + (miss ? "|miss" : "");
-        if (state !== lastState) {
-          lastState = state;
-          spotifyLog("feed.wait", "track=" + id + " title=" + trackLabel(id) + " state=" + state
-            + " elapsed=" + elapsed + "ms" + (served ? " servedAge=" + (Date.now() - Number(served.at)) + "ms" : ""));
-        }
-        // 还有歌词请求在路上时继续等：客户端可能先查了歌词页、再查卡片，
-        // 只看到上一次的 served 就放行，卡片那次响应仍可能晚于 scroll。
-        // 歌词已经返回给客户端（缓存里也有内容）且没有新请求：留宽限后放行。
-        if (!pending && cached && served) {
-          ready();
-          return;
-        }
-        // 歌词请求还在路上时，旧的 miss 标记不作数：这次请求可能就查到了。
-        if (!cached && !pending && miss) {
-          done(false, false);
-          return;
-        }
-        if (!hasTimer || elapsed >= maxMs) {
-          // 预算用完：确认没歌词就不补，否则乐观补卡。
-          if (!cached && miss) done(false, false);
-          else done(false, true);
-          return;
-        }
-        const step = elapsed < fastUntil ? fastStep : slowStep;
-        elapsed += step;
-        setTimeout(poll, step);
-      };
-      poll();
-    };
 
     // 最近确认没有歌词的曲目不再补空卡；已经查到歌词、或有歌词请求在路上时
     // 以实际进度为准，避免旧的 miss 标记把这次可能成功的歌词挡掉。
@@ -2484,6 +2403,12 @@
       for (const f of top) topNos.push(f.no);
       spotifyLog("feed.top", "fields=" + topNos.join("+") + " bytes=" + buffer.length);
       spotifyLog("feed.sections", "track=" + trackId + " " + describeSections(sections));
+      // 顶层除字段 1（section 列表）之外的字段也打一份：客户端可能拿它校验
+      // 列表（页信息 / section 顺序），补卡时没有同步改。
+      for (const f of top) {
+        if (f === structure) continue;
+        spotifyLog("feed.topfield", "no=" + f.no + " w=" + f.wire + " len=" + f.raw.length + " hex=" + hexOf(f.raw, 64));
+      }
       // 每个 section 的前 120 字节：字段号 + 关键字符串足够看清真实结构，
       // 比整包 hex 小得多，也不至于把日志刷爆。
       const dump = Math.min(sections.length, 6);
@@ -2601,19 +2526,10 @@
     $done({ body: out });
   };
 
-  // 补卡前短暂卡住 scrollsita 等歌词结果：轮询歌词进度，命中即补（内容就绪）、
-  // 读到 miss 不补空卡、超预算乐观补卡（内容由 color-lyrics 请求填充）。
-  //
-  // 预算必须短。歌词一旦要走 open.spotify.com 取元数据，实测整条链路 3 秒以上，
-  // 而 Now Playing 的列表是客户端先本地渲染、再合并服务端结果的：响应晚于合并
-  // 就会被丢掉，补进去的卡片照样不显示（用户看到的「列表出来了、没有歌词卡」）。
-  // 所以只在「歌词马上就到」的窗口里等，超时就带卡放行。
-  const CARD_WAIT_MS = 800;
-  const CARD_FAST_MS = 400;
-  const CARD_FAST_POLL_MS = 100;
-  const CARD_SLOW_POLL_MS = 200;
-  // 歌词响应发出后再留给客户端处理的时间。
-  const CARD_GRACE_MS = 200;
+  // 补卡不等歌词：Now Playing 打开时客户端先渲染列表，之后才合并 scrollsita 的
+  // 响应；响应晚到只更新模型、不重绘列表，卡片要收起再展开才出现（实测）。
+  // 所以立刻补卡，内容由随后的 color-lyrics 响应填充——歌词已经在缓存里时，
+  // 客户端拿到卡片就会直接取到内容。
   const feedStartedAt = Date.now();
   if (isScroll && wantCard) {
     const card = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsCard : null;
@@ -2626,26 +2542,10 @@
       finish(patchScroll(body, trackId, wantAds, false));
       return;
     }
-    const wait = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsWait : null;
-    if (typeof wait === "function") {
-      wait(trackId, (ready, timedOut) => {
-        const addCard = !!ready || !!timedOut;
-        const out = patchScroll(body, trackId, wantAds, addCard);
-        spotifyLog("feed.scroll", "track=" + trackId + " title=" + trackLabel(trackId)
-          + " card=" + (addCard ? "add" : "skip") + " optimistic=" + (!ready && timedOut)
-          + " patched=" + (out ? 1 : 0) + " total=" + (Date.now() - feedStartedAt) + "ms");
-        finish(out);
-      }, {
-        max: CARD_WAIT_MS,
-        fastUntil: CARD_FAST_MS,
-        fastStep: CARD_FAST_POLL_MS,
-        slowStep: CARD_SLOW_POLL_MS,
-        grace: CARD_GRACE_MS,
-      });
-      return;
-    }
-    spotifyLog("feed.scroll", "track=" + trackId + " card=add reason=no-wait-fn");
-    finish(patchScroll(body, trackId, wantAds, true));
+    const out = patchScroll(body, trackId, wantAds, true);
+    spotifyLog("feed.scroll", "track=" + trackId + " title=" + trackLabel(trackId)
+      + " card=add patched=" + (out ? 1 : 0) + " total=" + (Date.now() - feedStartedAt) + "ms");
+    finish(out);
     return;
   }
 

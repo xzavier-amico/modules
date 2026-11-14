@@ -392,8 +392,8 @@ test("a quick confirmed miss never adds an empty lyrics card", async () => {
       .some((field) => parse(field.bytes).some((inner) => inner.no === 5));
   };
 
-  // 短窗口内就明确查不到歌词：这一格从一开始就不该出现。
-  assert.equal(await hasCard(), false, "a confirmed miss inside the window must not add an empty card");
+  // 不再等歌词：第一次 scroll 直接乐观补卡，内容由 color-lyrics 填充。
+  assert.equal(await hasCard(), true, "the card is added without waiting for the lyrics lookup");
   await handle(
     new Request("http://localhost/music/color-lyrics/v2/track/" + id + "?format=json", {
       headers: { accept: "application/json" },

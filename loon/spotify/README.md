@@ -35,7 +35,7 @@
 - `feed.top` / `feed.sections` / `feed.section`：顶层字段号、每个 section 的字段号与前 120 字节；
 - `LYRICS_SECTION_HEX` / `feed.card`：官方歌词 section 的字节、脚本补卡的位置与合成字节；
 - `feed.meta`：从 scroll 里抄到的曲名 / 歌手；
-- `feed.scroll` / `feed.wait`：补卡决策与等待时长，`total` 超过 1.5 秒说明响应到达时客户端已渲染完列表。
+- `feed.scroll`：补卡决策与耗时，`total` 越小越好（客户端先渲染列表，响应晚到不会重绘）。
 
 日志包含曲名，排查完请关闭。
 
@@ -53,10 +53,10 @@
 - 曲名里带 `()` / `（）` 的装饰信息（影视剧名、节目名、歌手名等）会先去掉再查一次；括号里含 `Live`、`Remix`、`Acoustic`、`伴奏`、`版` 等版本词时保留，避免把现场版查成录音室版。返回结果仍按完整曲名或去掉装饰后的曲名校验。
 - LRCLIB 并行候选都没命中时，会再用歌名搜一次；仍按歌手 / 版本 / Live / 时长校验，不会拿别人的同名歌。
 - 第三方请求超时、429、5xx 或所有源都没结果时都不写缓存，下次打开会立即重试。
-- 歌词页总时限 8 秒，单个外部请求 4 秒；scrollsita 补卡最多等 800ms（前 400ms 每 100ms、之后每 200ms），这是硬上限、不按歌词请求开始时间顺延：歌词回源取元数据要 3 秒以上，列表响应晚于客户端渲染就会被丢弃，所以超预算直接乐观补卡。
+- 歌词页总时限 8 秒，单个外部请求 4 秒；scrollsita 补卡**不等歌词**：打开 Now Playing 时客户端先渲染列表，晚到的响应只更新模型、不重绘，所以收到 scroll 就立刻补卡，内容由随后的 color-lyrics 响应填充。
 - protobuf 补齐官方字段（含歌词卡使用的 `previewLines`），并将歌词额度限制归一为可显示状态。
 - 配色：未激活行黑字，当前 / 已唱行白字；命中元数据缓存时不再请求 embed，用缓存里的封面色，没有缓存时用默认中灰底。
-- scrollsita 列表缺少歌词 section 时轮询歌词进度：缓存和 `spotify.lyrics.served`（歌词响应已返回）都就绪、且没有新的歌词请求在途后，再留 200ms 宽限才补一格，确保客户端先拿到歌词；只有缓存、歌词响应还没返回时继续等；读到 `spotify.lyrics.miss` 不补（有请求在路上时旧标记不作数）；超时乐观补卡。官方已有则不重复补。
+- scrollsita 列表缺少歌词 section 时立刻补一格：读到 `spotify.lyrics.miss` 不补（有歌词请求在路上时旧标记不作数）；补在头部 section 之后；官方已有则不重复补。
 
 歌词源：`lrclib`、`musixmatch`、`netease`、`qq`、`auto`（默认）。
 - LRCLIB 先按完整曲名查，再用去掉 `feat.` / `remaster` 等后缀的曲名重试（对应 EeveeSpotify 的 `strippedTrackTitle`），返回结果仍会重新校验歌手 / Live / 时长。

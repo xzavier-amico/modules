@@ -504,8 +504,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.ok(calls > 0);
     const afterFirst = calls;
     assert.ok(map["spotify.lyrics.cache"], platform + " must persist the resolved lyrics");
-    const servedMark = JSON.parse(map["spotify.lyrics.served"] || "null");
-    assert.equal(servedMark && servedMark.id, "id", platform + " must mark the lyrics response as served");
+    assert.ok(!map["spotify.lyrics.served"], platform + " must not keep the retired served mark");
     assert.ok(!map["spotify.lyrics.pending"], platform + " must clear the pending mark once the response is returned");
 
     const second = run(file, "", url, ["lrclib", true], {
@@ -612,7 +611,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
 }
 
 for (const platform of ["loon", "egern", "shadowrocket"]) {
-  check(platform + " Spotify feed polls the lyrics flag and never leaves a blank card", () => {
+  check(platform + " Spotify feed adds the lyrics card without waiting", () => {
     const file = platform + "/spotify/js/spotify.feed.js";
     const id = "0VjIjW4GlUZAMYd2vXMi3b";
     const body = serialize([b(1, serialize([b(1, serialize([s(2, "normal-card")]))]))]);
@@ -625,111 +624,45 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
         store: { read: (key) => (key in map ? map[key] : null), write: (value, key) => { map[key] = value; return true; } },
       };
     };
-    const readyJson = () => JSON.stringify({
-      ["lrclib|" + id]: { t: Date.now(), m: 0, s: "LINE_SYNCED", p: "LRCLIB", i: "", l: "en", c: [-16777216, -1, -1], a: [[0, "line"]] },
-    });
     const noHttp = { get: () => assert.fail(platform + " feed must not query providers itself") };
-    const immediate = { setTimeout: (fn) => { fn(); return 1; }, clearTimeout: () => {} };
+    // 补卡不再等歌词：脚本里不应该留下任何定时器。
+    const noTimer = { setTimeout: () => assert.fail(platform + " feed must not wait for lyrics") };
+    const cardSection = (out) => parse(first(parse(out.body), 1).p)
+      .filter((field) => field.no === 1)
+      .find((section) => parse(section.p).some((field) => field.no === 5));
 
-    // 1) 缓存 + served 都已就绪（color-lyrics 已返回）：只等一个宽限就补卡。
-    const servedJson = JSON.stringify({ id: id, at: Date.now() });
-    const ready = storeFor({ "spotify.lyrics.cache": readyJson(), "spotify.lyrics.served": servedJson });
-    const out = run(file, body, scroll, args, { $persistentStore: ready.store, $httpClient: noHttp, ...immediate });
-    assert.ok(out.body, platform + " ready flag must add the card immediately");
-    const sections = parse(first(parse(out.body), 1).p).filter((field) => field.no === 1);
-    assert.ok(sections.some((section) => parse(section.p).some((field) => field.no === 5)), platform);
+    // 1) 歌词还没查（没有缓存、没有请求、没有 miss 标记）：立刻乐观补卡。
+    const empty = storeFor();
+    const out = run(file, body, scroll, args, { $persistentStore: empty.store, $httpClient: noHttp, ...noTimer });
+    assert.ok(out.body, platform + " must add the card right away");
+    assert.ok(cardSection(out), platform + " must insert a lyrics section");
 
-    // 2) 轮询期间歌词到达并返回：停止轮询、等宽限后补卡。
-    const during = storeFor();
-    let ticks = 0;
-    const duringOut = run(file, body, scroll, args, {
-      $persistentStore: during.store,
-      $httpClient: noHttp,
-      setTimeout: (fn) => {
-        ticks += 1;
-        if (ticks === 2) {
-          during.map["spotify.lyrics.cache"] = readyJson();
-          during.map["spotify.lyrics.served"] = servedJson;
-        }
-        fn();
-        return ticks;
-      },
-      clearTimeout: () => {},
-    });
-    assert.ok(duringOut.body, platform + " must add the card as soon as the flag appears");
-    assert.equal(ticks, 3, platform + " must stop polling once lyrics are served (plus grace)");
+    // 2) 歌词请求在路上（pending）：同样补卡，等请求回来由 color-lyrics 填内容。
+    const pending = storeFor({ "spotify.lyrics.pending": JSON.stringify({ id: id, at: Date.now() }) });
+    const pendingOut = run(file, body, scroll, args, { $persistentStore: pending.store, $httpClient: noHttp, ...noTimer });
+    assert.ok(pendingOut.body, platform + " a pending lyrics request must still add the card");
 
-    // 2b) 缓存写入但歌词响应还没返回：继续等 served，不能提前放行 scroll。
-    const notServed = storeFor();
-    let nsTicks = 0;
-    const nsOut = run(file, body, scroll, args, {
-      $persistentStore: notServed.store,
-      $httpClient: noHttp,
-      setTimeout: (fn) => {
-        nsTicks += 1;
-        if (nsTicks === 2) notServed.map["spotify.lyrics.cache"] = readyJson();
-        if (nsTicks === 4) notServed.map["spotify.lyrics.served"] = servedJson;
-        fn();
-        return nsTicks;
-      },
-      clearTimeout: () => {},
-    });
-    assert.ok(nsOut.body, platform + " must add the card once the lyrics response is served");
-    assert.equal(nsTicks, 5, platform + " cache without served must keep waiting");
-
-    // 3) 轮询期间确认没歌词：不补卡，从源头避免空白卡。
-    const missDuring = storeFor();
-    let missTicks = 0;
-    const missOut = run(file, body, scroll, args, {
-      $persistentStore: missDuring.store,
-      $httpClient: noHttp,
-      setTimeout: (fn) => {
-        missTicks += 1;
-        if (missTicks === 2) missDuring.map["spotify.lyrics.miss"] = JSON.stringify({ id: id, at: Date.now() });
-        fn();
-        return missTicks;
-      },
-      clearTimeout: () => {},
-    });
-    assert.equal(Object.keys(missOut).length, 0, platform + " confirmed miss inside the window must not add a card");
-    assert.equal(missTicks, 2, platform + " must stop polling on a confirmed miss");
-
-    // 4) 用完补卡预算仍无结果：乐观补卡（前 400ms 每 100ms、之后每 200ms）。
-    const slow = storeFor();
-    const steps = [];
-    const slowOut = run(file, body, scroll, args, {
-      $persistentStore: slow.store,
-      $httpClient: noHttp,
-      setTimeout: (fn, delay) => { steps.push(delay); fn(); return steps.length; },
-      clearTimeout: () => {},
-    });
-    assert.ok(slowOut.body, platform + " timeout must still add the card");
-    const waited = steps.reduce((total, delay) => total + delay, 0);
-    assert.ok(waited >= 800 && waited < 1100, platform + " must give the lyrics about 800ms, got " + waited);
-    assert.deepEqual(steps.slice(0, 4), Array(4).fill(100), platform + " first 400ms poll every 100ms");
-    assert.ok(steps.slice(4).every((delay) => delay === 200), platform + " after 400ms poll every 200ms");
-
-    // 5) 最近确认没歌词时不再补空卡；标记过期后允许再试。
+    // 3) 最近确认没歌词：不补空卡；标记过期后允许再试。
     const miss = storeFor({ "spotify.lyrics.miss": JSON.stringify({ id: id, at: Date.now() }) });
-    const missStored = run(file, body, scroll, args, { $persistentStore: miss.store, $httpClient: noHttp, ...immediate });
-    assert.equal(Object.keys(missStored).length, 0, platform + " recent miss must not add an empty card");
+    const missOut = run(file, body, scroll, args, { $persistentStore: miss.store, $httpClient: noHttp, ...noTimer });
+    assert.equal(Object.keys(missOut).length, 0, platform + " recent miss must not add an empty card");
 
     const stale = storeFor({ "spotify.lyrics.miss": JSON.stringify({ id: id, at: Date.now() - 10 * 60 * 1000 }) });
-    const staleOut = run(file, body, scroll, args, { $persistentStore: stale.store, $httpClient: noHttp, ...immediate });
+    const staleOut = run(file, body, scroll, args, { $persistentStore: stale.store, $httpClient: noHttp, ...noTimer });
     assert.ok(staleOut.body, platform + " expired miss must allow the card again");
 
-    // 6) debug_log 打开时输出曲名、served 格式和补卡决定。
-    const dbg = storeFor({ "spotify.lyrics.cache": readyJson(), "spotify.lyrics.served": servedJson });
+    // 4) debug_log 打开时输出曲名、列表结构和补卡决定。
+    const dbg = storeFor();
     const dbgLogs = [];
     const dbgOut = run(file, body, scroll, Object.assign({}, args, { debug_log: true }), {
-      $persistentStore: dbg.store, $httpClient: noHttp, ...immediate,
+      $persistentStore: dbg.store, $httpClient: noHttp, ...noTimer,
       console: { log: (line) => dbgLogs.push(line) },
     });
     assert.ok(dbgOut.body, platform);
     assert.ok(dbgLogs.some((line) => line.includes("feed.scroll") && line.includes("title=Song / Artist")), platform + " must log the track name");
-    assert.ok(dbgLogs.some((line) => line.includes("feed.wait") && line.includes("served(json)")), platform + " must log the served format");
     assert.ok(dbgLogs.some((line) => line.includes("feed.scroll") && line.includes("card=add")), platform + " must log the card decision");
     assert.ok(dbgLogs.some((line) => line.includes("feed.sections") && line.includes("1 [2]")), platform + " must log the section layout");
+    assert.ok(dbgLogs.some((line) => line.includes("feed.card") && line.includes("insert=1")), platform + " must log the insertion position");
   });
 }
 
