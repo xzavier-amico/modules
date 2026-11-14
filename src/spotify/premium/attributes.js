@@ -3,8 +3,10 @@
   const yearOn = new Date(Date.now() + 365 * 86400000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
   const ATTR_CORE = {
-    // 不写 enable-crossfade-product-state / enable-gapless-product-state：
-    // 那会把客户端的播放衔接强制打开，导致上一首结尾和下一首重叠。
+    // 交叉淡入淡出只开能力，是否生效由 App 里的播放设置决定；AutoMix 已在远程
+    // 配置里强制关闭，避免下一首提前混进来。
+    "enable-crossfade-product-state": "1",
+    "enable-gapless-product-state": "1",
     "catalogue": "premium",
     "financial-product": "pr:premium,tc:0",
     "is-eligible-premium-unboxing": true,

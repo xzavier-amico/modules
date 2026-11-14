@@ -2332,11 +2332,18 @@ export default async function (ctx) {
     try {
       const raw = store.read("spotify.queue");
       const queue = raw ? JSON.parse(raw) : null;
-      if (!queue || !Array.isArray(queue.ids)) return "";
+      if (!queue) return "";
       const at = Number(queue.at) || 0;
       if (at && Date.now() - at > 30 * 60 * 1000) return "";
-      const index = queue.ids.indexOf(trackId);
-      const next = index >= 0 ? queue.ids[index + 1] || "" : "";
+      // 新结构是 current + next[]；旧安装里可能还是 ids[]，按当前曲目位置兜底。
+      let next = "";
+      if (Array.isArray(queue.next)) {
+        if (queue.current && queue.current !== trackId) return "";
+        next = queue.next[0] || "";
+      } else if (Array.isArray(queue.ids)) {
+        const index = queue.ids.indexOf(trackId);
+        next = index >= 0 ? queue.ids[index + 1] || "" : "";
+      }
       if (!next || next === trackId) return "";
       // 没有曲名 / 歌手时预取要先请求 oEmbed，反而拖慢补卡；等元数据到了再说。
       const metaRaw = store.read("spotify.track.meta");

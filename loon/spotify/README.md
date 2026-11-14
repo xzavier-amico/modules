@@ -43,7 +43,7 @@
 - protobuf 补齐官方字段（含歌词卡使用的 `previewLines`），并将歌词额度限制归一为可显示状态。
 - 配色：未激活行黑字，当前 / 已唱行白字；命中元数据缓存时不再请求 embed，用缓存里的封面色，没有缓存时用默认中灰底。
 - scrollsita 列表缺少歌词 section 时先查歌词并写入 `spotify.lyrics.cache`，只有查到才补一格；官方已有则不重复补，查不到也不补空卡。
-- 预取下一首（`prefetch`，默认开）：`connect-state` 的播放队列会存到 `spotify.queue`，补卡时若下一首的曲名 / 歌手已在 `spotify.track.meta` 里，就顺手把它的歌词也查好写进缓存，最多等 1.5 秒。切到下一首后再打开歌词页直接命中缓存；查不到不影响当前响应，也不会补一张空卡。
+- 预取歌词（`prefetch`，默认开）：`spotify.js` 在 `connect-state` 换歌时先查当前曲目的歌词；feed 补卡时再按 `PlayerState.next_tracks` 预取下一首（`spotify.queue` 按字段号区分 current / prev / next，不会把上一首当成下一首）。当前曲目和下一首都最多等 1.5 秒，有元数据才查；打开歌词页或滚动页补卡时直接命中缓存，查不到也不影响当前响应。
 
 歌词源：`lrclib`、`musixmatch`、`netease`、`qq`、`auto`（默认）。
 - LRCLIB 先按完整曲名查，再用去掉 `feat.` / `remaster` 等后缀的曲名重试（对应 EeveeSpotify 的 `strippedTrackTitle`），返回结果仍会重新校验歌手 / Live / 时长。
@@ -64,11 +64,11 @@
 
 ## 播放衔接
 
-脚本不改写 `crossfade_enabled`、`automix_enabled`、`use_playback_settings_crossfade` /
-`use_playback_settings_gapless`，也不写账号属性里的 `enable-crossfade-product-state` /
-`enable-gapless-product-state`。这些字段被强制打开时，客户端会绕过「设置 → 播放 →
-交叉淡入淡出」直接衔接下一首，表现就是上一首最后 1–2 秒被下一首顶掉。播放衔接
-完全由客户端自己的设置决定；仍然重叠时，先在 App 里把 Crossfade / AutoMix 关掉再试。
+模块保留「交叉淡入淡出」开关，并让客户端读取 App 里的播放设置
+（`use_playback_settings_crossfade=1`）；AutoMix 在远程配置里强制关闭
+（`automix_enabled=0`）。这样「设置 → 播放 → 交叉淡入淡出」不会消失，滑杆关到 0
+就不会再出现下一首提前混进来。修改后需要重启 App（或切换网络）让客户端重新拉取
+bootstrap / 远程配置，旧缓存里的开关才会被覆盖。
 
 ## iPhone / iPad 与 macOS
 
@@ -103,5 +103,6 @@ Spotify。桌面端如果一直看不到脚本执行记录，说明请求可能�
 - 只支持逐行同步歌词，未实现逐字歌词。
 - 插件删除 `if-none-match` 并清除 `extended-metadata` 请求体里的 etag，避免 304 空响应导致脚本拿不到 body。
 - 脚本 URL 带 `?v=日期`；客户端元数据有缓存，更新后需重启 App 或打开未缓存的歌单。
+- 已删除的参数（例如 `lyrics_debug`）在旧安装里可能仍显示；需要在客户端删除模块后重新导入，并完全退出 App 再打开。脚本按 URL 缓存，只改 `?v=` 而不重新导入时，旧脚本可能继续运行。
 - 需开启 MitM：`*-spclient.spotify.com`、`spclient.wg.spotify.com`。
 - 音质、下载与 Spotify Connect 由服务端判定，脚本无法修改。

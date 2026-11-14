@@ -10,6 +10,8 @@
   直接在响应体里删除；桌面端 / 移动端的 `/ads/*`、`ad-*`、`ad-on-app-open`、
   `premium-marketing/upsellOffer` 由客户端模块直接拒绝；
 - 解锁播放限制：试听时长、队列上限、强制随机等（`unlockPlayback`）；
+- 播放衔接：保留「交叉淡入淡出」并让它遵循 App 里的播放设置，同时强制关闭 AutoMix，
+  避免下一首在上一首结束前混进来；
 - 播放衔接：不改写 `crossfade_enabled` / `automix_enabled` / `use_playback_settings_*`，
   也不写 `enable-crossfade-product-state` / `enable-gapless-product-state`，播放衔接
   交给客户端自己的设置，避免上一首最后 1–2 秒被下一首顶掉；

@@ -281,7 +281,7 @@ check("Spotify client plugins route scrollsita to the updated ad filter", () => 
   for (const file of ["loon/spotify/spotify-premium.plugin", "loon/spotify/spotify-premium-mac.plugin", "egern/spotify/spotify-premium.yaml", "shadowrocket/spotify/spotify-premium.sgmodule"]) {
     const rules = read(file).split("\n").filter((line) => !line.trim().startsWith("#"));
     assert.ok(rules.some((line) => line.includes("scrollsita")), file + " must match scrollsita");
-    assert.ok(rules.some((line) => line.includes("spotify.feed.js?v=20261114-5")));
+    assert.ok(rules.some((line) => line.includes("spotify.feed.js?v=20261114-6")));
   }
 });
 
@@ -537,7 +537,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
           [current]: ["Song", "Artist", 210000, Date.now()],
           [next]: ["Next", "Artist", 220000, Date.now()],
         }),
-        "spotify.queue": JSON.stringify({ ids: queue, at: Date.now() }),
+        "spotify.queue": JSON.stringify({ current: current, next: [next], at: Date.now() }),
       };
       return { map, store: {
         read: (key) => (key in map ? map[key] : null),
@@ -578,9 +578,14 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
   check(platform + " Spotify stores the connect-state queue for prefetching", () => {
     const current = "0VjIjW4GlUZAMYd2vXMi3b";
     const next = "4uLU6hMCjMI75M1A2tKUQC";
+    const previous = "1uLU6hMCjMI75M1A2tKUQD";
+    const provided = (id) => serialize([s(1, "spotify:track:" + id)]);
     const body = serialize([
-      b(1, serialize([s(1, "spotify:track:" + current)])),
-      b(1, serialize([s(1, "spotify:track:" + next)])),
+      b(3, serialize([
+        b(7, provided(current)),
+        b(19, provided(previous)),
+        b(20, provided(next)),
+      ])),
     ]);
     const map = {};
     const store = {
@@ -589,8 +594,40 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     };
     run(platform + "/spotify/js/spotify.js", body,
       "https://spclient.wg.spotify.com/connect-state/v1/player",
-      { enable_lyrics: true }, { $persistentStore: store });
-    assert.deepEqual(JSON.parse(map["spotify.queue"]).ids, [current, next], platform);
+      { enable_lyrics: true, prefetch: false }, { $persistentStore: store });
+    const queue = JSON.parse(map["spotify.queue"]);
+    assert.equal(queue.current, current, platform);
+    assert.deepEqual(queue.next, [next], platform + " must not mistake prev_tracks for next");
+  });
+
+  check(platform + " Spotify prefetches the current track on connect-state", () => {
+    const current = "0VjIjW4GlUZAMYd2vXMi3b";
+    const provided = (id) => serialize([s(1, "spotify:track:" + id)]);
+    const body = serialize([b(3, serialize([b(7, provided(current)), b(20, provided("4uLU6hMCjMI75M1A2tKUQC"))]))]);
+    const map = {
+      "spotify.track.meta": JSON.stringify({ [current]: ["Song", "Artist", 210000, Date.now()] }),
+    };
+    const store = {
+      read: (key) => (key in map ? map[key] : null),
+      write: (value, key) => { map[key] = value; return true; },
+    };
+    const http = {
+      get: (request, callback) => {
+        if (request.url.includes("lrclib.net/api/get")) {
+          callback(null, { status: 200 }, JSON.stringify({
+            trackName: "Song", artistName: "Artist", duration: 210000, syncedLyrics: "[00:01.00]Ready",
+          }));
+          return;
+        }
+        callback(null, { status: 200 }, JSON.stringify([]));
+      },
+    };
+    run(platform + "/spotify/js/spotify.js", body,
+      "https://spclient.wg.spotify.com/connect-state/v1/player",
+      { enable_lyrics: true, lyrics_source: "lrclib", prefetch: true },
+      { $persistentStore: store, $httpClient: http, setTimeout: () => 1, clearTimeout: () => {} });
+    const cache = JSON.parse(map["spotify.lyrics.cache"] || "{}");
+    assert.ok(cache["lrclib|" + current], platform + " must warm the cache before the lyrics page opens");
   });
 }
 
@@ -1423,7 +1460,7 @@ check("Loon uses normal arguments and retains legacy mode compatibility", () => 
   const scriptRules = plugin.split("\n").filter((line) => line.includes('then script("'));
   assert.equal(scriptRules.length, 6);
   for (const line of scriptRules) {
-    const version = line.includes('tag="spotify.lyrics"') ? "20261114-6" : line.includes("spotify.feed") ? "20261114-5" : "20261114-5";
+    const version = line.includes('tag="spotify.lyrics"') ? "20261114-6" : line.includes("spotify.feed") ? "20261114-6" : "20261114-6";
     assert.ok(line.includes("?v=" + version));
     const tuple = /then script\("[^"]+", (\{.*\})\) with/.exec(line)[1];
     assert.match(tuple, /^\{\$\{\w+\}(?:, \$\{\w+\})*\}$/, "Loon tuple must contain only declared argument references");
@@ -1434,7 +1471,7 @@ check("Loon uses normal arguments and retains legacy mode compatibility", () => 
     } else if (line.includes("spotify.feed")) {
       assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source", "prefetch"]);
     } else {
-      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop"]);
+      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source", "prefetch"]);
     }
   }
   const context = serialize([s(1, track), s(2, "uid"), b(3, serialize([s(1, "has_lyrics"), s(2, "false")]))]);
@@ -1485,34 +1522,33 @@ check("Loon Premium uses the plugin's original arguments independently of lyric 
 });
 
 for (const platform of ["loon", "egern", "shadowrocket"]) {
-  check(platform + " Spotify leaves crossfade / AutoMix transitions to the client", () => {
+  check(platform + " Spotify keeps crossfade configurable but forces AutoMix off", () => {
     const assigned = (scope, name, on) =>
       b(3, serialize([b(1, serialize([s(1, scope), s(2, name)])), b(3, on ? serialize([v(1, 1)]) : new Uint8Array(0))]));
     const config = serialize([
       assigned("ios-feature-settings", "crossfade_enabled", true),
       assigned("core-automix", "automix_enabled", true),
-      assigned("ios-feature-settings", "use_playback_settings_crossfade", true),
-      assigned("ios-feature-settings", "use_playback_settings_gapless", true),
+      assigned("ios-feature-settings", "use_playback_settings_crossfade", false),
+      assigned("ios-feature-settings", "use_playback_settings_gapless", false),
     ]);
     const args = { spoof_premium: true, block_ads: true, unlock_playback: true, enable_lyrics: false };
     const out = run(platform + "/spotify/js/spotify.js", config,
       "https://spclient.wg.spotify.com/remote-config-resolver/v3/configuration", args);
     assert.ok(out.body, platform + " must still patch the remote configuration");
-    const names = [];
+    const values = {};
     for (const f of parse(out.body)) {
       if (f.no !== 3 || f.w !== 2) continue;
       const value = parse(f.p);
       const identifier = parse(first(value, 1).p);
       const name = text(first(identifier, 2));
-      names.push(name);
-      if (/crossfade|automix|gapless/.test(name)) {
-        const bool = first(value, 3);
-        assert.equal(bool && bool.p.length > 0, true, platform + " must not switch transitions off either");
-      }
+      const bool = first(value, 3);
+      const inner = bool && bool.p.length ? parse(bool.p) : [];
+      values[name] = inner.some((item) => item.no === 1 && item.v === 1n);
     }
-    assert.deepEqual(names.filter((name) => /crossfade|automix|gapless|use_playback_settings/.test(name)),
-      ["crossfade_enabled", "automix_enabled", "use_playback_settings_crossfade", "use_playback_settings_gapless"],
-      platform + " must not insert transition switches of its own");
+    assert.equal(values.crossfade_enabled, true, platform + " must keep the crossfade setting available");
+    assert.equal(values.automix_enabled, false, platform + " must force AutoMix off");
+    assert.equal(values.use_playback_settings_crossfade, true, platform + " must honour the app crossfade setting");
+    assert.equal(values.use_playback_settings_gapless, true, platform);
 
     const attrs = serialize([
       b(1, serialize([s(1, "enable-crossfade-product-state"), b(2, serialize([s(4, "0")]))])),
@@ -1526,10 +1562,10 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
       const entry = f.no === 1 ? parse(f.p) : null;
       return entry && text(first(entry, 1)) === "enable-crossfade-product-state";
     });
-    assert.ok(crossfade, platform + " must keep the upstream crossfade attribute");
+    assert.ok(crossfade, platform + " must write the crossfade capability");
     const crossfadeValue = parse(first(parse(crossfade.p), 2).p);
-    assert.equal(text(first(crossfadeValue, 4)), "0",
-      platform + " must not force crossfade on");
+    assert.equal(text(first(crossfadeValue, 4)), "1",
+      platform + " must keep the crossfade setting visible");
   });
 }
 

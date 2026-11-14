@@ -341,10 +341,16 @@ function buildPatcher($argument) {
 
   // ------------------------------------------------------------ remote config
 
-  // 播放衔接（Crossfade / AutoMix / Gapless）不改写：这几项被强制打开并绕过
-  // 客户端播放设置时，上一首最后 1–2 秒就会和下一首重叠，听起来像「跳歌」。
-  // 这里保留客户端自己的选择，模块只负责解锁 Premium、去广告和歌词。
+  // 播放衔接：让客户端继续显示「交叉淡入淡出」设置，但 AutoMix 强制关闭，并让
+  // 交叉淡入淡出遵循 App 里的播放设置。之前把 use_playback_settings_crossfade
+  // 置 0 会绕过用户的设置，AutoMix 再把下一首提前混进来，表现成上一首被顶掉。
   const RULES = [
+    ["ios-feature-settings","crossfade_enabled",2,1,"","misc"],
+    ["core-playback-setup","crossfade_enabled",2,1,"","misc"],
+    ["ios-feature-settings","use_playback_settings_crossfade",2,1,"","misc"],
+    ["ios-feature-settings","use_playback_settings_gapless",2,1,"","misc"],
+    ["ios-feature-settings","automix_enabled",2,0,"","misc"],
+    ["core-automix","automix_enabled",2,0,"","misc"],
     ["","enable_common_capping",0,0,"","cap"],
     ["","enable_pns_common_capping",0,0,"","cap"],
     ["","enable_pick_and_shuffle_common_capping",0,0,"","cap"],
@@ -593,8 +599,10 @@ function buildPatcher($argument) {
   const yearOn = new Date(Date.now() + 365 * 86400000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
   const ATTR_CORE = {
-    // 不写 enable-crossfade-product-state / enable-gapless-product-state：
-    // 那会把客户端的播放衔接强制打开，导致上一首结尾和下一首重叠。
+    // 交叉淡入淡出只开能力，是否生效由 App 里的播放设置决定；AutoMix 已在远程
+    // 配置里强制关闭，避免下一首提前混进来。
+    "enable-crossfade-product-state": "1",
+    "enable-gapless-product-state": "1",
     "catalogue": "premium",
     "financial-product": "pr:premium,tc:0",
     "is-eligible-premium-unboxing": true,
@@ -1366,39 +1374,59 @@ function buildPatcher($argument) {
     }
   }
 
-  // 只收集 URI 顺序，不要求同一层带 metadata；connect-state 的 TrackRef 未必带曲名，
-  // 但队列顺序仍然有效。
-  function collectTrackIds(fields, out, depth) {
-    if (depth > 8) return;
+  // connect-state 的 PlayerState 字段号：track = 7，prev_tracks = 19，next_tracks = 20。
+  // 不能简单取“当前曲目后面第一首”：连接状态里 prev_tracks 也排在后面，按遍历顺序
+  // 取会把上一首当成下一首。这里按字段号把 current / next 分开。
+  function trackUriOf(fields) {
+    for (const f of fields) {
+      if (f.no !== 1 || f.w !== 2 || f.p.length !== 36) continue;
+      const value = text(f);
+      if (value && /^spotify:track:[A-Za-z0-9]{22}$/.test(value)) return value.slice(14);
+    }
+    return "";
+  }
+
+  function scanPlayerState(fields, out, depth) {
+    if (depth > 8 || out.current) return;
+    const currentField = first(fields, 7);
+    const nextFields = fields.filter((f) => f.no === 20 && f.w === 2);
+    const prevFields = fields.filter((f) => f.no === 19 && f.w === 2);
+    if (currentField && currentField.w === 2 && (nextFields.length || prevFields.length)) {
+      const current = parse(currentField.p);
+      const id = current ? trackUriOf(current) : "";
+      if (id) {
+        out.current = id;
+        out.next = nextFields
+          .map((f) => {
+            const sub = parse(f.p);
+            return sub ? trackUriOf(sub) : "";
+          })
+          .filter(Boolean)
+          .slice(0, QUEUE_MAX);
+        return;
+      }
+    }
     for (const f of fields) {
       if (f.w !== 2) continue;
-      if (f.p.length === 36) {
-        const value = text(f);
-        if (value && /^spotify:track:[A-Za-z0-9]{22}$/.test(value)) {
-          const id = value.slice(14);
-          if (out.indexOf(id) < 0) out.push(id);
-          continue;
-        }
-      }
       const sub = parse(f.p);
-      if (sub) collectTrackIds(sub, out, depth + 1);
+      if (sub) scanPlayerState(sub, out, depth + 1);
     }
   }
 
-  // connect-state 的 track / next_tracks 按出现顺序给出播放队列。这里只记前几首，
-  // feed 脚本补歌词卡时用它预取下一首的歌词，换歌后再打开歌词页就能直接命中缓存。
-  function rememberQueue(ids) {
+  // feed 脚本补歌词卡时用这里存下的 next 预取下一首；换歌后再打开歌词页直接命中缓存。
+  function rememberQueue(queue) {
     const store = cacheStore();
-    const trimmed = ids.slice(0, QUEUE_MAX);
-    if (!store || !trimmed.length) return;
+    if (!store || !queue || !queue.current) return;
+    const next = (queue.next || []).slice(0, QUEUE_MAX);
     try {
       const raw = store.read(QUEUE_KEY);
       const old = raw ? JSON.parse(raw) : null;
-      const sameIds = old && Array.isArray(old.ids) &&
-        old.ids.length === trimmed.length && old.ids.every((id, i) => id === trimmed[i]);
+      const same = old && old.current === queue.current &&
+        Array.isArray(old.next) && old.next.length === next.length &&
+        old.next.every((id, i) => id === next[i]);
       // 队列没变时不重复写，避免 connect-state 轮询一直写存储。
-      if (sameIds && Number(old.at) && Date.now() - Number(old.at) < 5 * 60 * 1000) return;
-      store.write(JSON.stringify({ ids: trimmed, at: Date.now() }), QUEUE_KEY);
+      if (same && Number(old.at) && Date.now() - Number(old.at) < 5 * 60 * 1000) return;
+      store.write(JSON.stringify({ current: queue.current, next: next, at: Date.now() }), QUEUE_KEY);
     } catch (e) {
       // 存储写失败不影响响应改写。
     }
@@ -1420,9 +1448,9 @@ function buildPatcher($argument) {
     collectTracks(fields, found, 0);
     rememberTracks(found);
     if (target.indexOf("/connect-state/") >= 0) {
-      const ids = [];
-      collectTrackIds(fields, ids, 0);
-      rememberQueue(ids);
+      const queue = { current: "", next: [] };
+      scanPlayerState(fields, queue, 0);
+      rememberQueue(queue);
     }
   }
 
