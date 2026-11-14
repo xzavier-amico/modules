@@ -274,7 +274,7 @@ test("no third-party match keeps the official 404 and is not cached", async () =
   assert.equal(lookups(), afterFirst + 1, "a miss must be retried on the next request");
 });
 
-test("scroll adds the lyrics card only when lyrics are ready, then reuses the cache", async () => {
+test("scroll adds the lyrics card on the first render and color-lyrics fills it", async () => {
   const id = "0VjIjW4GlUZAMYd2vXMi3b";
   const trackUri = "spotify:track:" + id;
   const section = bytes(1, concat([str(2, "normal-card")]));
@@ -316,16 +316,15 @@ test("scroll adds the lyrics card only when lyrics are ready, then reuses the ca
   const list = parse(out).find((field) => field.no === 1).bytes;
   const sections = parse(list).filter((field) => field.no === 1).map((field) => parse(field.bytes));
   const card = sections.find((fields) => fields.some((field) => field.no === 5));
-  assert.ok(card, "the card is added after lyrics are found");
+  assert.ok(card, "the card must be present in the first scroll response");
   const trackRef = parse(card.find((field) => field.no === 5).bytes).find((field) => field.no === 1);
   assert.equal(decoder.decode(trackRef.bytes), trackUri);
   assert.ok(
-    calls.some((url) => url.includes("track_name=" + encodeURIComponent("晚秋") + "&")),
-    "the lookup retries without the decorative parentheses",
+    calls.some((url) => url.includes("open.spotify.com/oembed")),
+    "the short-window lookup must run before the card is added",
   );
 
-  // The color-lyrics request that follows the card must hit the same cache.
-  const oembedCalls = calls.filter((url) => url.includes("open.spotify.com/oembed")).length;
+  // 随后到达的 color-lyrics 直接复用这次短窗口查询写下的缓存。
   const lyricsResponse = await handle(
     new Request("http://localhost/music/color-lyrics/v2/track/" + id + "?format=json", {
       headers: { accept: "application/json" },
@@ -334,19 +333,46 @@ test("scroll adds the lyrics card only when lyrics are ready, then reuses the ca
   );
   assert.equal(lyricsResponse.status, 200);
   assert.equal((await lyricsResponse.json()).lyrics.lines[0].words, "秋");
+  assert.ok(
+    calls.some((url) => url.includes("track_name=" + encodeURIComponent("晚秋") + "&")),
+    "the lookup retries without the decorative parentheses",
+  );
+
+  // 第一次 color-lyrics 命中 scroll 预热好的缓存，不再查第三方源。
+  assert.equal(
+    calls.filter((url) => url.includes("open.spotify.com/oembed")).length,
+    1,
+    "color-lyrics must reuse the lyrics resolved during the short window",
+  );
+
+  // 再请求一次仍然命中缓存。
+  const oembedCalls = calls.filter((url) => url.includes("open.spotify.com/oembed")).length;
+  const cached = await handle(
+    new Request("http://localhost/music/color-lyrics/v2/track/" + id + "?format=json", {
+      headers: { accept: "application/json" },
+    }),
+    env,
+  );
+  assert.equal((await cached.json()).lyrics.lines[0].words, "秋");
   assert.equal(
     calls.filter((url) => url.includes("open.spotify.com/oembed")).length,
     oembedCalls,
-    "the prefetched lyrics must be reused instead of looking the track up again",
+    "the parallel lookup result must be reused instead of looking the track up again",
   );
 });
 
-test("scroll leaves out the lyrics card when the lookup has no result", async () => {
+test("a quick confirmed miss never adds an empty lyrics card", async () => {
   const id = "0VjIjW4GlUZAMYd2vXMi3b";
   const section = bytes(1, concat([str(2, "normal-card")]));
   const scrollBody = bytes(1, concat([section]));
   stubNetwork([
-    ["spclient.wg.spotify.com", () => upstreamResponse(scrollBody, 200, "application/x-protobuf")],
+    [
+      "spclient.wg.spotify.com",
+      (target) =>
+        target.includes("/color-lyrics/")
+          ? upstreamResponse(new Uint8Array(0), 404, "application/x-protobuf")
+          : upstreamResponse(scrollBody, 200, "application/x-protobuf"),
+    ],
     [
       "open.spotify.com/oembed",
       () => upstreamResponse(JSON.stringify({ title: "Missing", author_name: "Nobody" }), 200, "application/json"),
@@ -354,16 +380,28 @@ test("scroll leaves out the lyrics card when the lookup has no result", async ()
     ["lrclib.net/api/get", () => upstreamResponse("not found", 404, "text/plain")],
     ["lrclib.net/api/search", () => upstreamResponse(JSON.stringify([]), 200, "application/json")],
   ]);
+  const env = { BLOCK_ADS: "false", LYRICS_SOURCE: "lrclib" };
+  const scrollUrl = "http://localhost/music/scrollsita/v1/scroll/spotify:track:" + id;
+  const hasCard = async () => {
+    const response = await handle(new Request(scrollUrl), env);
+    assert.equal(response.status, 200);
+    const out = new Uint8Array(await response.arrayBuffer());
+    const list = parse(out).find((field) => field.no === 1).bytes;
+    return parse(list)
+      .filter((field) => field.no === 1)
+      .some((field) => parse(field.bytes).some((inner) => inner.no === 5));
+  };
 
-  const response = await handle(
-    new Request("http://localhost/music/scrollsita/v1/scroll/spotify:track:" + id),
-    { BLOCK_ADS: "false", LYRICS_SOURCE: "lrclib" },
+  // 短窗口内就明确查不到歌词：这一格从一开始就不该出现。
+  assert.equal(await hasCard(), false, "a confirmed miss inside the window must not add an empty card");
+  await handle(
+    new Request("http://localhost/music/color-lyrics/v2/track/" + id + "?format=json", {
+      headers: { accept: "application/json" },
+    }),
+    env,
   );
-  assert.equal(response.status, 200);
-  const out = new Uint8Array(await response.arrayBuffer());
-  const list = parse(out).find((field) => field.no === 1).bytes;
-  const sections = parse(list).filter((field) => field.no === 1).map((field) => parse(field.bytes));
-  assert.equal(sections.some((fields) => fields.some((field) => field.no === 5)), false);
+  // color-lyrics 也确认没歌词后，后续渲染继续被 miss 标记压住。
+  assert.equal(await hasCard(), false, "a confirmed miss must not leave an empty card on the next render");
 });
 
 test("health reports the lyrics options", async () => {
@@ -374,6 +412,7 @@ test("health reports the lyrics options", async () => {
   assert.equal(body.options.lyrics.enabled, true);
   assert.equal(body.options.lyrics.source, "auto");
   assert.equal(body.options.lyrics.timeoutMs, 5000);
+  assert.equal(body.options.lyrics.parallel, true);
 });
 
 test("legacy /color-lyricsv2 paths are normalized before routing", async () => {
@@ -413,4 +452,103 @@ test("color-lyrics keeps the query string and strips cache validators upstream",
   );
   assert.equal(calls[0].headers.get("if-none-match"), null);
   assert.equal(calls[0].headers.get("if-modified-since"), null);
+});
+
+// ---- 官方 / 第三方并行查询 -----------------------------------------------
+
+// 上游请求被 gate 卡住，只有第三方查询真的能在官方请求飞行期间跑完，
+// thirdPartyGate 才会 resolve：这比只记录调用顺序更能证明两者并行。
+function gatedLyricsNetwork() {
+  const calls = [];
+  let releaseUpstream;
+  const upstreamGate = new Promise((resolve) => { releaseUpstream = resolve; });
+  let thirdPartyDone;
+  const thirdPartyGate = new Promise((resolve) => { thirdPartyDone = resolve; });
+  globalThis.fetch = async (url) => {
+    const target = String(url);
+    calls.push(target);
+    if (target.includes("spclient.wg.spotify.com")) {
+      await upstreamGate;
+      return upstreamResponse(new Uint8Array(0), 404, "application/x-protobuf");
+    }
+    if (target.includes("open.spotify.com/oembed")) {
+      return upstreamResponse(JSON.stringify({ title: "Hello", author_name: "Adele" }), 200, "application/json");
+    }
+    if (target.includes("lrclib.net/api/get")) {
+      thirdPartyDone();
+      return upstreamResponse(JSON.stringify({ duration: 200, syncedLyrics: "[00:01.00]Hello" }), 200, "application/json");
+    }
+    return new Response("not found", { status: 404 });
+  };
+  return { calls, releaseUpstream, thirdPartyGate };
+}
+
+test("third-party lookup runs while the official color-lyrics request is still in flight", { timeout: 3000 }, async () => {
+  const { calls, releaseUpstream, thirdPartyGate } = gatedLyricsNetwork();
+  const pending = handle(lyricsRequest(), {});
+  await thirdPartyGate;
+  assert.ok(calls.some((url) => url.includes("spclient.wg.spotify.com")), "official request must be in flight");
+  assert.ok(calls.some((url) => url.includes("lrclib.net/api/get")), "provider lookup must finish before the official 404");
+  releaseUpstream();
+
+  const response = await pending;
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-spotify-mock-lyrics"), "lrclib-miss");
+  // 官方 404 直接复用并行结果，不再重复查一轮第三方源。
+  assert.equal(calls.filter((url) => url.includes("open.spotify.com/oembed")).length, 1);
+});
+
+test("official lyrics win and later requests skip the redundant parallel lookup", async () => {
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    const target = String(url);
+    calls.push(target);
+    if (target.includes("spclient.wg.spotify.com")) {
+      const body = encoder.encode(JSON.stringify({ lyrics: { lines: [{ words: "official" }] } }));
+      return upstreamResponse(body, 200, "application/json");
+    }
+    if (target.includes("open.spotify.com/oembed")) {
+      return upstreamResponse(JSON.stringify({ title: "Hello", author_name: "Adele" }), 200, "application/json");
+    }
+    if (target.includes("lrclib.net/api/get")) {
+      return upstreamResponse(JSON.stringify({ syncedLyrics: "[00:01.00]Hello" }), 200, "application/json");
+    }
+    return new Response("not found", { status: 404 });
+  };
+
+  const first = await handle(lyricsRequest(), {});
+  assert.equal(JSON.parse(await first.text()).lyrics.lines[0].words, "official");
+  const lookups = calls.filter((url) => url.includes("oembed")).length;
+  assert.equal(lookups, 1, "first request must start the parallel lookup");
+
+  const second = await handle(lyricsRequest(), {});
+  assert.equal(JSON.parse(await second.text()).lyrics.lines[0].words, "official");
+  assert.equal(
+    calls.filter((url) => url.includes("oembed")).length,
+    lookups,
+    "a known official hit must not run another parallel lookup",
+  );
+});
+
+test("LYRICS_PARALLEL=false keeps the official request first", async () => {
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    const target = String(url);
+    calls.push(target);
+    if (target.includes("spclient.wg.spotify.com")) {
+      return upstreamResponse(new Uint8Array(0), 404, "application/x-protobuf");
+    }
+    if (target.includes("open.spotify.com/oembed")) {
+      return upstreamResponse(JSON.stringify({ title: "Hello", author_name: "Adele" }), 200, "application/json");
+    }
+    if (target.includes("lrclib.net/api/get")) {
+      return upstreamResponse(JSON.stringify({ syncedLyrics: "[00:01.00]Hello" }), 200, "application/json");
+    }
+    return new Response("not found", { status: 404 });
+  };
+
+  const response = await handle(lyricsRequest(), { LYRICS_PARALLEL: "false" });
+  assert.equal(response.status, 200);
+  assert.ok(calls[0].includes("spclient.wg.spotify.com"), "official request must be sent before any provider lookup");
+  assert.ok(calls.some((url) => url.includes("lrclib.net/api/get")));
 });

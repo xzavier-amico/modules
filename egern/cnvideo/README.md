@@ -1,7 +1,7 @@
-# CN Video Ad-Free — Egern 模块
+# CN Video Clean — Egern 模块
 
-- Egern：`egern/cnvideo/cnvideo-adfree.yaml`
-- Loon：`loon/cnvideo/cnvideo-adfree.plugin`
+- Egern：`egern/cnvideo/cnvideo-clean.yaml`
+- Loon：`loon/cnvideo/cnvideo-clean.plugin`
 
 优酷 / 爱奇艺 / 腾讯视频：拒绝广告 SDK 与遥测域名；优酷只保留埋点，避免起播卡住。
 纯规则模块，不需要 MITM。

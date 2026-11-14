@@ -1,8 +1,8 @@
 # Tubi — Loon 插件
 
-- Loon：`loon/tubi/tubi-adfree.plugin` + `js/tubi_adfree.js` + `js/tubi_caption.js`
-- Egern：`egern/tubi/tubi-adfree.yaml`
-- Shadowrocket：`shadowrocket/tubi/tubi-adfree.sgmodule`
+- Loon：`loon/tubi/tubi-clean.plugin` + `js/tubi_adfree.js` + `js/tubi_caption.js`
+- Egern：`egern/tubi/tubi-clean.yaml`
+- Shadowrocket：`shadowrocket/tubi/tubi-clean.sgmodule`
 
 去广告 + 字幕翻译。去广告的做法是让播放器根本拿不到广告位，顺带让广告接口回答
 「没有广告」，视频流本身不动；字幕翻译只在播放器请求带 `tlang` 标记的字幕轨时生效。

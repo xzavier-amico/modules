@@ -1,5 +1,5 @@
 #=======================================================================================
-# Tubi Ad-Free — Egern 模块
+# Tubi Clean — Egern 模块
 #
 # 去广告。Tubi 是客户端插广告（CSAI）：内容清单是干净的 VOD playlist，广告位来自
 # 内容元数据里的 cue_points，播到那一秒再去广告接口要一批广告。
@@ -25,7 +25,7 @@
 #     指向你自己的美国策略组，避免被「国内直连」规则带走。
 #=======================================================================================
 
-name: "Tubi Ad-Free"
+name: "Tubi Clean"
 description: "去广告：清空内容元数据里的 cue_points，广告接口返回空广告列表 / 空 VAST。字幕翻译：在内容元数据里加一条中文 SRT 轨并翻译，默认英文原句 + 中文双语显示。不改动视频流，不触发 Tubi 的广告拦截检测。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"
@@ -66,7 +66,7 @@ env_schema:
 
 scriptings:
   - http_response:
-      name: "tubi.adfree"
+      name: "tubi.clean"
       # 前半段：广告侧主机；后半段：内容元数据 / API（cue_points 从这里来）。
       match: "^https?:\\/\\/(?:(?:[a-z0-9-]+\\.)*(?:ads|rainmaker)[a-z0-9.-]*\\.(?:tubi\\.io|tubitv\\.com|tubi\\.video|adrise\\.tv)\\/|(?:[a-z0-9-]+\\.)*(?:tubitv\\.com|tubi\\.io)\\/(?:oz|api)\\/)"
       script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/tubi/js/tubi_adfree.js?v=20261114-1"

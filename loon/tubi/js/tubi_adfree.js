@@ -4,7 +4,7 @@
 //=======================================================================================
 
 
-// Tubi Ad-Free — Loon / Egern / Shadowrocket.
+// Tubi Clean — Loon / Egern / Shadowrocket.
 //
 // Tubi 的广告是客户端插入（CSAI），不是把广告缝进视频流：内容清单是一份干净的
 // VOD playlist，广告位来自内容元数据里的 monetization.cue_points，播放到该秒数时

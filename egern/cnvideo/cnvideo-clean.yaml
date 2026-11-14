@@ -1,5 +1,5 @@
 #=======================================================================================
-# CN Video Ad-Free — Egern 模块
+# CN Video Clean — Egern 模块
 #
 # 优酷 / 爱奇艺 / 腾讯视频：直接 REJECT 广告 SDK 与遥测域名。
 #
@@ -17,7 +17,7 @@
 # 目前没有可靠的抓包，不做猜测性改写。
 #=======================================================================================
 
-name: "CN Video Ad-Free"
+name: "CN Video Clean"
 description: "优酷 / 爱奇艺 / 腾讯视频：拒绝广告、广告 SDK 与遥测域名。纯规则，不需要 MITM。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"

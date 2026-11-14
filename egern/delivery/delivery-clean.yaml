@@ -1,5 +1,5 @@
 #=======================================================================================
-# Delivery Ad-Free — Egern 模块
+# Delivery Clean — Egern 模块
 #
 # 京东 / 美团 / 饿了么：拒绝广告域名，并把独立的广告接口用 MITM 改写成空响应。
 #
@@ -15,7 +15,7 @@
 # 没有抓包就写不出精确的删除条件，本模块不做猜测性改写，见 README。
 #=======================================================================================
 
-name: "Delivery Ad-Free"
+name: "Delivery Clean"
 description: "京东 / 美团 / 饿了么：拒绝广告域名，并用 MITM 把开屏、广告板、促销接口改写成空响应。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"

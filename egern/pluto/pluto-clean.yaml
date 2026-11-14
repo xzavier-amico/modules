@@ -1,5 +1,5 @@
 #=======================================================================================
-# Pluto TV Ad-Free — Egern 模块
+# Pluto TV Clean — Egern 模块
 #
 # Pluto 的广告是服务端拼接（SSAI）：stitcher 把广告片直接缝进 HLS，客户端只是照单
 # 播放。所以这里不拦广告素材，而是把 boot 接口的 serverSideAds 改成 false，让
@@ -19,7 +19,7 @@
 #   - doubleclick / springserve 是客户端广告和广告同步域名，直接 REJECT。
 #=======================================================================================
 
-name: "Pluto TV Ad-Free"
+name: "Pluto TV Clean"
 description: "去广告：boot 的 serverSideAds 改成 false，再按 clip 分组删掉 HLS 点播清单里的广告段。字幕翻译：翻译外挂 WebVTT，默认英文原句在上、中文翻译在下。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"
@@ -60,7 +60,7 @@ env_schema:
 
 scriptings:
   - http_request:
-      name: "pluto.adfree"
+      name: "pluto.clean"
       match: "^https?:\\/\\/boot\\.pluto\\.tv\\/v4\\/start"
       script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_adfree.js?v=20261114-1"
       body_required: true

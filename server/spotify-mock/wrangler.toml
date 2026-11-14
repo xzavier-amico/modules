@@ -17,6 +17,8 @@ workers_dev = true
 # LYRICS_SOURCE = "lrclib"
 # LYRICS_TIMEOUT_MS = "5000"
 # LYRICS_CACHE_TTL = "21600"
+# 官方请求与第三方查询并行；false 回到串行
+# LYRICS_PARALLEL = "true"
 # MOCK_PREFIX = ""
 
 # 建议打开日志，方便确认补丁有没有命中。日志里不会打印请求体或 Authorization。

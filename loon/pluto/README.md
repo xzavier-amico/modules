@@ -1,7 +1,7 @@
 # Pluto TV — Loon 插件
 
-- Loon：`loon/pluto/pluto-adfree.plugin` + `js/pluto_adfree.js`
-- Egern：`egern/pluto/pluto-adfree.yaml`
+- Loon：`loon/pluto/pluto-clean.plugin` + `js/pluto_adfree.js`
+- Egern：`egern/pluto/pluto-clean.yaml`
 
 去广告 + 字幕翻译。去广告的做法是让 stitcher 不把广告缝进视频，而不是去拦广告素材；
 字幕翻译在播放器请求外挂 WebVTT 分片时进行，默认英文原句在上、中文翻译在下。

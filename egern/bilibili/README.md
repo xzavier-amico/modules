@@ -1,7 +1,7 @@
-# BiliBili Clean — Egern 模块
+# BiliBili Enhance — Egern 模块
 
-- Egern：`egern/bilibili/bilibili-clean.yaml` + `js/bilibili_clean.js`、`js/bilibili_quality.js`、`js/bilibili_grpc.js`
-- Loon：`loon/bilibili/bilibili-clean.plugin`
+- Egern：`egern/bilibili/bilibili-enhance.yaml` + `js/bilibili_clean.js`、`js/bilibili_quality.js`、`js/bilibili_grpc.js`
+- Loon：`loon/bilibili/bilibili-enhance.plugin`
 
 精简版，只保留四件事：去广告、去会员推广、去遥测、播放请求自动要最高画质。
 不重写首页、不换 CDN、不碰播放签名。App / gRPC 与网页版 API 共用同一套过滤，

@@ -1,6 +1,6 @@
-# Spotify — Loon
+# Spotify Enhance — Loon 插件
 
-`https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/spotify-premium.plugin`
+`https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/spotify-enhance.plugin`
 
 同一份插件适用于 iPhone / iPad 和 **Loon for Mac**：`desktop=auto` 按 User-Agent
 自动识别客户端，桌面端只写展示 / 广告属性，默认不写播放授权。
@@ -91,9 +91,9 @@ crossfade；这两项保持服务端与 App 自己的设置。AutoMix 仍在远�
 
 安装后需开启 MitM，并在系统 / 钥匙串中信任 Loon 证书，然后完全退出并重新打开
 Spotify。桌面端如果一直看不到脚本执行记录，说明请求可能走了 QUIC；通用插件默认
-拒绝 QUIC，个别版本因此跳歌时改用旧的兼容入口：
+拒绝 QUIC，个别版本因此跳歌时改用 macOS 兼容入口：
 
-`https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/spotify-premium-mac.plugin`
+`https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/spotify-enhance-mac.plugin`
 
 该入口固定桌面模式、默认关闭 `unlock_playback`，且不主动拒绝 QUIC。已经安装通用
 插件的用户不需要再装它。

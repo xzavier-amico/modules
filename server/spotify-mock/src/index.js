@@ -22,6 +22,11 @@
 // response is passed through after removing the free-account restriction, or
 // third-party lyrics are synthesized when Spotify has none. The client modules
 // therefore contain no response scripts.
+//
+// The official request and the third-party lookup are started at the same time:
+// an official 200 with lyrics wins, while a 404 can use a result that is often
+// already ready. Total latency approaches the slower of the two, not their sum.
+// Set LYRICS_PARALLEL=false to restore the old serial flow.
 
 import { createPatcher } from "./patcher.js";
 import {
@@ -29,15 +34,24 @@ import {
   cleanOfficialLyrics,
   detectLyricsFormat,
   encodeLyricsProto,
+  clearLyricsMiss,
   findLyrics,
   lyricsInfo,
+  lyricsMiss,
   lyricsOptions,
+  markLyricsMiss,
+  markOfficialLyricsHit,
+  officialLyricsHit,
 } from "./lyrics.js";
 
 const SERVICE = "spotify-mock";
 const VERSION = "1.1.3";
 const UPSTREAM = "https://spclient.wg.spotify.com";
 const MUSIC_PREFIX = "/music";
+// scrollsita 补卡前的等待：窗口内查到歌词就补（内容就绪），明确查不到就不补
+// （不留空卡），超时才乐观补卡。Eevee 没有可抄的官方超时；按真机补卡成功率
+// 调整这一个常量即可，与客户端模块保持同一量级。
+const SCROLL_CARD_WAIT_MS = 4500;
 
 const ROUTES = [
   // Spotify versions the bootstrap endpoint (/bootstrap/v1/bootstrap,
@@ -290,16 +304,27 @@ function patchResponse(patcher, desktopPatcher, route, targetPath, bytes, conten
 // color-lyrics: keep the official body when it has lines (after dropping the
 // free-account monthly-limit restriction), otherwise synthesize a response
 // from a third-party provider. Returns null to pass the upstream response
-// through untouched.
-async function patchLyrics(env, request, targetPath, bytes, upstream, desktop) {
-  const match = /\/color-lyrics\/v\d+\/track\/([A-Za-z0-9]+)/.exec(targetPath);
-  if (!match) return null;
+// through untouched. lyricsLookup is the lookup started alongside the upstream
+// fetch in handle(); reusing it avoids a second full provider round trip.
+const LYRICS_PATH = /\/color-lyrics\/v\d+\/track\/([A-Za-z0-9]+)/;
+const lyricsTrackId = (targetPath) => {
+  const match = LYRICS_PATH.exec(targetPath);
+  return match ? match[1] : null;
+};
+
+// 官方请求与第三方查询在 handle() 里同时发出；lyricsLookup 是那条已经开跑的
+// Promise，官方 404 时直接复用它的结果（通常已经就绪），不必再等一整轮查询。
+async function patchLyrics(env, request, targetPath, bytes, upstream, desktop, lyricsLookup) {
+  const trackId = lyricsTrackId(targetPath);
+  if (!trackId) return null;
 
   const contentType = (upstream.headers.get("content-type") || "").toLowerCase();
   const status = upstream.status;
   const official = status >= 200 && status < 300 ? cleanOfficialLyrics(bytes, contentType) : null;
 
   if (official && official.hasLyrics) {
+    markOfficialLyricsHit(trackId);
+    clearLyricsMiss(trackId);
     if (!official.body) return { bytes: null, status, contentType: null, lyrics: "official" };
     return {
       bytes: official.body,
@@ -318,8 +343,10 @@ async function patchLyrics(env, request, targetPath, bytes, upstream, desktop) {
   }
 
   const options = lyricsOptions(env);
-  const found = await findLyrics(match[1], options);
+  const found = await (lyricsLookup || findLyrics(trackId, options));
   if (!found.lyrics) {
+    // 卡片已经乐观补上了：确认没歌词后短期内不再补空卡。
+    markLyricsMiss(trackId);
     return {
       bytes: null,
       status,
@@ -327,6 +354,7 @@ async function patchLyrics(env, request, targetPath, bytes, upstream, desktop) {
       lyrics: `none-${found.cache}`,
     };
   }
+  clearLyricsMiss(trackId);
   const lyrics = found.lyrics;
 
   const format = detectLyricsFormat({
@@ -418,6 +446,21 @@ async function handle(request, env = {}) {
     }
   }
 
+  // color-lyrics：官方请求和第三方查询同时发出。官方 200 有歌词时用官方结果，
+  // 404 时第三方结果往往已经就绪，总耗时接近两者中较慢的那个，而不是相加。
+  // 官方曾命中过歌词的曲目跳过并行查询，避免每次打开歌词页都白跑一轮第三方源。
+  let lyricsLookup = null;
+  if (route.kind === "lyrics") {
+    const trackId = lyricsTrackId(targetPath);
+    const opts = lyricsOptions(env);
+    if (trackId && opts.enabled && opts.parallel && !officialLyricsHit(trackId)) {
+      lyricsLookup = findLyrics(trackId, opts).catch((error) => {
+        console.warn(`${SERVICE}: parallel lyrics lookup failed:`, error && (error.message || error));
+        return { lyrics: null, cache: "error" };
+      });
+    }
+  }
+
   const target = UPSTREAM + targetPath + url.search;
   const upstream = await fetch(target, {
     method,
@@ -445,7 +488,7 @@ async function handle(request, env = {}) {
   let lyricsOut = null;
 
   if (route.kind === "lyrics") {
-    const result = await patchLyrics(env, request, targetPath, original, upstream, options.desktop);
+    const result = await patchLyrics(env, request, targetPath, original, upstream, options.desktop, lyricsLookup);
     if (result) {
       lyricsOut = result.lyrics || null;
       if (result.bytes) {
@@ -457,24 +500,30 @@ async function handle(request, env = {}) {
     }
   } else if (upstream.status >= 200 && upstream.status < 300) {
     const contentType = (upstream.headers.get("content-type") || "").toLowerCase();
-    // The scroll list carries a lyrics card only when the track has lyrics.
-    // Spotify normally includes it for official lyrics; when it does not, the
-    // client asks for color-lyrics right after rendering and the card sits
-    // empty until that answer arrives. Look the track up first and only add
-    // the card when the lyrics are actually ready; the color-lyrics request
-    // then hits the same in-memory cache and returns immediately.
+    // The scroll list needs its lyrics section in the very first response: the
+    // client renders the card list once and will not insert a new card later,
+    // even if color-lyrics succeeds. Add the section optimistically; the parallel
+    // color-lyrics lookup fills its contents. A recently confirmed miss skips it.
     let scrollCard = null;
     if (route.kind === "scroll" && original.length) {
       const trackId = scrollTrackId(targetPath);
       const lyrics = lyricsOptions(env);
-      if (trackId && lyrics.enabled && !patcher.hasLyricsCard(original)) {
-        try {
-          const found = await findLyrics(trackId, lyrics);
-          scrollCard = { trackId, wantCard: Boolean(found && found.lyrics) };
-        } catch (error) {
-          // A lyrics failure must not break the scroll list.
+      if (trackId && lyrics.enabled && !patcher.hasLyricsCard(original) && !lyricsMiss(trackId)) {
+        // 客户端渲染完列表后不会因为 color-lyrics 拿到歌词就回头补一格。先给
+        // 并行查询 SCROLL_CARD_WAIT_MS 一个「明确有 / 明确没有」的机会：
+        // 查到就补、确认查不到就不补（零空卡）、超时才乐观补卡。查询本身不取消，
+        // 超时后仍会写缓存，随后到达的 color-lyrics 请求可以直接复用。
+        const lookup = findLyrics(trackId, lyrics).catch((error) => {
           console.warn(`${SERVICE}: scroll lyrics lookup failed:`, error && (error.message || error));
-        }
+          return { lyrics: null };
+        });
+        let timer;
+        const timeout = new Promise((resolve) => {
+          timer = setTimeout(() => resolve({ lyrics: null, timedOut: true }), SCROLL_CARD_WAIT_MS);
+        });
+        const result = await Promise.race([lookup, timeout]);
+        clearTimeout(timer);
+        scrollCard = { trackId, wantCard: Boolean(result.lyrics) || Boolean(result.timedOut) };
       }
     }
     const result = patchResponse(patcher, desktopPatcher, route, targetPath, original, contentType, scrollCard);

@@ -1,4 +1,4 @@
-#!name=Pluto TV Ad-Free
+#!name=Pluto TV Clean
 #!desc=去广告：boot 的 serverSideAds 改成 false，再按 clip 分组删掉 HLS 点播清单里的广告段。字幕翻译：翻译外挂 WebVTT，默认英文原句在上、中文翻译在下。
 #!category=Pluto TV
 #!author=xzavier-amico
@@ -20,7 +20,7 @@ DOMAIN-SUFFIX,pluto.tv,PROXY
 DOMAIN-SUFFIX,plutotv.net,PROXY
 
 [Script]
-request if ${url} ~= /^https?:\/\/boot\.pluto\.tv\/v4\/start/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/pluto/js/pluto_adfree.js?v=20261114-1", {${block_ads}, ${web}}) with requires_body=true, tag="Pluto TV Ad-Free", timeout=10
+request if ${url} ~= /^https?:\/\/boot\.pluto\.tv\/v4\/start/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/pluto/js/pluto_adfree.js?v=20261114-1", {${block_ads}, ${web}}) with requires_body=true, tag="Pluto TV Clean", timeout=10
 # 字幕：主清单里把英文字幕轨改名，外挂 WebVTT 分片翻译成双语。
 response if ${url} ~= /^https?:\/\/[^\/]*(?:pluto\.tv|plutotv\.net)\/[^?]*\/master\.m3u8/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/pluto/js/pluto_manifest.js?v=20261114-1", {${block_ads}, ${caption_lang}, ${bilingual}, ${translate_key}, ${translate_provider}, ${web}}) with requires_body=true, tag="Pluto TV Caption", timeout=10
 response if ${url} ~= /^https?:\/\/[^\/]*(?:pluto\.tv|plutotv\.net)\/[^?]*\.vtt(?:\?|$)/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/pluto/js/pluto_subtitle.js?v=20261114-1", {${block_ads}, ${caption_lang}, ${bilingual}, ${translate_key}, ${translate_provider}, ${web}}) with requires_body=true, tag="Pluto TV Subtitle", timeout=60

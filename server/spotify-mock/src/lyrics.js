@@ -1,13 +1,17 @@
 // Spotify Mock — server-side lyrics.
 //
 // The client modules only rewrite color-lyrics to this service. This file does
-// the two jobs that used to run in the Spotify Premium client script:
+// the two jobs that used to run in the Spotify Enhance client script:
 //
 //   * official 200 with lyrics: remove the free-account monthly-limit
 //     restriction and pass the (possibly cleaned) body through;
 //   * official 404 / empty: look the track up through open.spotify.com/oembed,
 //     search third-party lyric providers, and synthesize the JSON or protobuf
 //     response the client expects.
+//
+// On the server the provider lookup can start while the official request is
+// still in flight (see index.js), so the 404 path usually just awaits a result
+// that is already there. LYRICS_PARALLEL=false disables that behaviour.
 //
 // All third-party traffic happens here, so iPhone / iPad / Mac clients do not
 // need a response script at all.
@@ -67,6 +71,9 @@ export function lyricsOptions(env = {}) {
     sources: sources.list,
     timeoutMs: numberIn(env.LYRICS_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1000, 30000),
     cacheTtlMs: numberIn(env.LYRICS_CACHE_TTL, DEFAULT_CACHE_TTL, 0, 604800) * 1000,
+    // 官方 color-lyrics 请求与第三方查询同时发出：官方 404 时第三方结果通常
+    // 已经就绪，不必再等一整轮查询。关掉后退回「先等官方、404 再查」的串行流程。
+    parallel: flag(env.LYRICS_PARALLEL, true),
   };
 }
 
@@ -77,6 +84,7 @@ export function lyricsInfo(env = {}) {
     source: options.source,
     timeoutMs: options.timeoutMs,
     cacheTtl: Math.round(options.cacheTtlMs / 1000),
+    parallel: options.parallel,
   };
 }
 
@@ -434,10 +442,61 @@ function makeLyrics(syncType, lines, record) {
 
 const cache = new Map();
 const inflight = new Map();
+// 官方有歌词的曲目记一笔：下次打开同一首歌的歌词页不再并行空跑一轮第三方源。
+// 只决定「要不要提前发第三方请求」，不改变响应内容，也不缓存官方歌词本身。
+const officialHits = new Map();
+const OFFICIAL_HIT_TTL_MS = 6 * 60 * 60 * 1000;
+// 乐观补出来的歌词卡需要知道「这次确实没歌词」，避免同一首歌反复显示空卡。
+const misses = new Map();
+const MISS_TTL_MS = 5 * 60 * 1000;
 
 export function resetLyricsCache() {
   cache.clear();
   inflight.clear();
+  officialHits.clear();
+  misses.clear();
+}
+
+export function lyricsMiss(trackId) {
+  const at = misses.get(trackId);
+  if (!at) return false;
+  if (Date.now() - at >= MISS_TTL_MS) {
+    misses.delete(trackId);
+    return false;
+  }
+  return true;
+}
+
+export function markLyricsMiss(trackId) {
+  if (!trackId) return;
+  if (misses.size >= MAX_CACHE_ENTRIES) {
+    const oldest = misses.keys().next().value;
+    if (oldest !== undefined) misses.delete(oldest);
+  }
+  misses.set(trackId, Date.now());
+}
+
+export function clearLyricsMiss(trackId) {
+  misses.delete(trackId);
+}
+
+export function officialLyricsHit(trackId) {
+  const at = officialHits.get(trackId);
+  if (!at) return false;
+  if (Date.now() - at >= OFFICIAL_HIT_TTL_MS) {
+    officialHits.delete(trackId);
+    return false;
+  }
+  return true;
+}
+
+export function markOfficialLyricsHit(trackId) {
+  if (!trackId) return;
+  if (officialHits.size >= MAX_CACHE_ENTRIES) {
+    const oldest = officialHits.keys().next().value;
+    if (oldest !== undefined) officialHits.delete(oldest);
+  }
+  officialHits.set(trackId, Date.now());
 }
 
 function cacheGet(key) {

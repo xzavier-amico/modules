@@ -1,5 +1,5 @@
 //=======================================================================================
-// BiliBili Clean — 播放请求画质（REST + gRPC）
+// BiliBili Enhance — 播放请求画质（REST + gRPC）
 // 自动生成，请勿直接编辑。源文件在 src/，构建：node scripts/build.js
 //=======================================================================================
 
@@ -132,7 +132,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   };
 }
 
-// BiliBili Clean — 画质请求改写（Loon / Egern）。
+// BiliBili Enhance — 画质请求改写（Loon / Egern）。
 //
 // 客户端请求播放地址时带 qn（清晰度编号），这里统一改成 120（4K），补上
 // fourk=1 和 fnval 的 4K 位。服务端会按账号权限返回「实际能给的最高档」：

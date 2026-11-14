@@ -13,7 +13,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "check": "node --check src/index.js && node --check src/patcher.js && node --check src/lyrics.js && node --check src/node.js",
-    "test": "node --test test/"
+    "test": "node --test test/*.test.js"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"

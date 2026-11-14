@@ -4,7 +4,7 @@
 //=======================================================================================
 
 
-// Pluto TV Ad-Free — 清空会话里的 adBreaks（Loon / Egern）.
+// Pluto TV Clean — 清空会话里的 adBreaks（Loon / Egern）.
 //
 // 播放器的广告块标记、左上角 Ad 角标、广告期间禁止拖动，都来自 stitcher 会话里的
 // adBreaks 数组。清单里的广告分片由 pluto_hls.js 删掉，这里把对应元数据一起清空，

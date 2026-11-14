@@ -1,4 +1,4 @@
-#!name=Tubi Ad-Free
+#!name=Tubi Clean
 #!desc=去广告：清空内容元数据里的 cue_points，广告接口返回空广告列表 / 空 VAST。字幕翻译：在内容元数据里加一条中文 SRT 轨并翻译，默认英文原句 + 中文双语显示。不改动视频流，不触发 Tubi 的广告拦截检测。
 #!category=Tubi
 #!author=xzavier-amico
@@ -28,7 +28,7 @@ DOMAIN-SUFFIX,adrise.tv,PROXY
 
 [Script]
 # 前半段：广告侧主机；后半段：内容元数据 / API（cue_points 从这里来）。
-response if ${url} ~= /^https?:\/\/(?:(?:[a-z0-9-]+\.)*(?:ads|rainmaker)[a-z0-9.-]*\.(?:tubi\.io|tubitv\.com|tubi\.video|adrise\.tv)\/|(?:[a-z0-9-]+\.)*(?:tubitv\.com|tubi\.io)\/(?:oz|api)\/)/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/tubi/js/tubi_adfree.js?v=20261114-1", {${block_ads}, ${caption_lang}, ${bilingual}, ${translate_key}, ${translate_provider}, ${web}}) with requires_body=true, tag="Tubi Ad-Free", timeout=10
+response if ${url} ~= /^https?:\/\/(?:(?:[a-z0-9-]+\.)*(?:ads|rainmaker)[a-z0-9.-]*\.(?:tubi\.io|tubitv\.com|tubi\.video|adrise\.tv)\/|(?:[a-z0-9-]+\.)*(?:tubitv\.com|tubi\.io)\/(?:oz|api)\/)/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/tubi/js/tubi_adfree.js?v=20261114-1", {${block_ads}, ${caption_lang}, ${bilingual}, ${translate_key}, ${translate_provider}, ${web}}) with requires_body=true, tag="Tubi Clean", timeout=10
 
 # 带 tlang 标记的字幕轨：把 SRT 文本送去翻译，时间轴 / 序号保持原样。
 response if ${url} ~= /^https?:\/\/(?:[a-z0-9-]+\.)*(?:adrise\.tv|tubitv\.com|tubi\.io)\/.*\.srt(?:\?.*)?$/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/tubi/js/tubi_caption.js", {${block_ads}, ${caption_lang}, ${bilingual}, ${translate_key}, ${translate_provider}}) with requires_body=true, tag="Tubi Caption", timeout=60

@@ -277,27 +277,59 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
   });
 }
 
+check("Module filenames and display names follow the Enhance / Clean convention", () => {
+  const modules = [
+    ["youtube", "enhance", "YouTube Enhance"],
+    ["bilibili", "enhance", "BiliBili Enhance"],
+    ["spotify", "enhance", "Spotify Enhance"],
+    ["tubi", "clean", "Tubi Clean"],
+    ["pluto", "clean", "Pluto TV Clean"],
+    ["delivery", "clean", "Delivery Clean"],
+    ["cnvideo", "clean", "CN Video Clean"],
+    ["amap", "clean", "AMap Clean"],
+    ["xiaohongshu", "clean", "Xiaohongshu Clean"],
+  ];
+  const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  for (const [dir, suffix, name] of modules) {
+    const base = dir + "/" + dir + "-" + suffix;
+    for (const file of ["egern/" + base + ".yaml", "loon/" + base + ".plugin", "shadowrocket/" + base + ".sgmodule"]) {
+      assert.ok(fs.existsSync(path.join(ROOT, file)), file + " must exist");
+    }
+    assert.match(read("egern/" + base + ".yaml"), new RegExp('^name: "' + escape(name) + '"', "m"), base);
+    assert.equal(read("loon/" + base + ".plugin").split("\n")[0], "#!name=" + name, base);
+    assert.equal(read("shadowrocket/" + base + ".sgmodule").split("\n")[0], "#!name=" + name, base);
+  }
+  for (const old of [
+    "egern/bilibili/bilibili-clean.yaml",
+    "loon/spotify/spotify-premium.plugin",
+    "shadowrocket/tubi/tubi-adfree.sgmodule",
+    "egern/cnvideo/cnvideo-adfree.yaml",
+  ]) {
+    assert.ok(!fs.existsSync(path.join(ROOT, old)), old + " must be renamed");
+  }
+});
+
 check("Spotify client plugins route scrollsita to the updated ad filter", () => {
-  for (const file of ["loon/spotify/spotify-premium.plugin", "loon/spotify/spotify-premium-mac.plugin", "egern/spotify/spotify-premium.yaml", "shadowrocket/spotify/spotify-premium.sgmodule"]) {
+  for (const file of ["loon/spotify/spotify-enhance.plugin", "loon/spotify/spotify-enhance-mac.plugin", "egern/spotify/spotify-enhance.yaml", "shadowrocket/spotify/spotify-enhance.sgmodule"]) {
     const rules = read(file).split("\n").filter((line) => !line.trim().startsWith("#"));
     assert.ok(rules.some((line) => line.includes("scrollsita")), file + " must match scrollsita");
-    assert.ok(rules.some((line) => line.includes("spotify.feed.js?v=20261114-11")));
+    assert.ok(rules.some((line) => line.includes("spotify.feed.js?v=20261114-14")));
   }
 });
 
 check("Spotify modules route domestic lyrics sources directly", () => {
-  for (const file of ["loon/spotify/spotify-premium.plugin", "loon/spotify/spotify-premium-mac.plugin", "shadowrocket/spotify/spotify-premium.sgmodule"]) {
+  for (const file of ["loon/spotify/spotify-enhance.plugin", "loon/spotify/spotify-enhance-mac.plugin", "shadowrocket/spotify/spotify-enhance.sgmodule"]) {
     const text = read(file);
     assert.ok(text.includes("DOMAIN,music.163.com,DIRECT"), file + " must route NetEase directly");
     assert.ok(text.includes("DOMAIN,c.y.qq.com,DIRECT"), file + " must route QQ Music directly");
   }
-  const egern = read("egern/spotify/spotify-premium.yaml");
+  const egern = read("egern/spotify/spotify-enhance.yaml");
   assert.match(egern, /match: "music\.163\.com"\s*\n\s*policy: DIRECT/);
   assert.match(egern, /match: "c\.y\.qq\.com"\s*\n\s*policy: DIRECT/);
 });
 
 check("Shadowrocket Spotify feed argument JSON exposes prefetch", () => {
-  const line = read("shadowrocket/spotify/spotify-premium.sgmodule").split("\n")
+  const line = read("shadowrocket/spotify/spotify-enhance.sgmodule").split("\n")
     .find((item) => item.startsWith("spotify.feed ="));
   assert.ok(line, "spotify.feed entry");
   const raw = /argument="(.*)"$/.exec(line)[1].replace(/\{\{\{[^}]*\}\}\}/g, "true");
@@ -307,7 +339,7 @@ check("Shadowrocket Spotify feed argument JSON exposes prefetch", () => {
 check("Egern lyrics script declares body_required", () => {
   // 不开 body_required 时 Egern 既不把 body 交给脚本，也不接受脚本返回的 body，
   // 补出来的歌词会被丢掉。
-  const yaml = read("egern/spotify/spotify-premium.yaml");
+  const yaml = read("egern/spotify/spotify-enhance.yaml");
   const entries = yaml.split(/\n\s*-\s+(?=http_request:|http_response:)/).filter((entry) => entry.includes("color-lyrics"));
   const response = entries.find((entry) => /^http_response:/.test(entry) && entry.includes("spotify_lyrics.js"));
   assert.ok(response, "lyrics response entry must exist");
@@ -316,12 +348,12 @@ check("Egern lyrics script declares body_required", () => {
 
 check("Spotify client plugins short-circuit cached lyrics at request phase", () => {
   // 请求阶段命中缓存时直接返回歌词，跳过可能很慢的官方 color-lyrics 请求。
-  for (const file of ["loon/spotify/spotify-premium.plugin", "loon/spotify/spotify-premium-mac.plugin", "shadowrocket/spotify/spotify-premium.sgmodule"]) {
+  for (const file of ["loon/spotify/spotify-enhance.plugin", "loon/spotify/spotify-enhance-mac.plugin", "shadowrocket/spotify/spotify-enhance.sgmodule"]) {
     const rules = read(file).split("\n").filter((line) => line.includes("spotify_lyrics.js"));
     assert.equal(rules.length, 2, file + " must have request and response lyrics entries");
     assert.equal(rules.filter((line) => /tag="spotify(?:\.mac)?\.lyrics\.req"/.test(line) || line.startsWith("spotify.lyrics.req =")).length, 1, file);
   }
-  const entries = read("egern/spotify/spotify-premium.yaml").split(/\n\s*-\s+(?=http_request:|http_response:)/)
+  const entries = read("egern/spotify/spotify-enhance.yaml").split(/\n\s*-\s+(?=http_request:|http_response:)/)
     .filter((entry) => entry.includes("color-lyrics") && entry.includes("spotify_lyrics.js"));
   assert.equal(entries.filter((entry) => /^http_request:/.test(entry)).length, 1, "egern request entry");
   assert.equal(entries.filter((entry) => /^http_response:/.test(entry)).length, 1, "egern response entry");
@@ -357,14 +389,14 @@ check("Spotify request phase passes through when the cache is empty", () => {
 
 check("Spotify feed scripts get a 30s timeout", () => {
   // scrollsita 响应可以到 12MB，10 秒偶尔不够，超时会放行原始响应、歌词卡片不出现。
-  const egern = read("egern/spotify/spotify-premium.yaml").split(/\n\s*-\s+(?=http_request:|http_response:)/)
+  const egern = read("egern/spotify/spotify-enhance.yaml").split(/\n\s*-\s+(?=http_request:|http_response:)/)
     .find((entry) => entry.includes('name: "spotify.feed"'));
   assert.ok(/timeout:\s*30/.test(egern), "egern feed timeout");
-  for (const file of ["loon/spotify/spotify-premium.plugin", "loon/spotify/spotify-premium-mac.plugin"]) {
+  for (const file of ["loon/spotify/spotify-enhance.plugin", "loon/spotify/spotify-enhance-mac.plugin"]) {
     const line = read(file).split("\n").find((item) => /tag="spotify(?:\.mac)?\.feed"/.test(item));
     assert.ok(/timeout=30/.test(line), file + " feed timeout");
   }
-  const sr = read("shadowrocket/spotify/spotify-premium.sgmodule").split("\n").find((line) => line.startsWith("spotify.feed ="));
+  const sr = read("shadowrocket/spotify/spotify-enhance.sgmodule").split("\n").find((line) => line.startsWith("spotify.feed ="));
   assert.ok(/timeout=30/.test(sr), "shadowrocket feed timeout");
 });
 
@@ -505,6 +537,9 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.ok(afterMiss > 0, platform);
     const missCache = JSON.parse(map["spotify.lyrics.cache"] || "{}");
     assert.equal(missCache["lrclib|missing"], undefined, platform + " must not cache a miss");
+    // 乐观补出来的歌词卡需要知道「这次确实没歌词」，短期内不再补空卡。
+    const missMark = JSON.parse(map["spotify.lyrics.miss"] || "null");
+    assert.equal(missMark && missMark.id, "missing", platform + " must remember a miss for the lyrics card");
     const repeated = run(file, "", missUrl, ["lrclib", true], {
       $response: { status: 404, body: "" },
       $persistentStore: store,
@@ -549,50 +584,83 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
 }
 
 for (const platform of ["loon", "egern", "shadowrocket"]) {
-  check(platform + " Spotify feed waits for lyrics before adding the card", () => {
+  check(platform + " Spotify feed polls the lyrics flag and never leaves a blank card", () => {
     const file = platform + "/spotify/js/spotify.feed.js";
     const id = "0VjIjW4GlUZAMYd2vXMi3b";
     const body = serialize([b(1, serialize([b(1, serialize([s(2, "normal-card")]))]))]);
-    const map = {
-      "spotify.track.meta": JSON.stringify({ [id]: ["Song", "Artist", 210000, Date.now()] }),
+    const args = { block_ads: false, enable_lyrics: true, lyrics_source: "lrclib" };
+    const meta = { "spotify.track.meta": JSON.stringify({ [id]: ["Song", "Artist", 210000, Date.now()] }) };
+    const storeFor = (extra = {}) => {
+      const map = Object.assign({}, meta, extra);
+      return {
+        map,
+        store: { read: (key) => (key in map ? map[key] : null), write: (value, key) => { map[key] = value; return true; } },
+      };
     };
-    const store = {
-      read: (key) => (key in map ? map[key] : null),
-      write: (value, key) => { map[key] = value; return true; },
-    };
-    let lookups = 0;
-    const http = {
-      get: (request, callback) => {
-        let data = {};
-        if (request.url.includes("lrclib.net/api/get")) {
-          lookups++;
-          data = { trackName: "Song", artistName: "Artist", duration: 210000, syncedLyrics: "[00:01.00]Ready" };
-        } else if (request.url.includes("lrclib.net/api/search")) data = [];
-        callback(null, { status: 200 }, JSON.stringify(data));
-      },
-    };
-    const out = run(file, body, scroll, { block_ads: false, enable_lyrics: true, lyrics_source: "lrclib" }, {
-      $persistentStore: store,
-      $httpClient: http,
+    const readyJson = () => JSON.stringify({
+      ["lrclib|" + id]: { t: Date.now(), m: 0, s: "LINE_SYNCED", p: "LRCLIB", i: "", l: "en", c: [-16777216, -1, -1], a: [[0, "line"]] },
     });
-    assert.ok(out.body, platform + " must add the card only after lyrics are ready");
-    assert.equal(lookups, 1, platform);
-    const cache = JSON.parse(map["spotify.lyrics.cache"] || "{}");
-    assert.ok(cache["lrclib|" + id], platform + " must warm the color-lyrics cache first");
+    const noHttp = { get: () => assert.fail(platform + " feed must not query providers itself") };
+    const immediate = { setTimeout: (fn) => { fn(); return 1; }, clearTimeout: () => {} };
 
-    // 查不到歌词时不补卡，避免客户端先显示一张空歌词卡。
-    const emptyMap = { "spotify.track.meta": map["spotify.track.meta"] };
-    const emptyStore = {
-      read: (key) => (key in emptyMap ? emptyMap[key] : null),
-      write: (value, key) => { emptyMap[key] = value; return true; },
-    };
-    const miss = run(file, body, scroll, { block_ads: false, enable_lyrics: true, lyrics_source: "lrclib" }, {
-      $persistentStore: emptyStore,
-      $httpClient: { get: (request, callback) => callback(null, { status: 200 }, JSON.stringify(request.url.includes("lrclib.net/api/search") ? [] : {})) },
+    // 1) 标志位已就绪（color-lyrics 先跑完）：零等待补卡，feed 自己不发请求。
+    const ready = storeFor({ "spotify.lyrics.cache": readyJson() });
+    const out = run(file, body, scroll, args, { $persistentStore: ready.store, $httpClient: noHttp, ...immediate });
+    assert.ok(out.body, platform + " ready flag must add the card immediately");
+    const sections = parse(first(parse(out.body), 1).p).filter((field) => field.no === 1);
+    assert.ok(sections.some((section) => parse(section.p).some((field) => field.no === 5)), platform);
+    assert.equal(ready.map["spotify.lyrics.pending"], undefined, platform + " ready flag must not register a prefetch");
+
+    // 2) 轮询期间歌词到达：立刻停止轮询并补卡，同时登记并行预取。
+    const during = storeFor();
+    let ticks = 0;
+    const duringOut = run(file, body, scroll, args, {
+      $persistentStore: during.store,
+      $httpClient: noHttp,
+      setTimeout: (fn) => { ticks += 1; if (ticks === 2) during.map["spotify.lyrics.cache"] = readyJson(); fn(); return ticks; },
+      clearTimeout: () => {},
     });
-    assert.equal(Object.keys(miss).length, 0, platform + " must not add an empty lyrics card");
-    const missCache = JSON.parse(emptyMap["spotify.lyrics.cache"] || "{}");
-    assert.equal(missCache["lrclib|" + id], undefined, platform + " must not cache a miss");
+    assert.ok(duringOut.body, platform + " must add the card as soon as the flag appears");
+    assert.equal(ticks, 2, platform + " must stop polling once the flag is set");
+    assert.equal(JSON.parse(during.map["spotify.lyrics.pending"] || "null").id, id, platform);
+
+    // 3) 轮询期间确认没歌词：不补卡，从源头避免空白卡。
+    const missDuring = storeFor();
+    let missTicks = 0;
+    const missOut = run(file, body, scroll, args, {
+      $persistentStore: missDuring.store,
+      $httpClient: noHttp,
+      setTimeout: (fn) => {
+        missTicks += 1;
+        if (missTicks === 2) missDuring.map["spotify.lyrics.miss"] = JSON.stringify({ id: id, at: Date.now() });
+        fn();
+        return missTicks;
+      },
+      clearTimeout: () => {},
+    });
+    assert.equal(Object.keys(missOut).length, 0, platform + " confirmed miss inside the window must not add a card");
+    assert.equal(missTicks, 2, platform + " must stop polling on a confirmed miss");
+
+    // 4) 等满 4.5 秒仍无结果：乐观补卡（约 200ms * 23 次）。
+    const slow = storeFor();
+    let slowTicks = 0;
+    const slowOut = run(file, body, scroll, args, {
+      $persistentStore: slow.store,
+      $httpClient: noHttp,
+      setTimeout: (fn) => { slowTicks += 1; fn(); return slowTicks; },
+      clearTimeout: () => {},
+    });
+    assert.ok(slowOut.body, platform + " timeout must still add the card");
+    assert.equal(slowTicks, 23, platform + " must poll about 200ms x 23 before the optimistic fallback");
+
+    // 5) 最近确认没歌词时不再补空卡；标记过期后允许再试。
+    const miss = storeFor({ "spotify.lyrics.miss": JSON.stringify({ id: id, at: Date.now() }) });
+    const missStored = run(file, body, scroll, args, { $persistentStore: miss.store, $httpClient: noHttp, ...immediate });
+    assert.equal(Object.keys(missStored).length, 0, platform + " recent miss must not add an empty card");
+
+    const stale = storeFor({ "spotify.lyrics.miss": JSON.stringify({ id: id, at: Date.now() - 10 * 60 * 1000 }) });
+    const staleOut = run(file, body, scroll, args, { $persistentStore: stale.store, $httpClient: noHttp, ...immediate });
+    assert.ok(staleOut.body, platform + " expired miss must allow the card again");
   });
 }
 
@@ -974,18 +1042,18 @@ check("Pluto / Tubi Loon plugins pass the web switch in order", () => {
     const raw = /then script\("[^"]+", (\{.*\})\) with/.exec(line)[1];
     return [...raw.matchAll(/\$\{(\w+)\}/g)].map((match) => match[1]);
   };
-  for (const tag of ["Pluto TV Ad-Free", "Pluto TV HLS", "Pluto TV Session"]) {
-    assert.deepEqual(tuple("loon/pluto/pluto-adfree.plugin", tag), ["block_ads", "web"], tag);
+  for (const tag of ["Pluto TV Clean", "Pluto TV HLS", "Pluto TV Session"]) {
+    assert.deepEqual(tuple("loon/pluto/pluto-clean.plugin", tag), ["block_ads", "web"], tag);
   }
   for (const tag of ["Pluto TV Caption", "Pluto TV Subtitle"]) {
     assert.deepEqual(
-      tuple("loon/pluto/pluto-adfree.plugin", tag),
+      tuple("loon/pluto/pluto-clean.plugin", tag),
       ["block_ads", "caption_lang", "bilingual", "translate_key", "translate_provider", "web"],
       tag,
     );
   }
   assert.deepEqual(
-    tuple("loon/tubi/tubi-adfree.plugin", "Tubi Ad-Free"),
+    tuple("loon/tubi/tubi-clean.plugin", "Tubi Clean"),
     ["block_ads", "caption_lang", "bilingual", "translate_key", "translate_provider", "web"],
   );
 });
@@ -993,9 +1061,9 @@ check("Pluto / Tubi Loon plugins pass the web switch in order", () => {
 check("Shadowrocket Pluto / Tubi argument JSON stays valid with the web switch", () => {
   // {{{变量}}} 在客户端里由参数值替换；这里先替换成 true 再按 JSON 解析。
   for (const [file, name] of [
-    ["shadowrocket/pluto/pluto-adfree.sgmodule", "pluto.hls"],
-    ["shadowrocket/pluto/pluto-adfree.sgmodule", "pluto.manifest"],
-    ["shadowrocket/tubi/tubi-adfree.sgmodule", "tubi.adfree"],
+    ["shadowrocket/pluto/pluto-clean.sgmodule", "pluto.hls"],
+    ["shadowrocket/pluto/pluto-clean.sgmodule", "pluto.manifest"],
+    ["shadowrocket/tubi/tubi-clean.sgmodule", "tubi.clean"],
   ]) {
     const line = read(file).split("\n").find((item) => item.startsWith(name + " ="));
     assert.ok(line, file + " " + name);
@@ -1006,10 +1074,10 @@ check("Shadowrocket Pluto / Tubi argument JSON stays valid with the web switch",
 
 check("Egern and Shadowrocket modules do not hard-code a proxy policy", () => {
   for (const file of [
-    "egern/tubi/tubi-adfree.yaml",
-    "egern/pluto/pluto-adfree.yaml",
-    "shadowrocket/tubi/tubi-adfree.sgmodule",
-    "shadowrocket/pluto/pluto-adfree.sgmodule",
+    "egern/tubi/tubi-clean.yaml",
+    "egern/pluto/pluto-clean.yaml",
+    "shadowrocket/tubi/tubi-clean.sgmodule",
+    "shadowrocket/pluto/pluto-clean.sgmodule",
   ]) {
     const text = read(file);
     assert.ok(!/policy:\s*PROXY/.test(text), file + " must not use policy: PROXY");
@@ -1547,14 +1615,13 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
 }
 
 check("Loon uses normal arguments and retains legacy mode compatibility", () => {
-  const plugin = read("loon/spotify/spotify-premium.plugin");
+  const plugin = read("loon/spotify/spotify-enhance.plugin");
   assert.ok(!plugin.includes("lyrics_mode"), "plugin must not expose diagnostic modes");
   const scriptRules = plugin.split("\n").filter((line) => line.includes('then script("'));
   assert.equal(scriptRules.length, 7);
   for (const line of scriptRules) {
-    const version = line.includes("spotify_lyrics.js") ? "20261114-13"
-      : line.includes("spotify.feed.js") ? "20261114-11" : "20261114-12";
-    assert.ok(line.includes("?v=" + version));
+    // 这一批改动同时更新了 spotify.js / spotify.feed.js / spotify_lyrics.js。
+    assert.ok(line.includes("?v=20261114-14"), line);
     const tuple = /then script\("[^"]+", (\{.*\})\) with/.exec(line)[1];
     assert.match(tuple, /^\{\$\{\w+\}(?:, \$\{\w+\})*\}$/, "Loon tuple must contain only declared argument references");
     const names = [...tuple.matchAll(/\$\{(\w+)\}/g)].map((match) => match[1]);
@@ -1595,9 +1662,9 @@ check("Loon uses normal arguments and retains legacy mode compatibility", () => 
   }
 });
 
-check("Loon Premium uses the plugin's original arguments independently of lyric diagnostics", () => {
-  const plugin = read("loon/spotify/spotify-premium.plugin");
-  const rule = plugin.split("\n").find((line) => line.includes('tag="Spotify Premium"'));
+check("Loon Enhance uses the plugin's original arguments independently of lyric diagnostics", () => {
+  const plugin = read("loon/spotify/spotify-enhance.plugin");
+  const rule = plugin.split("\n").find((line) => line.includes('tag="Spotify Enhance"'));
   const tuple = /then script\("[^"]+", (\{.*\})\) with/.exec(rule)[1];
   const attributes = serialize([b(1, serialize([s(1, "type"), b(2, serialize([s(4, "free")]))]))]);
   const body = serialize([b(1, serialize([b(3, attributes)]))]);
@@ -1674,7 +1741,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
 }
 
 check("Spotify desktop mode follows User-Agent and unlocks playback only on mobile", () => {
-  const plugin = read("loon/spotify/spotify-premium.plugin");
+  const plugin = read("loon/spotify/spotify-enhance.plugin");
   assert.ok(plugin.includes("desktop = select,auto,ios,macos"));
   assert.ok(plugin.includes("unlock_playback = select,auto,true,false"));
 

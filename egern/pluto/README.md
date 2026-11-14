@@ -1,7 +1,7 @@
 # Pluto TV — Egern 模块
 
-- Egern：`egern/pluto/pluto-adfree.yaml` + `js/pluto_adfree.js`
-- Loon：`loon/pluto/pluto-adfree.plugin`
+- Egern：`egern/pluto/pluto-clean.yaml` + `js/pluto_adfree.js`
+- Loon：`loon/pluto/pluto-clean.plugin`
 
 去广告 + 字幕翻译。去广告的做法是让 stitcher 不把广告缝进视频，而不是去拦广告素材；
 字幕翻译在播放器请求外挂 WebVTT 分片时进行，默认英文原句在上、中文翻译在下。

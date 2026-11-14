@@ -1,7 +1,7 @@
-# Spotify — Egern 模块
+# Spotify Enhance — Egern 模块
 
-- Egern：`egern/spotify/spotify-premium.yaml` + `js/spotify.js` + `js/spotify.feed.js` + `js/spotify_lyrics.js`
-- Loon：`loon/spotify/spotify-premium.plugin`
+- Egern：`egern/spotify/spotify-enhance.yaml` + `js/spotify.js` + `js/spotify.feed.js` + `js/spotify_lyrics.js`
+- Loon：`loon/spotify/spotify-enhance.plugin`
 
 功能：
 

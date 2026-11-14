@@ -19,8 +19,12 @@
   `color-lyrics`；
 - 歌词：官方有歌词时清掉免费号的额度限制；官方没有歌词时查第三方歌词源并合成
   JSON / protobuf 响应；曲名里的影视剧名、节目名等装饰括号会先去掉再查一次；
-- 歌词卡：滚动页缺少歌词 section 时，服务端先查歌词并写入缓存，确认有歌词才补卡，
-  查不到或超时不补，避免客户端先显示空卡。
+  **官方请求与第三方查询同时发出**（`LYRICS_PARALLEL=false` 可退回串行）：
+  官方 200 有歌词时用官方结果，404 时第三方结果往往已经就绪，耗时接近两者中
+  较慢的那个；官方曾命中过歌词的曲目会跳过并行查询，避免每次白跑一轮；
+- 歌词卡：滚动页缺少歌词 section 时，服务端先等歌词查询（最多 4.5 秒）再决定：
+  查到歌词就补卡且内容就绪，明确查不到就不补（不显示空卡），超时才乐观补卡，
+  内容随后由 `color-lyrics` 填充；确认没歌词的曲目 5 分钟内不再补空卡。
 
 客户端模块只做 URL 改写，**不加载任何脚本**；第三方接口请求、歌词解析、缓存和
 响应合成全部在服务端完成。
@@ -156,6 +160,7 @@ docker run --rm -p 8787:8787 \
 | `LYRICS_SOURCE` | lrclib | `lrclib` / `musixmatch` / `netease` / `qq`；`auto` 依次尝试，也可用逗号组合，如 `lrclib,netease` |
 | `LYRICS_TIMEOUT_MS` | 5000 | 一次歌词解析（元数据 + 所有歌词源）的总超时 |
 | `LYRICS_CACHE_TTL` | 21600 | 命中歌词的缓存秒数；查不到 / 超时不缓存，下次请求会重试 |
+| `LYRICS_PARALLEL` | true | 官方 `color-lyrics` 请求与第三方查询并行发出；设 `false` 回到「先等官方、404 再查」 |
 | `MOCK_PREFIX` | 空 | 可选路径前缀，如 `/change-me`；设置后模块地址要带上 |
 | `HOST` | 127.0.0.1 | 仅本机 Node 服务 |
 | `PORT` | 8787 | 仅本机 Node 服务 |
@@ -191,7 +196,7 @@ Access、WAF Rate Limiting，或在反向代理上加 Basic Auth / IP 白名单�
 | `/music/context-resolve/...` | 补 `has_lyrics` 兜底 |
 | `/music/connect-state/...` | 补 `has_lyrics` 兜底 |
 | `/music/metadata/4/track/...` | 补 Track 的 `has_lyrics` |
-| `/music/color-lyrics/v{N}/track/...` | 清歌词额度限制；官方没歌词时合成第三方歌词 |
+| `/music/color-lyrics/v{N}/track/...` | 官方请求与第三方查询并行；清歌词额度限制，官方没歌词时复用并行结果合成第三方歌词 |
 | `/music/casita/v{N}/home...` | 删除首页里的广告 / 赞助区块 |
 | `/music/browsita/v{N}/browse...` | 隐藏搜索页的赞助区块 |
 | `/music/scrollsita/v{N}/scroll/{uri}` | 隐藏滚动页的广告区块；查到歌词时才补歌词 section，并预热歌词缓存 |
@@ -212,7 +217,8 @@ curl -s http://127.0.0.1:8787/health | jq
 已处理；`none` 表示这次响应没匹配到广告结构，已原样返回。Worker 日志 / 本机访问
 日志会显示 `ads=...`，同样不会打印请求体或 `Authorization`。`/health` 里的
 `unlockPlayback: "auto"` 表示移动端开启、桌面端关闭；显式设置 `UNLOCK_PLAYBACK`
-后显示实际布尔值。`options.lyrics` 会显示歌词开关、来源、超时和缓存时间。
+后显示实际布尔值。`options.lyrics` 会显示歌词开关、来源、超时、缓存时间和
+`parallel`（官方请求与第三方查询是否并行）。
 
 访问日志里的 `499` 是客户端主动取消（切歌、关闭页面时 Spotify 会取消在途的
 metadata / connect-state 请求），不是服务端错误；`500` 才需要看上一行的
@@ -260,7 +266,8 @@ npm run check
 `test/patcher.test.js` 用合成 protobuf 验证 Premium/广告字段、`has_lyrics`、
 etag 清除；`test/handler.test.js` 用假的 `fetch` 验证路由、请求头、响应头和
 `MOCK_PREFIX`；`test/lyrics.test.js` 验证官方歌词清 restriction、404 时合成
-JSON / protobuf 歌词以及开关行为。全部测试都不会访问真实 Spotify 或第三方歌词源。
+JSON / protobuf 歌词、官方与第三方并行查询（`LYRICS_PARALLEL`）、滚动页补卡与
+空卡兜底以及开关行为。全部测试都不会访问真实 Spotify 或第三方歌词源。
 
 ## 部署后怎么确认生效
 
@@ -290,6 +297,9 @@ JSON / protobuf 歌词以及开关行为。全部测试都不会访问真实 Spo
   bootstrap 不等于真的拿到 Premium 音频密钥。
 - 歌词补全会把曲目 ID 发给 `open.spotify.com/oembed`，再把曲名 / 歌手发给
   `LYRICS_SOURCE` 指向的第三方歌词源；介意的话设 `LYRICS_ENABLED=false`。
+  并行开启时，官方**有**歌词的曲目也会先跑一轮第三方查询（结果丢弃），
+  官方曾命中过后会自动跳过；不想多这些请求就设 `LYRICS_PARALLEL=false`
+  退回「先等官方、404 再查」。
 - 第三方歌词源可能被网络环境或 Cloudflare Worker 出口限制挡住，查不到时服务端
   原样返回官方的「暂无歌词」，不影响播放。
 - 首次生效需要让 App 重新拉 bootstrap；客户端本地有缓存，重启 App 或切换网络

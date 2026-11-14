@@ -3,10 +3,10 @@
   const res = (typeof $response !== "undefined" && $response) || null;
   const url = (res && res.url) || req.url || "";
 
-  // 当前曲目 / 下一首的预取目标。connect-state 每次轮询都会走到这里：
-  // 换歌后的第一次先补当前曲目，之后的下一次轮询再补 next_tracks，避免在同一次
-  // 响应里连续等两次。快速切歌时 id 变了就会重新选目标，旧结果只会写进旧曲目的
-  // 缓存，不会污染当前曲目。
+  // 预取目标。优先级：color-lyrics 请求阶段登记的曲目（官方请求正在飞行，这次
+  // 轮询与它并行查第三方歌词）> 换歌后的当前曲目 > 下一首。connect-state 每次
+  // 轮询只挑一个目标，避免在响应里连续等两次。快速切歌时 id 变了就会重新选
+  // 目标，旧结果只会写进旧曲目的缓存，不会污染当前曲目。
   function prefetchTarget() {
     const store = typeof $persistentStore !== "undefined" && $persistentStore ? $persistentStore : null;
     if (!store) return null;
@@ -16,12 +16,8 @@
       return value && Number(value.at) && Date.now() - Number(value.at) < ttl ? value : null;
     };
     try {
-      const queue = JSON.parse(store.read("spotify.queue") || "null");
-      if (!queue || !queue.current) return null;
-      const current = queue.current;
-      const next = Array.isArray(queue.next) ? queue.next[0] || "" : "";
-      const lyrics = JSON.parse(store.read("spotify.lyrics.cache") || "{}");
       const now = Date.now();
+      const lyrics = JSON.parse(store.read("spotify.lyrics.cache") || "{}");
       const cached = (id) => {
         const suffix = "|" + id;
         for (const key of Object.keys(lyrics || {})) {
@@ -32,6 +28,24 @@
         }
         return false;
       };
+
+      // color-lyrics 请求阶段登记的「待预取」优先：官方歌词请求还在飞行时，这次
+      // connect-state 轮询就并行查第三方歌词，404 响应回来时缓存可能已经写好。
+      // 这里不等待查询结果，响应阶段读不到缓存时仍会照常自己查，不会拖慢歌词页。
+      const pendingRaw = store.read("spotify.lyrics.pending");
+      const pending = pendingRaw ? JSON.parse(pendingRaw) : null;
+      const active = marker("spotify.lyrics.inflight", 8000);
+      if (pending && pending.id && now - Number(pending.at) < 10000 &&
+          !cached(pending.id) && (!active || active.id !== pending.id)) {
+        store.write("", "spotify.lyrics.pending");
+        store.write(JSON.stringify({ id: pending.id, at: Date.now() }), "spotify.prefetch.last");
+        return { id: pending.id, wait: 1000 };
+      }
+
+      const queue = JSON.parse(store.read("spotify.queue") || "null");
+      if (!queue || !queue.current) return null;
+      const current = queue.current;
+      const next = Array.isArray(queue.next) ? queue.next[0] || "" : "";
       const lastRaw = store.read("spotify.prefetch.last");
       const last = lastRaw ? JSON.parse(lastRaw) : null;
       const recent = last && Number(last.at) && now - Number(last.at) < 1500;

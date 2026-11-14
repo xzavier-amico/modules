@@ -88,7 +88,7 @@ const TARGETS = [
     module: "spotify",
     file: "spotify.js",
     binary: true,
-    title: "Spotify Premium — bootstrap / UCS / 元数据 / 远程配置 / 账号属性",
+    title: "Spotify Enhance — bootstrap / UCS / 元数据 / 远程配置 / 账号属性",
     parts: [
       ...SP_CORE,
       "premium/rules.js",
@@ -105,7 +105,7 @@ const TARGETS = [
     module: "spotify",
     file: "spotify.feed.js",
     binary: true,
-    title: "Spotify Premium — 信息流广告过滤",
+    title: "Spotify Enhance — 信息流广告过滤",
     parts: [...SP_CORE, "feed/ads.js", "feed/lyrics-prefetch.js", "lyrics.js", "feed/lyrics.js", "feed/entry.js"],
   },
   {
@@ -130,21 +130,21 @@ const TARGETS = [
   {
     module: "bilibili",
     file: "bilibili_clean.js",
-    title: "BiliBili Clean — JSON 响应（首页 / 搜索 / 详情 / 我的）",
+    title: "BiliBili Enhance — JSON 响应（首页 / 搜索 / 详情 / 我的）",
     standalone: "bilibili_clean.js",
   },
   {
     module: "bilibili",
     file: "bilibili_quality.js",
     binary: true,
-    title: "BiliBili Clean — 播放请求画质（REST + gRPC）",
+    title: "BiliBili Enhance — 播放请求画质（REST + gRPC）",
     standalone: "bilibili_quality.js",
   },
   {
     module: "bilibili",
     file: "bilibili_grpc.js",
     binary: true,
-    title: "BiliBili Clean — gRPC 响应（详情 / 评论 / 动态）",
+    title: "BiliBili Enhance — gRPC 响应（详情 / 评论 / 动态）",
     head: "grpc/head.js",
     tail: "grpc/tail.js",
     parts: [["proto", "wire.js"], ["proto", "grpc.js"], "grpc/rules.js", "grpc/entry.js"],
@@ -152,7 +152,7 @@ const TARGETS = [
   {
     module: "delivery",
     file: "delivery_clean.js",
-    title: "Delivery Ad-Free — 美团 / 京东 / 饿了么 JSON 清理",
+    title: "Delivery Clean — 美团 / 京东 / 饿了么 JSON 清理",
     standalone: "delivery_clean.js",
   },
   {

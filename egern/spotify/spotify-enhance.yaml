@@ -1,5 +1,5 @@
 #=======================================================================================
-# Spotify Premium — Egern 模块
+# Spotify Enhance — Egern 模块
 #
 # 去广告、解锁 Premium 播放限制，并用第三方歌词补全 Now Playing 与歌词卡。
 #
@@ -13,10 +13,10 @@
 # 字段号按客户端版本维护；只改写目标字段，未知字段与字段顺序保持原样。
 #
 # 需要开启 MITM 并信任证书。首次生效需切换网络或重启 App，让客户端重新拉取 bootstrap。
-# 不要与旧的「Spotify AD」模块同时启用，两者会改写同一响应。
+# 不要与 Spotify Mock 同时启用，两者会改写同一响应。
 #=======================================================================================
 
-name: "Spotify Premium"
+name: "Spotify Enhance"
 description: "去广告、解锁 Premium 播放限制，并用第三方歌词补全 Now Playing 与歌词卡。只改写目标 protobuf 字段，未知字段原样保留。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"
@@ -121,7 +121,7 @@ scriptings:
   - http_request:
       name: "spotify.meta.req"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/extended-metadata\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261114-12"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261114-14"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -129,9 +129,9 @@ scriptings:
 
   # 改写账号状态与远程配置。
   - http_response:
-      name: "spotify.premium"
+      name: "spotify.enhance"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:bootstrap|user-customization-service)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261114-12"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261114-14"
       body_required: true
       binary_body: true
       max_size: 41943040
@@ -141,7 +141,7 @@ scriptings:
   - http_response:
       name: "spotify.meta"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:extended-metadata|context-resolve|connect-state|metadata\\/4\\/track)\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261114-12"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261114-14"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -151,7 +151,7 @@ scriptings:
   - http_response:
       name: "spotify.config"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:remote-config-resolver|nebula)\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261114-12"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261114-14"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -163,7 +163,7 @@ scriptings:
   - http_response:
       name: "spotify.feed"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:casita\\/v\\d+\\/home|browsita\\/v\\d+\\/browse|scrollsita\\/v\\d+\\/scroll)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.feed.js?v=20261114-11"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.feed.js?v=20261114-14"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -173,7 +173,7 @@ scriptings:
   - http_request:
       name: "spotify.lyrics.req"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261114-13"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261114-14"
       binary_body: true
       max_size: 2097152
       timeout: 10
@@ -186,7 +186,7 @@ scriptings:
   - http_response:
       name: "spotify.lyrics"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261114-13"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261114-14"
       body_required: true
       binary_body: true
       max_size: 2097152

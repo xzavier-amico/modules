@@ -1,4 +1,4 @@
-// BiliBili Clean — gRPC 部分（详情页 / 评论区 / 播放器）。
+// BiliBili Enhance — gRPC 部分（详情页 / 评论区 / 播放器）。
 //
 // B 站 App 的视频详情、评论、播放器状态走的是 gRPC（protobuf over HTTP/2），
 // 不是 REST，所以 bilibili_clean.js 碰不到这些接口。这里按字段号就地删，

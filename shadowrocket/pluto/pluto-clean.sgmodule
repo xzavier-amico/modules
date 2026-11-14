@@ -1,4 +1,4 @@
-#!name=Pluto TV Ad-Free
+#!name=Pluto TV Clean
 #!desc=去广告：boot 的 serverSideAds 改成 false，再按 clip 分组删掉 HLS 点播清单里的广告段。字幕翻译：翻译外挂 WebVTT，默认英文原句在上、中文翻译在下。
 #!author=xzavier-amico
 #!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/pluto.png
@@ -9,7 +9,7 @@
 # pluto.tv / plutotv.net 指向你自己的美国策略组。
 
 [Script]
-pluto.adfree = type=http-request,pattern=^https?:\/\/boot\.pluto\.tv\/v4\/start,requires-body=1,max-size=1048576,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/pluto/js/pluto_adfree.js?v=20261114-1,argument="{"block_ads":{{{去除广告}}},"web":{{{支持网页版}}}}"
+pluto.clean = type=http-request,pattern=^https?:\/\/boot\.pluto\.tv\/v4\/start,requires-body=1,max-size=1048576,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/pluto/js/pluto_adfree.js?v=20261114-1,argument="{"block_ads":{{{去除广告}}},"web":{{{支持网页版}}}}"
 # 字幕：主清单里把英文字幕轨改名，外挂 WebVTT 分片翻译成双语。
 pluto.manifest = type=http-response,pattern=^https?:\/\/[^\/]*(?:pluto\.tv|plutotv\.net)\/[^?]*\/master\.m3u8,requires-body=1,max-size=1048576,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/pluto/js/pluto_manifest.js?v=20261114-1,argument="{"block_ads":{{{去除广告}}},"caption_lang":"{{{字幕翻译}}}","bilingual":{{{双语字幕}}},"translate_key":"{{{翻译密钥}}}","translate_provider":"{{{翻译接口}}}","web":{{{支持网页版}}}}"
 pluto.subtitle = type=http-response,pattern=^https?:\/\/[^\/]*(?:pluto\.tv|plutotv\.net)\/[^?]*\.vtt(?:\?|$),requires-body=1,max-size=2097152,timeout=60,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/pluto/js/pluto_subtitle.js?v=20261114-1,argument="{"block_ads":{{{去除广告}}},"caption_lang":"{{{字幕翻译}}}","bilingual":{{{双语字幕}}},"translate_key":"{{{翻译密钥}}}","translate_provider":"{{{翻译接口}}}","web":{{{支持网页版}}}}"

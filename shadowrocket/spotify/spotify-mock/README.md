@@ -24,10 +24,10 @@ MITM 配置。
 请求的 User-Agent 自动识别桌面客户端并使用只写展示 / 广告属性的桌面规则，同时
 按桌面格式合成 JSON 歌词。自动识别不对时，在服务端改 `DESKTOP` 环境变量。
 
-## 和 Spotify Premium 二选一
+## 和 Spotify Enhance 二选一
 
-`shadowrocket/spotify/spotify-premium.sgmodule` 在客户端改写同一批响应。两个模块
-同时启用会互相覆盖。用自建服务就只开这个；不想部署服务就用原来的 Spotify Premium。
+`shadowrocket/spotify/spotify-enhance.sgmodule` 在客户端改写同一批响应。两个模块
+同时启用会互相覆盖。用自建服务就只开这个；不想部署服务就用原来的 Spotify Enhance。
 
 ## 安装
 

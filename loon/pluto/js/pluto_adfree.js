@@ -4,7 +4,7 @@
 //=======================================================================================
 
 
-// Pluto TV Ad-Free — boot 请求参数。
+// Pluto TV Clean — boot 请求参数。
 //
 // Pluto 的广告是服务端拼接（SSAI），不是客户端单独请求广告素材：
 // 直播和点播都走自家 stitcher（cfd-v4-service-channel-stitcher-*.prd.pluto.tv），

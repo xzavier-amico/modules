@@ -1,4 +1,4 @@
-#!name=CN Video Ad-Free
+#!name=CN Video Clean
 #!desc=优酷 / 爱奇艺 / 腾讯视频：拒绝广告、广告 SDK 与遥测域名。纯规则，不需要 MITM。
 #!author=xzavier-amico
 #!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/cnvideo.png

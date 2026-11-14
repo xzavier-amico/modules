@@ -1,4 +1,4 @@
-#!name=Delivery Ad-Free
+#!name=Delivery Clean
 #!desc=京东 / 美团 / 饿了么：拒绝广告域名，并用 MITM 把开屏、广告板、促销接口改写成空响应。
 #!author=xzavier-amico
 #!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/delivery.png

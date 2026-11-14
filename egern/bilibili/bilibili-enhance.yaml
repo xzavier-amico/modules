@@ -1,5 +1,5 @@
 #=======================================================================================
-# BiliBili Clean — Egern 模块
+# BiliBili Enhance — Egern 模块
 #
 # 精简版：去广告、去会员推广、去遥测、自动最高画质。
 #
@@ -31,7 +31,7 @@
 # 同样改 qn / fourk。服务端按账号权限返回实际可用的最高档。
 #=======================================================================================
 
-name: "BiliBili Clean"
+name: "BiliBili Enhance"
 description: "去广告、去会员推广、去遥测，播放请求自动要最高画质。JSON 与 gRPC 都改，不碰视频流。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"
@@ -103,7 +103,7 @@ url_rewrites:
 
 scriptings:
   - http_response:
-      name: "bilibili.clean"
+      name: "bilibili.enhance"
       match: "^https?:\\/\\/(?:app\\.bilibili\\.com|api\\.bilibili\\.com|api\\.live\\.bilibili\\.com)\\/(?:x\\/v2\\/splash\\/|x\\/v2\\/feed\\/index|x\\/v2\\/search\\/square|x\\/web-interface\\/(?:view|archive\\/related|wbi\\/(?:index\\/top\\/feed\\/rcmd|search\\/(?:type|square)|view\\/detail))|x\\/polymer\\/web-dynamic\\/v1\\/feed\\/all|x\\/vip\\/ads\\/materials|pgc\\/view\\/(?:v2\\/app|web)\\/season|pgc\\/page\\/|pgc\\/activity\\/deliver\\/material\\/receive|x\\/resource\\/show\\/tab|x\\/v2\\/account\\/mine|xlive\\/(?:app-interface\\/v2\\/(?:index\\/feed|room\\/recList)|(?:app|web)-room\\/v1\\/index\\/getInfoByRoom|web-interface\\/v1\\/index\\/getList))"
       script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_clean.js?v=20261114-1"
       body_required: true

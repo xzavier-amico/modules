@@ -20,6 +20,9 @@ DESKTOP=auto
 # LYRICS_TIMEOUT_MS=5000
 # 命中缓存的有效期（秒），默认 21600；查不到 / 超时不缓存
 # LYRICS_CACHE_TTL=21600
+# 官方 color-lyrics 请求与第三方查询并行发出，默认 true；
+# 设 false 回到「先等官方、404 再查」的串行流程
+# LYRICS_PARALLEL=true
 
 # 可选：给 mock 服务加一段隐蔽路径。设置后模块里的 mock_base 也要同步：
 #   MOCK_PREFIX=/change-me  ->  https://host/change-me/music

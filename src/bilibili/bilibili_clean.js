@@ -1,4 +1,4 @@
-// BiliBili Clean — Loon / Egern.
+// BiliBili Enhance — Loon / Egern.
 //
 // 只做四件事：去广告、去会员推广、去遥测（遥测在模块规则里 REJECT）、自动最高画质
 // （画质在 bilibili_quality.js 里改请求）。

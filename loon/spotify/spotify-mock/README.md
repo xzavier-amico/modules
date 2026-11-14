@@ -26,11 +26,11 @@ MITM 配置。
 
 > URL 改写使用 Loon 3.5.1 (978) 起的新 Rewrite 语法；旧版 Loon 请先升级。
 
-## 和 Spotify Premium 二选一
+## 和 Spotify Enhance 二选一
 
-上一级的 `loon/spotify/spotify-premium.plugin` 在客户端改写同一批响应。两个模块
+上一级的 `loon/spotify/spotify-enhance.plugin` 在客户端改写同一批响应。两个模块
 同时启用会互相覆盖，最后谁生效取决于请求顺序。用自建服务就只开这个；不想部署
-服务就用原来的 Spotify Premium。
+服务就用原来的 Spotify Enhance。
 
 ## 安装
 

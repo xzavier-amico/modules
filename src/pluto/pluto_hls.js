@@ -1,4 +1,4 @@
-// Pluto TV Ad-Free — HLS 点播清单过滤。
+// Pluto TV Clean — HLS 点播清单过滤。
 //
 // 实测一份带广告的清单（美国直播流，广告时段）长这样：
 //

@@ -1,7 +1,7 @@
-# Delivery Ad-Free — Loon 插件
+# Delivery Clean — Loon 插件
 
-- Loon：`loon/delivery/delivery-adfree.plugin`
-- Egern：`egern/delivery/delivery-adfree.yaml`
+- Loon：`loon/delivery/delivery-clean.plugin`
+- Egern：`egern/delivery/delivery-clean.yaml`
 
 京东 / 美团 / 饿了么：域名层拒绝广告服务，MITM 层改写独立广告接口，并保守过滤信息流里的广告条目。
 
