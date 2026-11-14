@@ -992,8 +992,9 @@ check("Spotify auto queries the three sources concurrently, skips Musixmatch and
   vm.runInContext(read("loon/spotify/js/spotify_lyrics.js"), context);
   assert.equal(done, undefined);
   const providers = requests.filter((url) => !url.includes("oembed") && !url.includes("/embed/"));
-  assert.equal(providers.length, 3, "all three sources are requested before any resolves");
+  assert.equal(providers.length, 4, "LRCLIB get + search and the other two sources are all requested up front");
   assert.ok(providers.some((url) => url.includes("lrclib.net/api/get")));
+  assert.ok(providers.some((url) => url.includes("lrclib.net/api/search")));
   assert.ok(providers.some((url) => url.includes("music.163.com/api/search")));
   assert.ok(providers.some((url) => url.includes("client_search_cp")));
   assert.ok(!requests.some((url) => url.includes("musixmatch")), "auto must skip Spotify's own upstream");
@@ -1015,6 +1016,73 @@ check("Spotify auto queries the three sources concurrently, skips Musixmatch and
   const [, lrclib] = reply("lrclib.net/api/get");
   lrclib(null, { status: 200 }, JSON.stringify({ trackName: "Song", artistName: "Artist", syncedLyrics: "[00:01.00]Late LRCLIB" }));
   assert.equal(JSON.parse(done.body).lyrics.provider, "NetEase", "late results must not overwrite the first winner");
+});
+
+check("Spotify LRCLIB sends get and search for both titles up front", () => {
+  const id = "0VjIjW4GlUZAMYd2vXMi3b";
+  const title = "晚秋（电影《晚秋》主题曲）";
+  const store = {
+    read: (key) => key === "spotify.track.meta"
+      ? JSON.stringify({ [id]: [title, "毛宁", 200000, Date.now()] })
+      : null,
+    write: () => true,
+  };
+  const requests = [];
+  const pending = new Map();
+  let done;
+  const context = vm.createContext({ TextEncoder, TextDecoder, Uint8Array, ArrayBuffer,
+    $request: { url: "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json" },
+    $response: { status: 404, body: "" }, $argument: ["lrclib", true], $persistentStore: store,
+    setTimeout: () => 1, clearTimeout() {}, $done: (value) => { done = value; },
+    $httpClient: { get: (request, callback) => {
+      requests.push(request.url);
+      pending.set(request.url, callback);
+    } },
+  });
+  vm.runInContext(read("loon/spotify/js/spotify_lyrics.js"), context);
+  assert.equal(requests.length, 4, "get and search for both titles are sent before any response");
+  assert.ok(requests[0].includes("/api/get?") && requests[0].includes(encodeURIComponent(title)));
+  assert.ok(requests[1].includes("/api/search?") && requests[1].includes(encodeURIComponent(title)));
+  assert.ok(requests[2].includes("/api/get?") && requests[2].includes(encodeURIComponent("晚秋") + "&"));
+  assert.ok(requests[3].includes("/api/search?") && requests[3].includes(encodeURIComponent("晚秋") + "&"));
+  const [, search] = [...pending.entries()].find(([url]) =>
+    url.includes("/api/search?") && url.includes(encodeURIComponent("晚秋") + "&"));
+  search(null, { status: 200 }, JSON.stringify([
+    { trackName: "晚秋", artistName: "毛宁", duration: 200000, syncedLyrics: "[00:01.00]秋" },
+  ]));
+  assert.ok(done);
+  assert.equal(JSON.parse(done.body).lyrics.lines[0].words, "秋");
+});
+
+check("Spotify NetEase requests candidate lyrics in parallel", () => {
+  const id = "0VjIjW4GlUZAMYd2vXMi3b";
+  const store = {
+    read: (key) => key === "spotify.track.meta"
+      ? JSON.stringify({ [id]: ["Song", "Artist", 210000, Date.now()] })
+      : null,
+    write: () => true,
+  };
+  const lyricRequests = [];
+  let done;
+  const context = vm.createContext({ TextEncoder, TextDecoder, Uint8Array, ArrayBuffer,
+    $request: { url: "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json" },
+    $response: { status: 404, body: "" }, $argument: ["netease", true], $persistentStore: store,
+    setTimeout: () => 1, clearTimeout() {}, $done: (value) => { done = value; },
+    $httpClient: { get: (request, callback) => {
+      if (request.url.includes("music.163.com/api/search")) {
+        callback(null, { status: 200 }, JSON.stringify({ result: { songs: [1, 2, 3].map((n) => ({
+          id: n, name: "Song", artists: [{ id: String(n), name: "Artist" }], duration: 210000,
+        })) } }));
+        return;
+      }
+      if (request.url.includes("api/song/lyric")) lyricRequests.push(callback);
+    } },
+  });
+  vm.runInContext(read("loon/spotify/js/spotify_lyrics.js"), context);
+  assert.equal(lyricRequests.length, 3, "all candidate lyric requests are issued before any resolves");
+  lyricRequests[2](null, { status: 200 }, JSON.stringify({ lrc: { lyric: "[00:01.00]Third" } }));
+  assert.ok(done);
+  assert.equal(JSON.parse(done.body).lyrics.lines[0].words, "Third");
 });
 
 for (const platform of ["loon", "egern", "shadowrocket"]) {
@@ -1355,7 +1423,7 @@ check("Loon uses normal arguments and retains legacy mode compatibility", () => 
   const scriptRules = plugin.split("\n").filter((line) => line.includes('then script("'));
   assert.equal(scriptRules.length, 6);
   for (const line of scriptRules) {
-    const version = line.includes('tag="spotify.lyrics"') ? "20261114-4" : line.includes("spotify.feed") ? "20261114-5" : "20261114-5";
+    const version = line.includes('tag="spotify.lyrics"') ? "20261114-6" : line.includes("spotify.feed") ? "20261114-5" : "20261114-5";
     assert.ok(line.includes("?v=" + version));
     const tuple = /then script\("[^"]+", (\{.*\})\) with/.exec(line)[1];
     assert.match(tuple, /^\{\$\{\w+\}(?:, \$\{\w+\})*\}$/, "Loon tuple must contain only declared argument references");

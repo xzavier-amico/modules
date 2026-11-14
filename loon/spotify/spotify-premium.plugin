@@ -44,7 +44,7 @@ response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?:
 response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:casita\/v\d+\/home|browsita\/v\d+\/browse|scrollsita\/v\d+\/scroll)/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify.feed.js?v=20261114-5", {${spoof_premium}, ${block_ads}, ${unlock_playback}, ${enable_lyrics}, ${desktop}, ${lyrics_source}, ${prefetch}}) with requires_body=true, binary_body_mode=true, tag="spotify.feed", timeout=30
 # 官方有歌词时原样放行，没有时用第三方歌词补全。
 # 不启用 requires_body：官方 404 时没有 body，脚本仍需执行。
-response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/color-lyrics\/v\d\/track\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_lyrics.js?v=20261114-4", {${lyrics_source}, ${enable_lyrics}, ${desktop}}) with enable=${enable_lyrics}, binary_body_mode=true, tag="spotify.lyrics", timeout=30
+response if ${url} ~= /^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/color-lyrics\/v\d\/track\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_lyrics.js?v=20261114-6", {${lyrics_source}, ${enable_lyrics}, ${desktop}}) with enable=${enable_lyrics}, binary_body_mode=true, tag="spotify.lyrics", timeout=30
 
 [MitM]
 hostname = *-spclient.spotify.com, spclient.wg.spotify.com

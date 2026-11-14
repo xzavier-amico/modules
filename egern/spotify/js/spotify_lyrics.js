@@ -791,53 +791,71 @@ export default async function (ctx) {
     cb(null);
   }
 
-  // LRCLIB：/api/get 只认精确的曲名+歌手，命中时可能只有纯文本没有时间轴，
-  // 所以拿它的时长当锚点，再去 /api/search 挑一版时长接近、带时间轴的。
+  // LRCLIB：/api/get 与 /api/search 都会带回歌词。完整曲名和去掉装饰括号后的
+  // 曲名各发 get + search，四路并行；首个通过校验的同步歌词立即返回，只有全都
+  // 没命中时才用歌名再搜一次（歌手写法不一致的兜底）。
   function lookupLrclib(title, artist, duration, cb) {
     const cleanTitle = queryTitle(title);
-    const query = (name) => "track_name=" + encodeURIComponent(name) + (artist ? "&artist_name=" + encodeURIComponent(artist) : "");
-    const finish = (list, record, anchor) => {
-      const picked = pickRecord(list, title, anchor, artist);
-      cb(picked ? withProvider(picked, "LRCLIB") : record && hasAnyLyrics(record) ? withProvider(record, "LRCLIB") : null);
-    };
-    const accept = (record, name) => {
-      if (!record || !matchesSong(title, artist, duration, record.trackName, record.artistName, Number(record.duration))) record = null;
-      let anchor = duration;
-      if (!Number.isFinite(anchor) && record && "object" == typeof record && Number.isFinite(Number(record.duration))) {
-        anchor = Number(record.duration);
+    const names = cleanTitle && cleanTitle !== title ? [title, cleanTitle] : [title];
+    const lists = [];
+    const records = [];
+    let pending = names.length * 2;
+    let done = false;
+
+    const all = () => lists.concat(records);
+    const syncedPick = () => {
+      const synced = [];
+      for (const list of lists) {
+        if (!Array.isArray(list)) continue;
+        for (const item of list) if (isSynced(item)) synced.push(item);
       }
-      if (record && isSynced(record)) {
-        cb(withProvider(record, "LRCLIB"));
+      for (const record of records) if (isSynced(record)) synced.push(record);
+      return pickRecord(synced, title, duration, artist);
+    };
+
+    const finish = () => {
+      if (done || pending) return;
+      done = true;
+      const picked = pickRecord(all(), title, duration, artist);
+      if (picked) {
+        cb(withProvider(picked, "LRCLIB"));
         return;
       }
-
-      httpGetJson("https://lrclib.net/api/search?" + query(name), (list) => {
-        if (pickRecord(list, title, anchor, artist)) {
-          finish(list, record, anchor);
-          return;
-        }
-        // 歌手写法不一致（feat. / 多歌手 / 翻译名）时，用歌名再搜一次；
-        // pickRecord 仍会按 artist 过滤，不会把别人的同名歌当成结果。
-        if (artist) {
-          httpGetJson("https://lrclib.net/api/search?track_name=" + encodeURIComponent(name), (fallback) => finish(fallback, record, anchor));
-          return;
-        }
-        finish(list, record, anchor);
+      // 歌手写法不一致（feat. / 多歌手 / 翻译名）时，用歌名再搜一次；
+      // pickRecord 仍会按 artist 过滤，不会把别人的同名歌当成结果。
+      if (!artist) {
+        cb(null);
+        return;
+      }
+      httpGetJson("https://lrclib.net/api/search?track_name=" + encodeURIComponent(names[names.length - 1]), (list) => {
+        const fallback = pickRecord(list, title, duration, artist);
+        cb(fallback ? withProvider(fallback, "LRCLIB") : null);
       });
     };
-    // 先按完整曲名查；没有结果时再按去掉 feat / remaster 后缀的曲名查一次，
-    // 与 EeveeSpotify 的 strippedTrackTitle 思路一致。
-    httpGetJson("https://lrclib.net/api/get?" + query(title), (record) => {
-      if (record && matchesSong(title, artist, duration, record.trackName, record.artistName, Number(record.duration))) {
-        accept(record, title);
+
+    const settle = () => {
+      pending -= 1;
+      if (done) return;
+      const hit = syncedPick();
+      if (hit) {
+        done = true;
+        cb(withProvider(hit, "LRCLIB"));
         return;
       }
-      if (cleanTitle !== title) {
-        httpGetJson("https://lrclib.net/api/get?" + query(cleanTitle), (fallback) => accept(fallback, cleanTitle));
-        return;
-      }
-      accept(null, title);
-    });
+      finish();
+    };
+
+    for (const name of names) {
+      const query = "track_name=" + encodeURIComponent(name) + (artist ? "&artist_name=" + encodeURIComponent(artist) : "");
+      httpGetJson("https://lrclib.net/api/get?" + query, (record) => {
+        if (record && "object" === typeof record) records.push(record);
+        settle();
+      });
+      httpGetJson("https://lrclib.net/api/search?" + query, (list) => {
+        if (Array.isArray(list)) lists.push(list);
+        settle();
+      });
+    }
   }
 
   // 网易云：搜索接口不需要 token，中文曲库覆盖最好。
@@ -874,22 +892,27 @@ export default async function (ctx) {
           }
         }
       }
-      const resolve = (index) => {
-        if (index >= pending.length) { select(); return; }
-        const person = pending[index];
-        httpGetJson("https://music.163.com/api/artist/" + person.id, (details) => {
-          const verified = details && details.artist;
-          if (verified && String(verified.id) === String(person.id) && Array.isArray(songs)) {
-            for (const song of songs) {
-              for (const candidate of (song && Array.isArray(song.artists) ? song.artists : [])) {
-                if (candidate && candidate.id === person.id) candidate.alias = artistNames(candidate).concat(artistNames(verified));
+      const resolve = () => {
+        if (!pending.length) { select(); return; }
+        // 歌手详情请求并行发出，全部回来后再统一补 alias；旧实现一个个等，
+        // 最多 3 个歌手会串成 3 个 RTT。
+        let left = pending.length;
+        for (const person of pending) {
+          httpGetJson("https://music.163.com/api/artist/" + person.id, (details) => {
+            const verified = details && details.artist;
+            if (verified && String(verified.id) === String(person.id) && Array.isArray(songs)) {
+              for (const song of songs) {
+                for (const candidate of (song && Array.isArray(song.artists) ? song.artists : [])) {
+                  if (candidate && candidate.id === person.id) candidate.alias = artistNames(candidate).concat(artistNames(verified));
+                }
               }
             }
-          }
-          resolve(index + 1);
-        }, headers);
+            left -= 1;
+            if (!left) select();
+          }, headers);
+        }
       };
-      resolve(0);
+      resolve();
     }, headers);
   }
 
@@ -969,14 +992,6 @@ export default async function (ctx) {
 
   function isSynced(record) {
     return Boolean(record && "string" == typeof record.syncedLyrics && record.syncedLyrics.trim());
-  }
-
-  function hasAnyLyrics(record) {
-    return Boolean(
-      record &&
-        ((typeof record.syncedLyrics === "string" && record.syncedLyrics.trim()) ||
-          (typeof record.plainLyrics === "string" && record.plainLyrics.trim())),
-    );
   }
 
   function rankSongs(list, title, artist, duration, nameOf, artistOf, durationOf) {
@@ -1084,14 +1099,29 @@ export default async function (ctx) {
     return true;
   }
 
-  function tryCandidates(candidates, fetch, cb, index = 0) {
+  // 候选歌词请求并行发出（最多 3 个），首个拿到可解析歌词的胜出；全部没歌词
+  // 时返回 null。旧实现按排名一个个试，候选越多越慢。
+  function tryCandidates(candidates, fetch, cb, limit = 3) {
     if (settled) return;
-    if (index >= candidates.length) { cb(null); return; }
-    fetch(candidates[index], (record) => {
-      if (settled) return;
-      if (buildPayload(record)) cb(record);
-      else tryCandidates(candidates, fetch, cb, index + 1);
-    });
+    const picked = Array.isArray(candidates) ? candidates.slice(0, limit) : [];
+    if (!picked.length) { cb(null); return; }
+    let pending = picked.length;
+    let done = false;
+    for (const candidate of picked) {
+      fetch(candidate, (record) => {
+        if (settled || done) return;
+        if (buildPayload(record)) {
+          done = true;
+          cb(record);
+          return;
+        }
+        pending -= 1;
+        if (!pending) {
+          done = true;
+          cb(null);
+        }
+      });
+    }
   }
 
   // ---- 工具函数 ---------------------------------------------------------
