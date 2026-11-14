@@ -59,6 +59,28 @@
     return false;
   }
 
+  // 一次扫描多组 needle；任意命中即返回 true。大响应里比逐组扫快 len(needles) 倍。
+  function containsAnyAscii(b, s, e, needles) {
+    const last = e - 1;
+    for (let i = s; i <= last; i++) {
+      const c = b[i];
+      for (let k = 0; k < needles.length; k++) {
+        const needle = needles[k];
+        if (c !== needle[0]) continue;
+        if (i + needle.length > e) continue;
+        let hit = true;
+        for (let j = 1; j < needle.length; j++) {
+          if (b[i + j] !== needle[j]) {
+            hit = false;
+            break;
+          }
+        }
+        if (hit) return true;
+      }
+    }
+    return false;
+  }
+
   function ascii(b, s, e) {
     let out = "";
     for (let i = s; i < e; i++) {
@@ -149,6 +171,73 @@
     return null;
   }
 
+  // 用扫描找某个 varint 字段的值，不建完整字段列表。
+  // 找到字段号匹配且 wire=0 的就取值，否则返回 null。
+  function fieldVarintFast(b, s, e, no) {
+    try {
+      const sub = b.subarray(s, e);
+      const state = { i: 0 };
+      while (state.i < sub.length) {
+        const tag = wireReadCount(sub, state);
+        const fn = tag >>> 3;
+        const wire = tag & 7;
+        if (!fn) throw new Error("Invalid protobuf field");
+        if (wire === 0) {
+          if (fn === no) {
+            return Number(wireReadVarint(sub, state));
+          }
+          wireSkipVarint(sub, state);
+        } else if (wire === 2) {
+          const length = wireReadCount(sub, state);
+          if (length > sub.length - state.i) throw new Error("Truncated protobuf field");
+          state.i += length;
+        } else if (wire === 1) {
+          state.i += 8;
+        } else if (wire === 5) {
+          state.i += 4;
+        } else {
+          throw new Error("Unsupported protobuf wire type " + wire);
+        }
+        if (state.i > sub.length) throw new Error("Truncated protobuf field");
+      }
+    } catch (e) {
+      return null;
+    }
+    return null;
+  }
+
+  // 扫描判断某个字段号是否存在（不区分 wire type），不建字段列表。
+  function hasField(b, s, e, no) {
+    try {
+      const sub = b.subarray(s, e);
+      const state = { i: 0 };
+      while (state.i < sub.length) {
+        const tag = wireReadCount(sub, state);
+        const fn = tag >>> 3;
+        const wire = tag & 7;
+        if (!fn) throw new Error("Invalid protobuf field");
+        if (wire === 0) {
+          wireSkipVarint(sub, state);
+        } else if (wire === 2) {
+          const length = wireReadCount(sub, state);
+          if (length > sub.length - state.i) throw new Error("Truncated protobuf field");
+          state.i += length;
+        } else if (wire === 1) {
+          state.i += 8;
+        } else if (wire === 5) {
+          state.i += 4;
+        } else {
+          throw new Error("Unsupported protobuf wire type " + wire);
+        }
+        if (state.i > sub.length) throw new Error("Truncated protobuf field");
+        if (fn === no) return true;
+      }
+    } catch (e) {
+      return false;
+    }
+    return false;
+  }
+
   // 对 no 字段的每个 length-delimited 载荷调用 fn，fn 返回新字节或 null（不改）。
   function mapSub(msg, no, fn) {
     const fields = parseFields(msg, 0, msg.length);
@@ -182,6 +271,36 @@
       if (f.no === no && f.wt === 2 && !keep(msg.subarray(f.ds, f.de))) {
         changed = true;
         continue;
+      }
+      parts.push(msg.subarray(f.s, f.e));
+    }
+    return changed ? concat(parts) : null;
+  }
+
+  // 一次解析同时做 filter + map：keep 返回 false 的删掉，
+  // keep 返回 true 的再调 mapFn（可返回 null 表示不改）。
+  // 比分别调 filterRepeated + mapSub 少一次完整 parseFields。
+  function filterAndMap(msg, no, keep, mapFn) {
+    const fields = parseFields(msg, 0, msg.length);
+    if (!fields) return null;
+    const parts = [];
+    let changed = false;
+    for (let i = 0; i < fields.length; i++) {
+      const f = fields[i];
+      if (f.no === no && f.wt === 2) {
+        const sub = msg.subarray(f.ds, f.de);
+        if (!keep(sub)) {
+          changed = true;
+          continue;
+        }
+        if (mapFn) {
+          const next = mapFn(sub);
+          if (next && !same(next, sub)) {
+            parts.push(encodeField(no, 2, next));
+            changed = true;
+            continue;
+          }
+        }
       }
       parts.push(msg.subarray(f.s, f.e));
     }

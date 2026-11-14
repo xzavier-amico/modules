@@ -33,7 +33,7 @@ request if ${url} ~= /^https?:\/\/(?:api|app)\.bilibili\.com\/(?:x|pgc)\/.*playu
 # gRPC 的播放请求体里也有 qn，改完再放行。
 request if ${url} ~= /^https?:\/\/(?:app|grpc)\.bili(?:bili\.com|api\.net)\/bilibili\.(?:app\.playurl\.v1\.PlayURL|pgc\.gateway\.player\.v2\.PlayURL|app\.playerunite\.v1\.Player)\/(?:PlayView|PlayViewUnite)$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/js/bilibili_quality.js?v=20261114-1", {${auto_quality}, ${web}}) with requires_body=true, binary_body_mode=true, tag="BiliBili Enhance", timeout=10
 # 详情页 / 评论区 / 播放器走 gRPC（protobuf over HTTP/2），需要二进制 body。
-response if ${url} ~= /^https?:\/\/(?:grpc\.biliapi\.net|grpc\.bilibili\.com|app\.biliapi\.net|app\.bilibili\.com)\/bilibili\.(?:app\.(?:(?:view|viewunite)\.v1\.View|dynamic\.v2\.Dynamic)|main\.community\.reply\.v1\.Reply)\// then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/js/bilibili_grpc.js", {${block_ads}}) with requires_body=true, binary_body_mode=true, tag="BiliBili Enhance gRPC", timeout=20
+response if ${url} ~= /^https?:\/\/(?:grpc\.biliapi\.net|grpc\.bilibili\.com|app\.biliapi\.net|app\.bilibili\.com)\/bilibili\.(?:app\.(?:(?:view|viewunite)\.v1\.View|dynamic\.v2\.Dynamic)|main\.community\.reply\.v1\.Reply)\// then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/js/bilibili_grpc.js?v=20261114-1", {${block_ads}}) with requires_body=true, binary_body_mode=true, tag="BiliBili Enhance gRPC", timeout=20
 
 [MitM]
 hostname = app.bilibili.com, api.bilibili.com, api.live.bilibili.com, app.biliapi.net, api.biliapi.net, grpc.biliapi.net, grpc.bilibili.com

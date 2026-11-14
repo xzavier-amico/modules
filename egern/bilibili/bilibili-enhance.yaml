@@ -131,7 +131,7 @@ scriptings:
   - http_response:
       name: "bilibili.grpc"
       match: "^https?:\\/\\/(?:grpc\\.biliapi\\.net|grpc\\.bilibili\\.com|app\\.biliapi\\.net|app\\.bilibili\\.com)\\/bilibili\\.(?:app\\.(?:(?:view|viewunite)\\.v1\\.View|dynamic\\.v2\\.Dynamic)|main\\.community\\.reply\\.v1\\.Reply)\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_grpc.js"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_grpc.js?v=20261114-1"
       body_required: true
       binary_body: true
       max_size: 16777216
