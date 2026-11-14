@@ -339,13 +339,10 @@ function buildPatcher($argument) {
 
   // ------------------------------------------------------------ remote config
 
+  // 播放衔接（Crossfade / AutoMix / Gapless）不改写：这几项被强制打开并绕过
+  // 客户端播放设置时，上一首最后 1–2 秒就会和下一首重叠，听起来像「跳歌」。
+  // 这里保留客户端自己的选择，模块只负责解锁 Premium、去广告和歌词。
   const RULES = [
-    ["ios-feature-settings","crossfade_enabled",2,1,"","misc"],
-    ["ios-feature-settings","automix_enabled",2,1,"","misc"],
-    ["core-playback-setup","crossfade_enabled",2,1,"","misc"],
-    ["core-automix","automix_enabled",2,1,"","misc"],
-    ["ios-feature-settings","use_playback_settings_crossfade",2,0,"","misc"],
-    ["ios-feature-settings","use_playback_settings_gapless",2,0,"","misc"],
     ["","enable_common_capping",0,0,"","cap"],
     ["","enable_pns_common_capping",0,0,"","cap"],
     ["","enable_pick_and_shuffle_common_capping",0,0,"","cap"],
@@ -594,6 +591,8 @@ function buildPatcher($argument) {
   const yearOn = new Date(Date.now() + 365 * 86400000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
   const ATTR_CORE = {
+    // 不写 enable-crossfade-product-state / enable-gapless-product-state：
+    // 那会把客户端的播放衔接强制打开，导致上一首结尾和下一首重叠。
     "catalogue": "premium",
     "financial-product": "pr:premium,tc:0",
     "is-eligible-premium-unboxing": true,
@@ -610,8 +609,6 @@ function buildPatcher($argument) {
     "type": "premium",
     "unrestricted": true,
     "can_use_superbird": true,
-    "enable-crossfade-product-state": "1",
-    "enable-gapless-product-state": "1",
     "high-bitrate": true,
     "loudness-levels": "1:-5.0,0.0,3.0:-2.0",
     "mixing-tools": "EDIT",
@@ -1552,9 +1549,10 @@ function buildPatcher($argument) {
   // 广告内容（字段 30）。这里直接丢掉整个 section，让列表和客户端的卡片数一起少
   // 一项，避免留下「有 id、没有内容」的空卡片。实际拼接在 feed/lyrics.js 的
   // patchScroll 里和补歌词 section 一起做，只遍历一次。
-  // 服务端 patcher 只删广告，不补歌词卡，所以单独保留这个入口。
-  function hideScrollAds(buffer) {
-    return patchScroll(buffer, "", true, false);
+  // 服务端在歌词查询完成后传入 trackId / wantCard；客户端则由 feed/entry.js 在
+  // 预热歌词缓存后传入。默认只删广告，保持旧调用方的行为。
+  function hideScrollAds(buffer, trackId, wantCard) {
+    return patchScroll(buffer, trackId || "", true, !!wantCard);
   }
 
   // ------------------------------------------------------------ lyrics card
@@ -1568,10 +1566,27 @@ function buildPatcher($argument) {
   // 官方没有歌词的曲目，服务端不下发这一格。这里按真实形状补一格，section id
   // 复用真实歌词 section 的值；只补当前曲目的列表，已有歌词 section 时不重复补。
   const LYRICS_SECTION_ID = "spotify:section:0JQ5DB6s3cssW5Bo6cGq21";
+  const LYRICS_SECTION_ID_BYTES = new TextEncoder().encode(LYRICS_SECTION_ID);
 
   function scrollTrackId(url) {
     const match = /\/scrollsita\/v\d+\/scroll\/(?:spotify%3Atrack%3A|spotify:track:)([A-Za-z0-9]{22})/i.exec(url);
     return match ? match[1] : "";
+  }
+
+  // 补卡前先做一次廉价的字节扫描：列表里已经有歌词 section 时不用去查歌词，
+  // 避免每首官方有歌词的歌都白等一次第三方查询。完整的 section 结构仍由
+  // patchScroll 在重编码时确认。
+  function hasLyricsCard(buffer) {
+    if (!buffer || !buffer.length || buffer.length < LYRICS_SECTION_ID_BYTES.length) return false;
+    const needle = LYRICS_SECTION_ID_BYTES;
+    const last = buffer.length - needle.length;
+    for (let i = 0; i <= last; i += 1) {
+      if (buffer[i] !== needle[0]) continue;
+      let j = 1;
+      while (j < needle.length && buffer[i + j] === needle[j]) j += 1;
+      if (j === needle.length) return true;
+    }
+    return false;
   }
 
   function lyricsSection(trackId) {
@@ -1654,6 +1669,7 @@ function buildPatcher($argument) {
     stripHomeAds,
     hideBrowseAds,
     hideScrollAds,
+    hasLyricsCard,
     patchConfigurationResponse,
     patchAttributesResponse,
     looksLikeUcs,

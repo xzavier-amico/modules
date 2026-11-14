@@ -103,7 +103,7 @@ function pbNest(path, leaf) {
   return value;
 }
 
-const ytArgLoon = [true, true, "max", "zh-Hans", "", false, true, false, "standard", true, "4"];
+const ytArgLoon = [true, true, "max", "zh-Hans", "", false, true, false, "standard", true, "4", true];
 const ytArgJson = JSON.stringify({
   blockAds: true,
   blockAi: true,
@@ -116,12 +116,24 @@ const ytArgJson = JSON.stringify({
   homeCleanup: "standard",
   jumpAhead: true,
   maxSpeed: "4",
+  web: true,
 });
 const spArgLoon = [true, true, true, true];
 const spArgJson = JSON.stringify({ spoof_premium: true, block_ads: true, unlock_playback: true, enable_lyrics: true });
 
 function ytArgs(platform) {
   return platform === "loon" ? ytArgLoon : ytArgJson;
+}
+
+function ytArgsNoWeb(platform) {
+  if (platform === "loon") return [...ytArgLoon.slice(0, 11), false];
+  return JSON.stringify({ ...JSON.parse(ytArgJson), web: false });
+}
+
+function biliArgs(platform, web = true) {
+  return platform === "loon"
+    ? [true, true, true, web]
+    : JSON.stringify({ block_ads: true, hide_vip: true, clean_ui: true, web });
 }
 
 function spArgs(platform) {
@@ -182,6 +194,86 @@ for (const platform of ["loon", "shadowrocket"]) {
       request: { url: "https://youtubei.googleapis.com/youtubei/v1/browse", headers: {} },
       response: { url: "https://youtubei.googleapis.com/youtubei/v1/browse", status: 200, headers: {}, body: new Uint8Array() },
       argument: ytArgs(platform),
+    }),
+    (value) => value && Object.keys(value).length === 0,
+  );
+
+  const webJson = JSON.stringify({
+    contents: [
+      { videoRenderer: { videoId: "ok" } },
+      { adSlotRenderer: { adSlotMetadata: { slotId: "ad" } } },
+    ],
+  });
+  doneOnce(
+    platform + " response 网页版 JSON 删除广告位",
+    run(prefix + "youtube.response.js", {
+      shadowrocket,
+      request: { url: "https://www.youtube.com/youtubei/v1/browse", headers: {} },
+      response: {
+        url: "https://www.youtube.com/youtubei/v1/browse",
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: webJson,
+      },
+      argument: ytArgs(platform),
+    }),
+    (value) => {
+      if (!value || typeof value.body !== "string") return false;
+      const data = JSON.parse(value.body);
+      return data.contents.length === 1 && data.contents[0].videoRenderer.videoId === "ok";
+    },
+  );
+
+  doneOnce(
+    platform + " response 关闭网页版后 JSON 原样放行",
+    run(prefix + "youtube.response.js", {
+      shadowrocket,
+      request: { url: "https://www.youtube.com/youtubei/v1/browse", headers: {} },
+      response: {
+        url: "https://www.youtube.com/youtubei/v1/browse",
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: webJson,
+      },
+      argument: ytArgsNoWeb(platform),
+    }),
+    (value) => value && Object.keys(value).length === 0,
+  );
+
+  const biliPrefix = platform + "/bilibili/js/";
+  const biliRelated = JSON.stringify({ code: 0, data: [{ aid: 1 }, { aid: 2, is_ad: true }] });
+  doneOnce(
+    platform + " bilibili 网页相关推荐过滤广告",
+    run(biliPrefix + "bilibili_clean.js", {
+      shadowrocket,
+      request: { url: "https://api.bilibili.com/x/web-interface/archive/related?bvid=BV1", headers: {} },
+      response: {
+        url: "https://api.bilibili.com/x/web-interface/archive/related?bvid=BV1",
+        status: 200,
+        headers: {},
+        body: biliRelated,
+      },
+      argument: biliArgs(platform),
+    }),
+    (value) => {
+      if (!value || typeof value.body !== "string") return false;
+      const data = JSON.parse(value.body);
+      return data.data.length === 1 && data.data[0].aid === 1;
+    },
+  );
+
+  doneOnce(
+    platform + " bilibili 关闭网页版后相关推荐原样放行",
+    run(biliPrefix + "bilibili_clean.js", {
+      shadowrocket,
+      request: { url: "https://api.bilibili.com/x/web-interface/archive/related?bvid=BV1", headers: {} },
+      response: {
+        url: "https://api.bilibili.com/x/web-interface/archive/related?bvid=BV1",
+        status: 200,
+        headers: {},
+        body: biliRelated,
+      },
+      argument: biliArgs(platform, false),
     }),
     (value) => value && Object.keys(value).length === 0,
   );

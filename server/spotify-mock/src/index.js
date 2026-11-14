@@ -157,6 +157,13 @@ function routeFor(path) {
   return null;
 }
 
+// Only the current track's scroll list is patched. Spotify sends the track URI
+// in the path; episode / show contexts do not get a lyrics card.
+function scrollTrackId(path) {
+  const match = /\/scrollsita\/v\d+\/scroll\/(?:spotify%3Atrack%3A|spotify:track:)([A-Za-z0-9]{22})/i.exec(path);
+  return match ? match[1] : "";
+}
+
 function json(body, status = 200) {
   const headers = new Headers({
     "content-type": "application/json; charset=utf-8",
@@ -236,7 +243,7 @@ function sanitizeResponseHeaders(input, patched) {
   return headers;
 }
 
-function patchResponse(patcher, desktopPatcher, route, targetPath, bytes, contentType) {
+function patchResponse(patcher, desktopPatcher, route, targetPath, bytes, contentType, scrollCard) {
   if (!bytes.length) return null;
   // A JSON error / HTML login page must never be walked as a protobuf tree.
   if (contentType && !BINARY_TYPE.test(contentType)) return null;
@@ -262,7 +269,11 @@ function patchResponse(patcher, desktopPatcher, route, targetPath, bytes, conten
       return patcher.hideBrowseAds(bytes);
     }
     if (route.kind === "scroll") {
-      return patcher.hideScrollAds(bytes);
+      return patcher.hideScrollAds(
+        bytes,
+        scrollCard ? scrollCard.trackId : "",
+        scrollCard ? scrollCard.wantCard : false,
+      );
     }
     if (route.kind === "configuration") {
       return patcher.patchConfigurationResponse(bytes);
@@ -446,7 +457,27 @@ async function handle(request, env = {}) {
     }
   } else if (upstream.status >= 200 && upstream.status < 300) {
     const contentType = (upstream.headers.get("content-type") || "").toLowerCase();
-    const result = patchResponse(patcher, desktopPatcher, route, targetPath, original, contentType);
+    // The scroll list carries a lyrics card only when the track has lyrics.
+    // Spotify normally includes it for official lyrics; when it does not, the
+    // client asks for color-lyrics right after rendering and the card sits
+    // empty until that answer arrives. Look the track up first and only add
+    // the card when the lyrics are actually ready; the color-lyrics request
+    // then hits the same in-memory cache and returns immediately.
+    let scrollCard = null;
+    if (route.kind === "scroll" && original.length) {
+      const trackId = scrollTrackId(targetPath);
+      const lyrics = lyricsOptions(env);
+      if (trackId && lyrics.enabled && !patcher.hasLyricsCard(original)) {
+        try {
+          const found = await findLyrics(trackId, lyrics);
+          scrollCard = { trackId, wantCard: Boolean(found && found.lyrics) };
+        } catch (error) {
+          // A lyrics failure must not break the scroll list.
+          console.warn(`${SERVICE}: scroll lyrics lookup failed:`, error && (error.message || error));
+        }
+      }
+    }
+    const result = patchResponse(patcher, desktopPatcher, route, targetPath, original, contentType, scrollCard);
     if (result && result.length) {
       bytes = result;
       patched = true;

@@ -76,6 +76,7 @@ const TARGETS = [
       "response/schema.js",
       "response/codec.js",
       "response/filter.js",
+      "response/json.js",
       "response/quality.js",
       "response/ump.js",
       "response/routes.js",
@@ -103,7 +104,7 @@ const TARGETS = [
     file: "spotify.feed.js",
     binary: true,
     title: "Spotify Premium — 信息流广告过滤",
-    parts: [...SP_CORE, "feed/ads.js", "feed/lyrics.js", "feed/entry.js"],
+    parts: [...SP_CORE, "feed/ads.js", "feed/lyrics-prefetch.js", "lyrics.js", "feed/lyrics.js", "feed/entry.js"],
   },
   {
     module: "spotify",

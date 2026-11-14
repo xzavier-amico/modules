@@ -39,6 +39,27 @@
     return;
   }
 
+  const trackId = isScroll ? scrollTrackId(url) : "";
+  const finish = (out) => {
+    if (!out || same(out, body)) {
+      $done({});
+      return;
+    }
+    $done({ body: out });
+  };
+
+  // 滚动页的歌词卡：先让歌词脚本把结果写进缓存，再补 section。这样卡片出现时
+  // 客户端随后请求 color-lyrics 会直接命中缓存，不会先显示空卡、重进才加载。
+  // 列表里已经有歌词 section（官方歌词）时不做这次查询。
+  const prefetch = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsPrefetch : null;
+  if (isScroll && wantCard && trackId && typeof prefetch === "function" &&
+      !(typeof hasLyricsCard === "function" && hasLyricsCard(body))) {
+    prefetch(trackId, (payload) => {
+      finish(patchScroll(body, trackId, wantAds, !!payload));
+    });
+    return;
+  }
+
   let out = null;
   if (isHome) {
     out = wantAds ? stripHomeAds(body) : null;
@@ -47,12 +68,7 @@
   } else {
     // 滚动页一次遍历完成：先删广告 section，再按过滤后的列表补歌词 section，
     // 避免补在会被丢弃的 section 之后。
-    out = patchScroll(body, scrollTrackId(url), wantAds, wantCard);
+    out = patchScroll(body, trackId, wantAds, wantCard);
   }
 
-  if (!out || same(out, body)) {
-    $done({});
-    return;
-  }
-
-  $done({ body: out });
+  finish(out);

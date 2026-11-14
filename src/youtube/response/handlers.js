@@ -1,9 +1,65 @@
+  function responseHeader(name) {
+    const headers = $response.headers ?? {};
+    for (const [key, value] of Object.entries(headers)) {
+      if (key.toLowerCase() === name) return String(value ?? "");
+    }
+    return "";
+  }
+
+  // 网页版 youtubei 返回 JSON；不能拿 protobuf 解码器硬解。
+  function responseLooksJson(raw) {
+    if ("string" == typeof raw) return /^\s*[\[{]/.test(raw);
+    const bytes = toBytes(raw);
+    if (!bytes?.length) return false;
+    let i = 0;
+    while (i < bytes.length && (32 === bytes[i] || 9 === bytes[i] || 10 === bytes[i] || 13 === bytes[i])) i++;
+    return 123 === bytes[i] || 91 === bytes[i];
+  }
+
+  function handleYouTubeiJsonResponse(route, raw) {
+    try {
+      const text = "string" == typeof raw ? raw : new TextDecoder().decode(toBytes(raw));
+      if (!text || text.length > MAX_RESPONSE_BYTES) {
+        $done({});
+        return;
+      }
+      const data = JSON.parse(text);
+      const options = readOptions();
+      if (isMusicRequest($request) && false === options.youtubeMusic) {
+        $done({});
+        return;
+      }
+      if (!rewriteJsonRoute(route, data, options)) {
+        $done({});
+        return;
+      }
+      const out = JSON.stringify(data);
+      $done(out === text ? {} : { body: out });
+    } catch (e) {
+      $done({});
+    }
+  }
+
   function handleYouTubeiResponse() {
     try {
       const route = $request.url.split("?")[0].split("/youtubei/v1/")[1];
       const handler = Object.hasOwn(RESPONSE_ROUTES, route) && RESPONSE_ROUTES[route];
+      if (!handler || Number($response.status) >= 300) {
+        $done({});
+        return;
+      }
+      if (isWebRequest($request) && false === readOptions().web) {
+        $done({});
+        return;
+      }
+
+      if (/json/i.test(responseHeader("content-type")) || responseLooksJson($response.body)) {
+        handleYouTubeiJsonResponse(route, $response.body);
+        return;
+      }
+
       const body = toBytes($response.body);
-      if (!handler || Number($response.status) >= 300 || !body?.length || body.length > MAX_RESPONSE_BYTES) {
+      if (!body?.length || body.length > MAX_RESPONSE_BYTES) {
         $done({});
         return;
       }

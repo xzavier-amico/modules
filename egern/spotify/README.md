@@ -32,21 +32,30 @@
 
 - `auto` 同时请求网易云、QQ、LRCLIB，首个通过歌名 / 歌手 / Live 校验的同步歌词胜出；只有纯文本时等全部结束，或在 5 秒后先发纯文本，避免一直等到总超时。
 - 歌名比较会忽略 `feat.` / `ft.` / `with` / `prod.`、`Remastered 2011` / `2011 Remaster`、`Radio Edit`、`Single Version`、`Album Version`、`Bonus Track`、`Deluxe Edition`、`Explicit` / `Clean` 等版本后缀；歌手按 `feat.` / `ft.` / `with` 和多歌手分隔符拆分，任意一位匹配即可。
+- 曲名里带 `()` / `（）` 的装饰信息（影视剧名、节目名、歌手名等）会先去掉再查一次；括号里含 `Live`、`Remix`、`Acoustic`、`伴奏`、`版` 等版本词时保留，避免把现场版查成录音室版。返回结果仍按完整曲名或去掉装饰后的曲名校验。
 - LRCLIB 按歌手搜不到时会再用歌名搜一次，仍按歌手 / 版本 / Live / 时长校验，不会拿别人的同名歌。
 - 第三方请求超时、429 或 5xx 不写「无歌词」短缓存，下次打开会立即重试；只有所有源都明确没结果才记 10 分钟。
-- 总时限 15 秒，单个外部请求 8 秒。
+- 歌词页总时限 15 秒，单个外部请求 8 秒；scrollsita 补卡只等 8 秒，超时就不补卡。
 - protobuf 补齐官方字段（含歌词卡使用的 `previewLines`），并将歌词额度限制归一为可显示状态。
 - 配色：未激活行黑字，当前 / 已唱行白字；命中元数据缓存时不再请求 embed，用缓存里的封面色，没有缓存时用默认中灰底。
-- scrollsita 列表缺少歌词 section 时补一格；官方已有则不重复补。
+- scrollsita 列表缺少歌词 section 时先查歌词并写入 `spotify.lyrics.cache`，只有查到才补一格；官方已有则不重复补，查不到也不补空卡。
 
 歌词源：`lrclib`、`musixmatch`、`netease`、`qq`、`auto`（默认）。
 - LRCLIB 先按完整曲名查，再用去掉 `feat.` / `remaster` 等后缀的曲名重试（对应 EeveeSpotify 的 `strippedTrackTitle`），返回结果仍会重新校验歌手 / Live / 时长。
 - `extended-metadata` 是批量接口，可能到几 MB；脚本只解析包含 `spotify:track:` 的子消息，图片 / Credits / Canvas 等大块直接跳过，且用字段级 canonical 检查代替整包 `serialize` 拷贝。超过 12MB 的响应仍原样放行。
 
 
+## 播放衔接
+
+脚本不改写 `crossfade_enabled`、`automix_enabled`、`use_playback_settings_crossfade` /
+`use_playback_settings_gapless`，也不写账号属性里的 `enable-crossfade-product-state` /
+`enable-gapless-product-state`。这些字段被强制打开时，客户端会绕过「设置 → 播放 →
+交叉淡入淡出」直接衔接下一首，表现就是上一首最后 1–2 秒被下一首顶掉。播放衔接
+完全由客户端自己的设置决定；仍然重叠时，先在 App 里把 Crossfade / AutoMix 关掉再试。
+
 ### 没有歌词时的排查
 
-模块不再暴露歌词排障开关。可以先确认这几点：
+模块不提供歌词排障开关，也不会因为缺少额外环境变量而跳过歌词。可以先确认这几点：
 
 - `color-lyrics` 请求是否被 MITM：检查证书与 `*-spclient.spotify.com`。
 - 客户端是否请求了歌词：`has_lyrics` 没被改写时客户端不会请求，重启 App 或打开未缓存的歌单让元数据重新拉取。

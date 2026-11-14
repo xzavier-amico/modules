@@ -152,30 +152,39 @@ export default async function (ctx) {
 (() => {
   "use strict";
 
+  // feed 脚本会在同一份源码上以 prefetch 模式加载：只暴露歌词查询 / 缓存，
+  // 不处理 color-lyrics 响应。独立歌词脚本仍按原来的入口执行。
+  const PREFETCH = typeof SPOTIFY_LYRICS_PREFETCH !== "undefined" && SPOTIFY_LYRICS_PREFETCH;
+
   const req = typeof $request !== "undefined" && $request ? $request : null;
   const res = typeof $response !== "undefined" && $response ? $response : null;
   const url = (res && res.url) || (req && req.url) || "";
 
   // Loon 传位置数组，Egern 传 JSON 字符串。
   let opt = {};
-  try {
-    const raw = typeof $argument !== "undefined" ? $argument : undefined;
-    if (Array.isArray(raw)) {
-      const modes = ["full", "no_card", "metadata_only", "response_only", "card_only"];
-      const modeInThird = modes.indexOf(raw[2]) >= 0;
-      opt = { lyrics_source: raw[0], enable_lyrics: raw[1], desktop: modeInThird ? false : raw[2],
-        lyrics_mode: modeInThird ? raw[2] : modes.includes(raw[3]) ? raw[3] : undefined };
-    }
-    else if (typeof raw === "string") {
-      try {
-        opt = JSON.parse(raw || "{}") || {};
-      } catch (e) {
-        // Loon 单参数时可能直接传字符串
-        opt = { lyrics_source: raw };
+  if (PREFETCH) {
+    // feed 的位置参数和歌词脚本不同，由 feed/lyrics-prefetch.js 解析后传入。
+    opt = typeof SPOTIFY_PREFETCH_OPTIONS !== "undefined" && SPOTIFY_PREFETCH_OPTIONS ? SPOTIFY_PREFETCH_OPTIONS : {};
+  } else {
+    try {
+      const raw = typeof $argument !== "undefined" ? $argument : undefined;
+      if (Array.isArray(raw)) {
+        const modes = ["full", "no_card", "metadata_only", "response_only", "card_only"];
+        const modeInThird = modes.indexOf(raw[2]) >= 0;
+        opt = { lyrics_source: raw[0], enable_lyrics: raw[1], desktop: modeInThird ? false : raw[2],
+          lyrics_mode: modeInThird ? raw[2] : modes.includes(raw[3]) ? raw[3] : undefined };
       }
-    } else if (raw && "object" == typeof raw) opt = raw;
-  } catch (e) {
-    opt = {};
+      else if (typeof raw === "string") {
+        try {
+          opt = JSON.parse(raw || "{}") || {};
+        } catch (e) {
+          // Loon 单参数时可能直接传字符串
+          opt = { lyrics_source: raw };
+        }
+      } else if (raw && "object" == typeof raw) opt = raw;
+    } catch (e) {
+      opt = {};
+    }
   }
   const flag = (v, d) => (v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0"));
   // 客户端模式：auto 按 User-Agent 识别，拿不到 UA 时再看 Loon 运行环境。
@@ -204,33 +213,24 @@ export default async function (ctx) {
     return flag(v, false);
   };
   const desktop = desktopMode(opt.desktop);
-  // 排障日志：默认关闭。Egern 模块不再暴露这个参数；保留内部开关，
-  // 需要排查时可以在 Loon / 手动调试里传 lyrics_debug=true。
-  const debug = flag(opt.lyrics_debug, false);
-  const log = (...parts) => {
-    if (debug && typeof console !== "undefined" && console.log) console.log("[spotify-lyrics] " + parts.join(" "));
-  };
 
   // 这个脚本只在响应阶段被调用；请求阶段或参数关闭时直接放行。
   // Loon 靠 enable= 决定是否加载脚本，Egern 不支持条件加载，只能在这里早退。
-  if (!res) {
-    // Egern 的排障入口：请求阶段也能被同一条 match 命中，用来确认
-    // color-lyrics 请求确实被 MITM 了（没有这条日志说明请求没进代理）。
-    if (debug && /\/color-lyrics\/v\d\/track\//.test(url)) log("request", "intercepted", url);
+  if (!PREFETCH && !res) {
     $done({});
     return;
   }
-  if (!flag(opt.enable_lyrics, true) || opt.lyrics_mode === "metadata_only" || opt.lyrics_mode === "card_only") {
+  if (!PREFETCH && (!flag(opt.enable_lyrics, true) || opt.lyrics_mode === "metadata_only" || opt.lyrics_mode === "card_only")) {
     $done({});
     return;
   }
 
   const match = /\/color-lyrics\/v\d\/track\/([A-Za-z0-9]+)/.exec(url);
-  if (!match) {
+  let trackId = PREFETCH ? "" : match ? match[1] : "";
+  if (!PREFETCH && !match) {
     $done({});
     return;
   }
-  const trackId = match[1];
 
   const USER_AGENT = "xzavier-modules/1.0 (https://github.com/xzavier-amico/modules)";
   const utf8 = new TextDecoder("utf-8");
@@ -252,6 +252,9 @@ export default async function (ctx) {
   const LYRICS_CACHE_MAX_BYTES = 400 * 1024;
   const LYRICS_DEADLINE_MS = 15000;
   const PLAIN_FALLBACK_MS = 5000;
+  // feed 脚本在返回 scrollsita 之前等歌词；比歌词页的 15 秒短，避免 Now Playing
+  // 卡片列表等太久。超时就不补卡，歌词页之后仍可正常重试。
+  const PREFETCH_DEADLINE_MS = 8000;
 
   const storeBackend = () =>
     typeof $persistentStore !== "undefined" && $persistentStore ? $persistentStore : null;
@@ -431,6 +434,9 @@ export default async function (ctx) {
   const INSTRUMENTAL_MARK = /伴奏|instrumental|karaoke/i;
   const SONG_TITLE_LIVE = /\s*[-–—]\s*[^-–—]*(?:\blive\b|live版|现场|現場).*$/i;
   const SONG_TITLE_LIVE_BRACKET = /[（(][^()（）]*(?:live|现场|現場)[^()（）]*[)）]/gi;
+  const SONG_TITLE_BRACKET_GROUP = /[（(]([^()（）]*)[)）]/g;
+  // 括号里带这些词时说明是不同版本（Live / Remix / 伴奏…），不能当装饰信息删掉。
+  const SONG_TITLE_VERSION_BRACKET = /\b(?:live|acoustic|unplugged|remix|mix|version|edit|remaster(?:ed)?|instrumental|karaoke|demo|cover|session|mono|stereo|deluxe|bonus|explicit|clean)\b|现场|現場|演唱会|演唱會|伴奏|纯音乐|純音樂|混音|重制|重製|翻唱|翻自|试听|試聽|片段|版/i;
   const SONG_TITLE_BRACKET_NOISE = /[（(\[][^()（）\[\]]*\b(?:(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?(?:\s+version)?|feat\.?|ft\.?|featuring|with|prod\.?|radio edit|single version|album version|bonus track|deluxe(?: edition)?|explicit|clean|mono|stereo)\b[^()（）\[\]]*[)）\]]/gi;
   const SONG_TITLE_DASH_FEAT = /\s*[-–—]\s*(?:feat\.?|ft\.?|featuring|with|prod\.?)\b.*$/i;
   const SONG_TITLE_DASH_EDITION = /\s*[-–—]\s*(?:(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?(?:\s+version)?|radio edit|single version|album version|bonus track|deluxe(?: edition)?|explicit|clean|mono|stereo)\s*$/i;
@@ -451,14 +457,60 @@ export default async function (ctx) {
   let plainFallback = null;
   // 第三方请求是否出现过网络错误 / 5xx / 429；这类失败不应写成「无歌词」短缓存。
   let networkFailed = false;
+  let cacheKey = "";
+  let prefetchTimer;
+  let prefetchCallback = null;
+  let prefetchSettle = null;
   const finish = (value) => {
     if (settled) return;
     settled = true;
     if (deadline !== undefined && typeof clearTimeout === "function") clearTimeout(deadline);
     if (plainTimer !== undefined && typeof clearTimeout === "function") clearTimeout(plainTimer);
-    if (debug && (!value || ("object" == typeof value && !Object.keys(value).length))) log("pass");
     $done(value);
   };
+
+  if (PREFETCH) {
+    // 只暴露一个「先查歌词、写完缓存再回调」的入口。feed 脚本在补歌词卡之前
+    // 调用它：歌词已经准备好才组装卡片，客户端随后请求 color-lyrics 时直接命中
+    // 缓存，不会出现「卡片先出来、歌词过一会儿才到」的空卡。
+    prefetchSettle = (payload) => {
+      if (settled) return;
+      settled = true;
+      if (prefetchTimer !== undefined && typeof clearTimeout === "function") clearTimeout(prefetchTimer);
+      const callback = prefetchCallback;
+      prefetchCallback = null;
+      if (callback) callback(payload);
+    };
+    globalThis.__spotifyLyricsPrefetch = (id, callback) => {
+      if (!id || typeof callback !== "function") return;
+      if (settled || !flag(opt.enable_lyrics, true)) {
+        callback(null);
+        return;
+      }
+      trackId = id;
+      cacheKey = lyricsCacheKey(id);
+      const cached = readLyricsCache(cacheKey);
+      if (cached) {
+        callback(cached.miss ? null : cached.payload);
+        return;
+      }
+      prefetchCallback = callback;
+      if (typeof setTimeout === "function") {
+        prefetchTimer = setTimeout(() => {
+          if (settled) return;
+          // 超时不算「确认没有歌词」，不写 miss，下次歌词页还能重试。
+          networkFailed = true;
+          prefetchSettle(null);
+        }, PREFETCH_DEADLINE_MS);
+      }
+      resolvePublicLyrics((payload) => {
+        if (settled) return;
+        if (payload || !networkFailed) writeLyricsCache(cacheKey, payload);
+        prefetchSettle(payload);
+      });
+    };
+    return;
+  }
 
   const rawBody = res.body;
   const rawBytes = toBytes(rawBody);
@@ -498,7 +550,6 @@ export default async function (ctx) {
   const protoMode = status === 200 && hasBody
     ? trimmed.charAt(0) !== "{"
     : requestedProto !== null ? requestedProto : !desktop;
-  log("entry", "track=" + trackId, "status=" + status, "body=" + rawLength, "proto=" + protoMode, "desktop=" + desktop);
 
   // 不把登录、限流或服务端错误伪装成有歌词。
   if (status !== 200 && status !== 404) {
@@ -513,11 +564,9 @@ export default async function (ctx) {
   if (status === 200 && !hasBody) {
     const declared = Number(headerValue(res && res.headers, "content-length"));
     if (Number.isFinite(declared) && declared > 0) {
-      log("meta", "body missing in script", "content-length=" + declared);
       finish({});
       return;
     }
-    log("meta", "empty 200, treat as no lyrics");
   } else if (status === 200) {
     if (protoMode) {
       // 解析不了（拿不到原始字节）时返回 -1，宁可放行也不要顶掉官方歌词。
@@ -541,15 +590,13 @@ export default async function (ctx) {
 
   // 歌词结果缓存：同一首歌在播放器 / 歌词页 / 歌词卡之间的重复请求不再重复查源。
   // 只缓存「官方没有歌词」的分支，官方歌词不会走到这里。
-  const cacheKey = lyricsCacheKey(trackId);
+  cacheKey = lyricsCacheKey(trackId);
   const cachedLyrics = readLyricsCache(cacheKey);
   if (cachedLyrics) {
     if (cachedLyrics.miss) {
-      log("cache", "miss");
       finish({});
       return;
     }
-    log("cache", "hit", cachedLyrics.payload.lyrics.provider);
     emit(cachedLyrics.payload);
     return;
   }
@@ -587,7 +634,6 @@ export default async function (ctx) {
     // 歌词页背景用默认底色（不再为封面配色抓 embed 页面）。
     const cached = cachedTrackMeta(trackId);
     if (cached) {
-      log("meta", "cached", "title=" + cached.title, "artist=" + cached.artist, "duration=" + (cached.duration || ""));
       runSource(sourceOrder(cached.title, cached.artist), cached.title, cached.artist, cb, cached.duration, () => cached.color || null);
       return;
     }
@@ -619,12 +665,10 @@ export default async function (ctx) {
       const info = merged();
       if (!info.title) {
         started = true;
-        log("meta", "no title");
         cb(null);
         return;
       }
       started = true;
-      log("meta", "title=" + info.title, "artist=" + info.artist, "duration=" + (info.duration || ""));
       rememberTrackMeta(trackId, info.title, info.artist, info.duration ? info.duration * 1000 : 0, colorOf());
       runSource(sourceOrder(info.title, info.artist), info.title, info.artist,
         (payload) => cb(payload), info.duration, colorOf);
@@ -691,14 +735,12 @@ export default async function (ctx) {
       done(null);
       return;
     }
-    log("sources", order.join(","));
     let remaining = order.length;
     let finished = false;
     for (const name of order) {
       if (settled || finished) return;
       lookup(name, title, artist, duration, (record) => {
         if (settled || finished) return;
-        log("source", name, record ? "hit" : "miss");
         if (record && colorOf) record.albumColor = colorOf();
         const payload = buildPayload(record);
         if (payload && (payload.lyrics.syncType === "LINE_SYNCED" || order.length === 1)) {
@@ -923,7 +965,7 @@ export default async function (ctx) {
 
   function rankSongs(list, title, artist, duration, nameOf, artistOf, durationOf) {
     if (!Array.isArray(list)) return [];
-    const wanted = normalize(title);
+    const wanted = normalize(queryTitle(title));
     const singer = normalize(artist);
     const score = (item) => {
       const name = normalize(nameOf(item));
@@ -951,11 +993,28 @@ export default async function (ctx) {
 
   // 查询第三方曲库时也先去掉 feat / remaster 等后缀；Live / Acoustic / Remix
   // 这类真正决定版本的信息保留，避免把现场版查成录音室版。
+  // 括号里的影视 / 节目 / 歌手等装饰信息也一并去掉；只有包含版本词时才保留。
   function queryTitle(title) {
     let text = String(title);
     text = text.replace(SONG_TITLE_DASH_FEAT, "").replace(SONG_TITLE_DASH_EDITION, "");
     text = text.replace(SONG_TITLE_BRACKET_NOISE, "");
-    return text.trim() || String(title);
+    text = text.replace(SONG_TITLE_BRACKET_GROUP, (whole, inner) =>
+      SONG_TITLE_VERSION_BRACKET.test(inner) ? whole : " ");
+    return text.replace(/\s+/g, " ").trim() || String(title);
+  }
+
+  // 曲名可能是 "Song (电影《…》主题曲)"，曲库只写 "Song"；两边都按完整曲名
+  // 和去掉装饰括号后的曲名各比一次。版本词、Live、歌手等校验仍在 matchesSong
+  // 里单独进行。
+  function matchTitles(title, candidateTitle) {
+    const wanted = [];
+    for (const value of [songTitle(title), normalize(queryTitle(title))]) {
+      if (value && wanted.indexOf(value) < 0) wanted.push(value);
+    }
+    for (const value of [songTitle(candidateTitle), normalize(queryTitle(candidateTitle))]) {
+      if (value && wanted.indexOf(value) >= 0) return true;
+    }
+    return false;
   }
 
   function artistNames(person) {
@@ -992,7 +1051,7 @@ export default async function (ctx) {
   }
 
   function matchesSong(title, artist, duration, candidateTitle, candidateArtist, candidateDuration) {
-    if (!candidateTitle || songTitle(title) !== songTitle(candidateTitle)) return false;
+    if (!candidateTitle || !matchTitles(title, candidateTitle)) return false;
     if (isLive(title) !== isLive(candidateTitle)) return false;
     if (INSTRUMENTAL_MARK.test(candidateTitle) && !INSTRUMENTAL_MARK.test(title)) return false;
     const singer = normalize(artist);
@@ -1073,14 +1132,12 @@ export default async function (ctx) {
         const statusCode = Number(response && response.status);
         if (error || !response) {
           networkFailed = true;
-          log("http", target, "fail", error ? String(error) : "no response");
           reply(null);
           return;
         }
         // 429 / 5xx 是临时故障，标记后不写「无歌词」短缓存，下次还能重试。
         if (statusCode === 429 || statusCode >= 500) networkFailed = true;
         if (statusCode >= 400 || !data) {
-          log("http", target, "fail", "status=" + statusCode);
           reply(null);
           return;
         }
@@ -1089,7 +1146,6 @@ export default async function (ctx) {
           reply(null);
           return;
         }
-        log("http", target, "ok", data.length + "B");
         reply(data);
       };
 
@@ -1121,7 +1177,10 @@ export default async function (ctx) {
   }
 
   function emit(payload) {
-    log("emit", "provider=" + payload.lyrics.provider, "lines=" + payload.lyrics.lines.length, "sync=" + payload.lyrics.syncType);
+    if (PREFETCH) {
+      if (prefetchSettle) prefetchSettle(payload);
+      return;
+    }
     if (protoMode) {
       const bytes = encodeProto(payload.lyrics.lines, payload.lyrics.syncType, payload.lyrics.provider,
         payload.lyrics.providerLyricsId, payload.lyrics.language, payload.colors);

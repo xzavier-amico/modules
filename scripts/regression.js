@@ -129,6 +129,21 @@ function run(file, body, url, argument = {}, extra = {}) {
 }
 const track = "spotify:track:0VjIjW4GlUZAMYd2vXMi3b";
 const scroll = "https://spclient.wg.spotify.com/scrollsita/v1/scroll/" + encodeURIComponent(track);
+// feed 脚本补歌词卡前会先等歌词写进缓存；离线测试直接给一份已命中的缓存。
+function lyricsStore(id, source = "auto") {
+  const map = {
+    "spotify.lyrics.cache": JSON.stringify({
+      [source + "|" + id]: {
+        t: Date.now(), m: 0, s: "LINE_SYNCED", p: "LRCLIB", i: "", l: "en",
+        c: [-16777216, -1, -1], a: [[0, "line"]],
+      },
+    }),
+  };
+  return {
+    read: (key) => (key in map ? map[key] : null),
+    write: (value, key) => { map[key] = value; return true; },
+  };
+}
 for (const platform of ["loon", "egern", "shadowrocket"]) {
   const feed = platform + "/spotify/js/spotify.feed.js";
   const originalList = serialize([b(1, serialize([s(2, "normal-card")])), v(99, 9007199254740999n)]);
@@ -144,10 +159,11 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
       for (const ads of [true, false]) {
         const args = { block_ads: ads, enable_lyrics: true, lyrics_mode: mode };
         const wantCard = mode === undefined || mode === "full" || mode === "card_only";
+        const store = lyricsStore("0VjIjW4GlUZAMYd2vXMi3b");
 
         assert.equal(Object.keys(run(feed, official, scroll, args)).length, 0, "an existing lyrics section must not be duplicated");
 
-        const plain = run(feed, body, scroll, args);
+        const plain = run(feed, body, scroll, args, { $persistentStore: store });
         assert.equal(!!plain.body, wantCard);
         if (wantCard) {
           const sections = sectionList(plain);
@@ -157,7 +173,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
           assert.ok(first(parse(first(added, 23).p), 1), "a synthesized section needs its section id");
         }
 
-        const filtered = run(feed, withAd, scroll, args);
+        const filtered = run(feed, withAd, scroll, args, { $persistentStore: store });
         if (!ads) assert.equal(!!filtered.body, wantCard);
         else {
           const sections = sectionList(filtered);
@@ -236,7 +252,7 @@ check("Spotify client plugins route scrollsita to the updated ad filter", () => 
   for (const file of ["loon/spotify/spotify-premium.plugin", "loon/spotify/spotify-premium-mac.plugin", "egern/spotify/spotify-premium.yaml", "shadowrocket/spotify/spotify-premium.sgmodule"]) {
     const rules = read(file).split("\n").filter((line) => !line.trim().startsWith("#"));
     assert.ok(rules.some((line) => line.includes("scrollsita")), file + " must match scrollsita");
-    assert.ok(rules.some((line) => line.includes("spotify.feed.js?v=20261114-2")));
+    assert.ok(rules.some((line) => line.includes("spotify.feed.js?v=20261114-4")));
   }
 });
 
@@ -424,6 +440,54 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
 }
 
 for (const platform of ["loon", "egern", "shadowrocket"]) {
+  check(platform + " Spotify feed waits for lyrics before adding the card", () => {
+    const file = platform + "/spotify/js/spotify.feed.js";
+    const id = "0VjIjW4GlUZAMYd2vXMi3b";
+    const body = serialize([b(1, serialize([b(1, serialize([s(2, "normal-card")]))]))]);
+    const map = {
+      "spotify.track.meta": JSON.stringify({ [id]: ["Song", "Artist", 210000, Date.now()] }),
+    };
+    const store = {
+      read: (key) => (key in map ? map[key] : null),
+      write: (value, key) => { map[key] = value; return true; },
+    };
+    let lookups = 0;
+    const http = {
+      get: (request, callback) => {
+        let data = {};
+        if (request.url.includes("lrclib.net/api/get")) {
+          lookups++;
+          data = { trackName: "Song", artistName: "Artist", duration: 210000, syncedLyrics: "[00:01.00]Ready" };
+        } else if (request.url.includes("lrclib.net/api/search")) data = [];
+        callback(null, { status: 200 }, JSON.stringify(data));
+      },
+    };
+    const out = run(file, body, scroll, { block_ads: false, enable_lyrics: true, lyrics_source: "lrclib" }, {
+      $persistentStore: store,
+      $httpClient: http,
+    });
+    assert.ok(out.body, platform + " must add the card only after lyrics are ready");
+    assert.equal(lookups, 1, platform);
+    const cache = JSON.parse(map["spotify.lyrics.cache"] || "{}");
+    assert.ok(cache["lrclib|" + id], platform + " must warm the color-lyrics cache first");
+
+    // 查不到歌词时不补卡，避免客户端先显示一张空歌词卡。
+    const emptyMap = { "spotify.track.meta": map["spotify.track.meta"] };
+    const emptyStore = {
+      read: (key) => (key in emptyMap ? emptyMap[key] : null),
+      write: (value, key) => { emptyMap[key] = value; return true; },
+    };
+    const miss = run(file, body, scroll, { block_ads: false, enable_lyrics: true, lyrics_source: "lrclib" }, {
+      $persistentStore: emptyStore,
+      $httpClient: { get: (request, callback) => callback(null, { status: 200 }, JSON.stringify(request.url.includes("lrclib.net/api/search") ? [] : {})) },
+    });
+    assert.equal(Object.keys(miss).length, 0, platform + " must not add an empty lyrics card");
+    const missCache = JSON.parse(emptyMap["spotify.lyrics.cache"] || "{}");
+    assert.equal(missCache["lrclib|" + id] && missCache["lrclib|" + id].m, 1, platform + " must cache the miss");
+  });
+}
+
+for (const platform of ["loon", "egern", "shadowrocket"]) {
   check(platform + " Spotify lyrics preserves ContextTrack GID and uses its field-4 metadata", () => {
     const file = platform + "/spotify/js/spotify.js";
     const url = "https://spclient.wg.spotify.com/context-resolve/v1/context";
@@ -470,8 +534,7 @@ check("Spotify empty 200 is treated as missing lyrics", () => {
   }
 });
 
-check("Spotify lyrics debug logs and fetch fallback without $httpClient", () => {
-  const logs = [];
+check("Spotify lyrics fetch fallback without $httpClient", () => {
   const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/id?format=json";
   // 同步 thenable：回归 harness 是同步的，真实运行时是 Promise。
   const sync = (value) => ({ then: (resolve) => { resolve(value); return { catch: () => {} }; } });
@@ -479,15 +542,12 @@ check("Spotify lyrics debug logs and fetch fallback without $httpClient", () => 
     ? { title: "Song", author_name: "Artist" }
     : { trackName: "Song", artistName: "Artist", syncedLyrics: "[00:01.00]Hello" });
   const out = run("loon/spotify/js/spotify_lyrics.js", "", url,
-    { lyrics_source: "lrclib", enable_lyrics: true, lyrics_debug: true },
+    { lyrics_source: "lrclib", enable_lyrics: true },
     {
-      console: { log: (line) => logs.push(line) },
       $response: { status: 404, body: "" },
       fetch: (target) => sync({ status: 200, text: () => sync(payload(target)) }),
     });
   assert.ok(out.body, "fetch fallback must still return lyrics");
-  assert.ok(logs.some((line) => line.includes("[spotify-lyrics] entry")), "debug logs must include the entry line");
-  assert.ok(logs.some((line) => line.includes("[spotify-lyrics] http")), "debug logs must include http results");
 });
 
 check("Egern YouTube moves ad_break out of the request script", () => {
@@ -504,10 +564,171 @@ check("YouTube keeps current and previous Loon argument tuples aligned", () => {
   const url = "https://youtubei.googleapis.com/youtubei/v1/player/ad_break";
   // 第 0 位 block_ads=false：解析正确时 ad_break 直接放行；如果 12 项旧 tuple
   // 被误当成 26 项旧版位置参数，block_ads 会回落到默认 true，返回空 protobuf。
-  const current = [false, true, "max", "zh-Hans", "", false, true, false, "standard", true, "4"];
+  const current = [false, true, "max", "zh-Hans", "", false, true, false, "standard", true, "4", true];
   const previous = [false, true, "max", "zh-Hans", "", false, true, true, false, "standard", true, "4"];
   for (const args of [current, previous]) {
     assert.equal(run(file, new Uint8Array(), url, args), undefined);
+  }
+});
+
+check("YouTube web JSON strips ads, Shorts shelves and members-only videos", () => {
+  const body = JSON.stringify({
+    contents: [
+      { videoRenderer: { videoId: "ok" } },
+      { adSlotRenderer: { adSlotMetadata: { slotId: "ad" } } },
+      { reelShelfRenderer: { title: { simpleText: "Shorts" } } },
+      { videoRenderer: { videoId: "members", badges: [{ metadataBadgeRenderer: { label: "会员专享" } }] } },
+      { clarificationRenderer: { text: "AI" } },
+      { shoppingShelfRenderer: { title: "shop" } },
+    ],
+    entries: [{ displayAdRenderer: {} }],
+  });
+  const args = { blockAds: true, blockAi: true, blockShortsFeed: true, blockMembersOnly: true, blockStore: true, web: true };
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const url = "https://www.youtube.com/youtubei/v1/browse";
+    const out = run(platform + "/youtube/js/youtube.response.js", body, url, args, {
+      $request: { url },
+      $response: { url, status: 200, headers: { "content-type": "application/json" }, body },
+    });
+    assert.ok(out.body, platform + " must rewrite the JSON body");
+    const data = JSON.parse(out.body);
+    assert.deepEqual(data.contents.map((item) => Object.keys(item)[0]), ["videoRenderer"]);
+    assert.equal(data.contents[0].videoRenderer.videoId, "ok");
+    assert.deepEqual(data.entries, []);
+  }
+});
+
+check("YouTube web player removes ad fields, keeps audio and caps video height", () => {
+  const body = JSON.stringify({
+    adPlacements: [{ ad: 1 }],
+    adSlots: [{ ad: 2 }],
+    streamingData: {
+      adaptiveFormats: [
+        { itag: 1, height: 2160, mimeType: "video/mp4" },
+        { itag: 2, height: 1080, mimeType: "video/mp4" },
+        { itag: 3, height: 720, mimeType: "video/mp4" },
+        { itag: 4, mimeType: "audio/mp4" },
+      ],
+    },
+  });
+  const args = { blockAds: true, maxHeight: 1080, web: true };
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const url = "https://www.youtube.com/youtubei/v1/player";
+    const out = run(platform + "/youtube/js/youtube.response.js", body, url, args, {
+      $request: { url },
+      $response: { url, status: 200, headers: { "content-type": "application/json" }, body },
+    });
+    const data = JSON.parse(out.body);
+    assert.equal(data.adPlacements, undefined);
+    assert.equal(data.adSlots, undefined);
+    assert.deepEqual(data.streamingData.adaptiveFormats.map((item) => item.itag), [2, 4]);
+  }
+});
+
+check("YouTube web toggle gates request and response rewriting", () => {
+  const argsOff = { blockAds: true, web: false };
+  const argsOn = { blockAds: true, web: true };
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const requestFile = platform + "/youtube/js/youtube.request.js";
+    const responseFile = platform + "/youtube/js/youtube.response.js";
+    const adBreak = "https://www.youtube.com/youtubei/v1/player/ad_break";
+    const on = run(requestFile, new Uint8Array(), adBreak, argsOn);
+    assert.equal(on.response ? on.response.status : on.status, 200);
+    assert.equal(run(requestFile, new Uint8Array(), adBreak, argsOff), undefined);
+
+    const url = "https://m.youtube.com/youtubei/v1/browse";
+    const body = JSON.stringify({ contents: [{ adSlotRenderer: {} }, { videoRenderer: { videoId: "ok" } }] });
+    const pass = run(responseFile, body, url, argsOff, {
+      $request: { url },
+      $response: { url, status: 200, headers: { "content-type": "application/json" }, body },
+    });
+    assert.deepEqual(Object.keys(pass), []);
+  }
+});
+
+check("YouTube web JSON passes through unknown or malformed bodies", () => {
+  const url = "https://www.youtube.com/youtubei/v1/browse";
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const file = platform + "/youtube/js/youtube.response.js";
+    for (const body of ["{bad", JSON.stringify({ contents: [{ videoRenderer: { videoId: "ok" } }] })]) {
+      const out = run(file, body, url, { web: true }, {
+        $request: { url },
+        $response: { url, status: 200, headers: { "content-type": "application/json" }, body },
+      });
+      assert.deepEqual(Object.keys(out), []);
+    }
+  }
+});
+
+check("Bilibili web endpoints strip ads behind the web toggle", () => {
+  const base = "https://api.bilibili.com";
+  const cases = [
+    {
+      path: "/x/web-interface/archive/related?bvid=BV1",
+      body: { code: 0, data: [{ aid: 1 }, { aid: 2, is_ad: true }] },
+      check: (data) => assert.deepEqual(data.data.map((item) => item.aid), [1]),
+    },
+    {
+      path: "/x/web-interface/wbi/search/type?keyword=x",
+      body: { code: 0, data: { result: [{ aid: 1 }, { aid: 2, goto: "ad" }, { aid: 3, card_type: "cm_video" }] } },
+      check: (data) => assert.deepEqual(data.data.result.map((item) => item.aid), [1]),
+    },
+    {
+      path: "/x/web-interface/view?bvid=BV1",
+      body: { code: 0, data: { cm_config: { ads: [] }, relates: [{ aid: 1 }, { aid: 2, is_ad: true }] } },
+      check: (data) => {
+        assert.equal(data.data.cm_config, undefined);
+        assert.deepEqual(data.data.relates.map((item) => item.aid), [1]);
+      },
+    },
+    {
+      path: "/x/polymer/web-dynamic/v1/feed/all?type=all",
+      body: { code: 0, data: { items: [{ type: "DYNAMIC_TYPE_AV", id: "ok" }, { type: "DYNAMIC_TYPE_AD", id: "ad" }] } },
+      check: (data) => assert.deepEqual(data.data.items.map((item) => item.id), ["ok"]),
+    },
+    {
+      path: "/pgc/view/web/season?season_id=1",
+      body: { code: 0, result: { payment: { price: "0" }, title: "番剧" } },
+      check: (data) => {
+        assert.equal(data.result.payment, undefined);
+        assert.equal(data.result.title, "番剧");
+      },
+    },
+    {
+      path: "/pgc/page/bangumi?season_id=1",
+      body: { code: 0, result: { modules: [{ module_style: "ad_banner" }, { module_style: "episode" }] } },
+      check: (data) => assert.deepEqual(data.result.modules.map((item) => item.module_style), ["episode"]),
+    },
+    {
+      path: "/xlive/web-interface/v1/index/getList?platform=web",
+      body: { code: 0, data: { banner: [{ id: 1, is_ad: true }, { id: 2 }] } },
+      check: (data) => assert.deepEqual(data.data.banner.map((item) => item.id), [2]),
+    },
+  ];
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const file = platform + "/bilibili/js/bilibili_clean.js";
+    for (const item of cases) {
+      const url = base + item.path;
+      const on = run(file, JSON.stringify(item.body), url, { block_ads: true, hide_vip: true, clean_ui: true, web: true });
+      assert.ok(on.body, platform + " " + item.path + " must rewrite");
+      item.check(JSON.parse(on.body));
+
+      const off = run(file, JSON.stringify(item.body), url, { block_ads: true, hide_vip: true, clean_ui: true, web: false });
+      assert.deepEqual(Object.keys(off), [], platform + " " + item.path + " must pass through when web is off");
+    }
+  }
+});
+
+check("Bilibili web playurl gets 4K query behind the web toggle", () => {
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const file = platform + "/bilibili/js/bilibili_quality.js";
+    const url = "https://api.bilibili.com/x/player/wbi/playurl?bvid=BV1&cid=1&qn=64&fnval=16";
+    const on = run(file, new Uint8Array(), url, { auto_quality: true, web: true });
+    assert.ok(on.url.includes("qn=120"));
+    assert.ok(on.url.includes("fourk=1"));
+    assert.ok(on.url.includes("fnval=144"));
+    const off = run(file, new Uint8Array(), url, { auto_quality: true, web: false });
+    assert.ok(off === undefined || Object.keys(off).length === 0);
   }
 });
 
@@ -824,6 +1045,29 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.equal(JSON.parse(out.body).lyrics.lines[0].words, "Base title lyric", platform);
   });
 
+  check(platform + " Spotify strips decorative parentheses and retries the title", () => {
+    const getCalls = [];
+    const title = "晚秋（电影《晚秋》主题曲）";
+    const out = run(platform + "/spotify/js/spotify_lyrics.js", "", "https://spclient.wg.spotify.com/color-lyrics/v2/track/id?format=json", ["lrclib", true], {
+      $response: { status: 404 },
+      $httpClient: { get: (request, callback) => {
+        let data = {};
+        if (request.url.includes("oembed")) data = { title: title, author_name: "毛宁" };
+        else if (request.url.includes("/api/get?")) {
+          getCalls.push(request.url);
+          if (getCalls.length === 2) {
+            data = { trackName: "晚秋", artistName: "毛宁", duration: 200000, syncedLyrics: "[00:01.00]秋" };
+          }
+        } else if (request.url.includes("/api/search?")) data = [];
+        callback(null, { status: 200 }, JSON.stringify(data));
+      } },
+    });
+    assert.equal(getCalls.length, 2, platform + " must retry without the parenthetical part");
+    assert.ok(getCalls[0].includes(encodeURIComponent(title)), "first lookup keeps the full title");
+    assert.ok(getCalls[1].includes("track_name=" + encodeURIComponent("晚秋") + "&"), platform);
+    assert.equal(JSON.parse(out.body).lyrics.lines[0].words, "秋", platform);
+  });
+
   check(platform + " Spotify auto skips Musixmatch and retains correct plain lyrics", () => {
     let checkedSubtitle = false;
     const out = run(platform + "/spotify/js/spotify_lyrics.js", "", "https://spclient.wg.spotify.com/color-lyrics/v2/track/id?format=json", ["auto", true], {
@@ -967,7 +1211,7 @@ check("Loon uses normal arguments and retains legacy mode compatibility", () => 
   const scriptRules = plugin.split("\n").filter((line) => line.includes('then script("'));
   assert.equal(scriptRules.length, 6);
   for (const line of scriptRules) {
-    const version = line.includes('tag="spotify.lyrics"') ? "20261114-3" : line.includes("spotify.feed") ? "20261114-2" : "20261114-3";
+    const version = line.includes('tag="spotify.lyrics"') ? "20261114-4" : line.includes("spotify.feed") ? "20261114-4" : "20261114-5";
     assert.ok(line.includes("?v=" + version));
     const tuple = /then script\("[^"]+", (\{.*\})\) with/.exec(line)[1];
     assert.match(tuple, /^\{\$\{\w+\}(?:, \$\{\w+\})*\}$/, "Loon tuple must contain only declared argument references");
@@ -976,7 +1220,7 @@ check("Loon uses normal arguments and retains legacy mode compatibility", () => 
     if (line.includes('tag="spotify.lyrics"')) {
       assert.deepEqual(names, ["lyrics_source", "enable_lyrics", "desktop"]);
     } else if (line.includes("spotify.feed")) {
-      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics"]);
+      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source"]);
     } else {
       assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop"]);
     }
@@ -988,7 +1232,9 @@ check("Loon uses normal arguments and retains legacy mode compatibility", () => 
     const args = [true, false, true, true, mode];
     const meta = run("loon/spotify/js/spotify.js", context, "https://spclient.wg.spotify.com/connect-state/v1/player", args);
     assert.equal(!!meta.body, [undefined, "full", "no_card", "metadata_only"].includes(mode), mode + " metadata");
-    const feed = run("loon/spotify/js/spotify.feed.js", cards, scroll, args);
+    const feed = run("loon/spotify/js/spotify.feed.js", cards, scroll, args, {
+      $persistentStore: lyricsStore("0VjIjW4GlUZAMYd2vXMi3b"),
+    });
     assert.equal(!!feed.body, [undefined, "full", "card_only"].includes(mode), mode + " lyrics section");
     let requests = 0;
     const response = run("loon/spotify/js/spotify_lyrics.js", "", lyricsUrl, ["lrclib", true, mode], {
@@ -1025,6 +1271,55 @@ check("Loon Premium uses the plugin's original arguments independently of lyric 
     assert.equal(Object.keys(run("loon/spotify/js/spotify.js", body, "https://spclient.wg.spotify.com/user-customization-service/v1/customize", args)).length, 0);
   }
 });
+
+for (const platform of ["loon", "egern", "shadowrocket"]) {
+  check(platform + " Spotify leaves crossfade / AutoMix transitions to the client", () => {
+    const assigned = (scope, name, on) =>
+      b(3, serialize([b(1, serialize([s(1, scope), s(2, name)])), b(3, on ? serialize([v(1, 1)]) : new Uint8Array(0))]));
+    const config = serialize([
+      assigned("ios-feature-settings", "crossfade_enabled", true),
+      assigned("core-automix", "automix_enabled", true),
+      assigned("ios-feature-settings", "use_playback_settings_crossfade", true),
+      assigned("ios-feature-settings", "use_playback_settings_gapless", true),
+    ]);
+    const args = { spoof_premium: true, block_ads: true, unlock_playback: true, enable_lyrics: false };
+    const out = run(platform + "/spotify/js/spotify.js", config,
+      "https://spclient.wg.spotify.com/remote-config-resolver/v3/configuration", args);
+    assert.ok(out.body, platform + " must still patch the remote configuration");
+    const names = [];
+    for (const f of parse(out.body)) {
+      if (f.no !== 3 || f.w !== 2) continue;
+      const value = parse(f.p);
+      const identifier = parse(first(value, 1).p);
+      const name = text(first(identifier, 2));
+      names.push(name);
+      if (/crossfade|automix|gapless/.test(name)) {
+        const bool = first(value, 3);
+        assert.equal(bool && bool.p.length > 0, true, platform + " must not switch transitions off either");
+      }
+    }
+    assert.deepEqual(names.filter((name) => /crossfade|automix|gapless|use_playback_settings/.test(name)),
+      ["crossfade_enabled", "automix_enabled", "use_playback_settings_crossfade", "use_playback_settings_gapless"],
+      platform + " must not insert transition switches of its own");
+
+    const attrs = serialize([
+      b(1, serialize([s(1, "enable-crossfade-product-state"), b(2, serialize([s(4, "0")]))])),
+      b(1, serialize([s(1, "type"), b(2, serialize([s(4, "free")]))])),
+    ]);
+    const ucs = serialize([b(1, serialize([b(3, attrs)]))]);
+    const attrOut = run(platform + "/spotify/js/spotify.js", ucs,
+      "https://spclient.wg.spotify.com/user-customization-service/v1/customize", args);
+    const entries = parse(first(parse(first(parse(attrOut.body), 1).p), 3).p);
+    const crossfade = entries.find((f) => {
+      const entry = f.no === 1 ? parse(f.p) : null;
+      return entry && text(first(entry, 1)) === "enable-crossfade-product-state";
+    });
+    assert.ok(crossfade, platform + " must keep the upstream crossfade attribute");
+    const crossfadeValue = parse(first(parse(crossfade.p), 2).p);
+    assert.equal(text(first(crossfadeValue, 4)), "0",
+      platform + " must not force crossfade on");
+  });
+}
 
 check("Spotify desktop mode follows User-Agent and unlocks playback only on mobile", () => {
   const plugin = read("loon/spotify/spotify-premium.plugin");

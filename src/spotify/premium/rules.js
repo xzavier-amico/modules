@@ -1,12 +1,9 @@
   // ------------------------------------------------------------ remote config
 
+  // 播放衔接（Crossfade / AutoMix / Gapless）不改写：这几项被强制打开并绕过
+  // 客户端播放设置时，上一首最后 1–2 秒就会和下一首重叠，听起来像「跳歌」。
+  // 这里保留客户端自己的选择，模块只负责解锁 Premium、去广告和歌词。
   const RULES = [
-    ["ios-feature-settings","crossfade_enabled",2,1,"","misc"],
-    ["ios-feature-settings","automix_enabled",2,1,"","misc"],
-    ["core-playback-setup","crossfade_enabled",2,1,"","misc"],
-    ["core-automix","automix_enabled",2,1,"","misc"],
-    ["ios-feature-settings","use_playback_settings_crossfade",2,0,"","misc"],
-    ["ios-feature-settings","use_playback_settings_gapless",2,0,"","misc"],
     ["","enable_common_capping",0,0,"","cap"],
     ["","enable_pns_common_capping",0,0,"","cap"],
     ["","enable_pick_and_shuffle_common_capping",0,0,"","cap"],

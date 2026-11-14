@@ -599,10 +599,1537 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // 广告内容（字段 30）。这里直接丢掉整个 section，让列表和客户端的卡片数一起少
   // 一项，避免留下「有 id、没有内容」的空卡片。实际拼接在 feed/lyrics.js 的
   // patchScroll 里和补歌词 section 一起做，只遍历一次。
-  // 服务端 patcher 只删广告，不补歌词卡，所以单独保留这个入口。
-  function hideScrollAds(buffer) {
-    return patchScroll(buffer, "", true, false);
+  // 服务端在歌词查询完成后传入 trackId / wantCard；客户端则由 feed/entry.js 在
+  // 预热歌词缓存后传入。默认只删广告，保持旧调用方的行为。
+  function hideScrollAds(buffer, trackId, wantCard) {
+    return patchScroll(buffer, trackId || "", true, !!wantCard);
   }
+
+  // feed 脚本复用 lyrics.js 的查询 / 缓存逻辑，但只加载 prefetch 入口。
+  // 这里在 lyrics.js 之前执行：告诉它不要处理 color-lyrics 响应，并把 feed
+  // 自己的参数位置翻译成歌词脚本认识的选项。
+  const SPOTIFY_LYRICS_PREFETCH = true;
+  const SPOTIFY_PREFETCH_OPTIONS = (() => {
+    const raw = typeof $argument !== "undefined" ? $argument : undefined;
+    if (Array.isArray(raw)) {
+      // Loon 位置参数：spoof, ads, unlock, enable_lyrics, desktop, lyrics_source。
+      return { enable_lyrics: raw[3], lyrics_source: raw[5] };
+    }
+    if (typeof raw === "string") {
+      try {
+        const parsed = JSON.parse(raw || "{}") || {};
+        return { enable_lyrics: parsed.enable_lyrics, lyrics_source: parsed.lyrics_source };
+      } catch (e) {
+        return {};
+      }
+    }
+    if (raw && "object" == typeof raw) {
+      return { enable_lyrics: raw.enable_lyrics, lyrics_source: raw.lyrics_source };
+    }
+    return {};
+  })();
+
+// Spotify Lyrics — 官方没有歌词时，用第三方歌词补上。
+//
+// 只处理 color-lyrics/v{N}/track/{id} 的响应：
+//   200 且歌词非空  -> 清掉额度限制后原样放行（官方歌词质量更好）
+//   404 / 空歌词    -> 取曲目元数据，按配置的歌词源查找，合成同结构响应
+//
+// spotify.js 补曲目 has_lyrics；feed 脚本在 scrollsita 缺少歌词 section 时补一格。
+//
+// 元数据：优先读 spotify.js 存下的客户端元数据（connect-state / context-resolve /
+// metadata/4/track），命中时零外部请求；没命中才退回 open.spotify.com 的 oEmbed
+// 与 embed 页面（公开接口，不需要 token）。
+// 歌词源：LRCLIB / Musixmatch / 网易云 / QQ 音乐
+//
+// 客户端模式：Loon 传第 3 个参数 desktop=auto / ios / macos；auto 按 User-Agent
+// 识别。没有 body 的 404 会优先按客户端请求的格式（JSON / protobuf）合成，
+// 桌面端默认 JSON，iOS 无格式提示时默认 protobuf。
+//
+// 任何一步失败都原样放行，App 仍然显示它自己的「暂无歌词」，不会卡住播放。
+
+(() => {
+  "use strict";
+
+  // feed 脚本会在同一份源码上以 prefetch 模式加载：只暴露歌词查询 / 缓存，
+  // 不处理 color-lyrics 响应。独立歌词脚本仍按原来的入口执行。
+  const PREFETCH = typeof SPOTIFY_LYRICS_PREFETCH !== "undefined" && SPOTIFY_LYRICS_PREFETCH;
+
+  const req = typeof $request !== "undefined" && $request ? $request : null;
+  const res = typeof $response !== "undefined" && $response ? $response : null;
+  const url = (res && res.url) || (req && req.url) || "";
+
+  // Loon 传位置数组，Egern 传 JSON 字符串。
+  let opt = {};
+  if (PREFETCH) {
+    // feed 的位置参数和歌词脚本不同，由 feed/lyrics-prefetch.js 解析后传入。
+    opt = typeof SPOTIFY_PREFETCH_OPTIONS !== "undefined" && SPOTIFY_PREFETCH_OPTIONS ? SPOTIFY_PREFETCH_OPTIONS : {};
+  } else {
+    try {
+      const raw = typeof $argument !== "undefined" ? $argument : undefined;
+      if (Array.isArray(raw)) {
+        const modes = ["full", "no_card", "metadata_only", "response_only", "card_only"];
+        const modeInThird = modes.indexOf(raw[2]) >= 0;
+        opt = { lyrics_source: raw[0], enable_lyrics: raw[1], desktop: modeInThird ? false : raw[2],
+          lyrics_mode: modeInThird ? raw[2] : modes.includes(raw[3]) ? raw[3] : undefined };
+      }
+      else if (typeof raw === "string") {
+        try {
+          opt = JSON.parse(raw || "{}") || {};
+        } catch (e) {
+          // Loon 单参数时可能直接传字符串
+          opt = { lyrics_source: raw };
+        }
+      } else if (raw && "object" == typeof raw) opt = raw;
+    } catch (e) {
+      opt = {};
+    }
+  }
+  const flag = (v, d) => (v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0"));
+  // 客户端模式：auto 按 User-Agent 识别，拿不到 UA 时再看 Loon 运行环境。
+  const requestUserAgent = () => {
+    if (!req || !req.headers || "object" != typeof req.headers) return "";
+    for (const key in req.headers) {
+      if (String(key).toLowerCase() !== "user-agent") continue;
+      const value = req.headers[key];
+      return String(Array.isArray(value) ? value[0] || "" : value == null ? "" : value);
+    }
+    return "";
+  };
+  const detectDesktop = () => {
+    const ua = requestUserAgent();
+    if (/iPhone|iPad|iPod|Android/i.test(ua)) return false;
+    if (/Macintosh|Mac OS X|Darwin|Windows NT/i.test(ua)) return true;
+    const loon = typeof $loon !== "undefined" ? String($loon) : "";
+    return /^Mac\b/i.test(loon);
+  };
+  const desktopMode = (v) => {
+    if (v === undefined || v === null || v === "") return detectDesktop();
+    const mode = String(v).trim().toLowerCase();
+    if (mode === "auto") return detectDesktop();
+    if (mode === "macos" || mode === "mac" || mode === "desktop") return true;
+    if (mode === "ios" || mode === "iphone" || mode === "ipad" || mode === "mobile") return false;
+    return flag(v, false);
+  };
+  const desktop = desktopMode(opt.desktop);
+
+  // 这个脚本只在响应阶段被调用；请求阶段或参数关闭时直接放行。
+  // Loon 靠 enable= 决定是否加载脚本，Egern 不支持条件加载，只能在这里早退。
+  if (!PREFETCH && !res) {
+    $done({});
+    return;
+  }
+  if (!PREFETCH && (!flag(opt.enable_lyrics, true) || opt.lyrics_mode === "metadata_only" || opt.lyrics_mode === "card_only")) {
+    $done({});
+    return;
+  }
+
+  const match = /\/color-lyrics\/v\d\/track\/([A-Za-z0-9]+)/.exec(url);
+  let trackId = PREFETCH ? "" : match ? match[1] : "";
+  if (!PREFETCH && !match) {
+    $done({});
+    return;
+  }
+
+  const USER_AGENT = "xzavier-modules/1.0 (https://github.com/xzavier-amico/modules)";
+  const utf8 = new TextDecoder("utf-8");
+  const encoder = new TextEncoder();
+
+  // spotify.js 在改写曲目元数据时，顺手把曲名 / 歌手 / 时长存进了本地存储。
+  // 命中时连 oEmbed 都不用请求，只留 embed 页面取封面配色。
+  const TRACK_CACHE_KEY = "spotify.track.meta";
+  const TRACK_CACHE_MAX = 24;
+
+  // 歌词结果缓存：同一首歌的播放器、歌词页与歌词卡会重复请求 color-lyrics，
+  // 命中后直接回缓存，不再打第三方源。命中的歌词基本不会变，存久一点；
+  // 查不到时只记 10 分钟，避免一次网络抖动把这首歌永久判成「无歌词」。
+  const LYRICS_CACHE_KEY = "spotify.lyrics.cache";
+  const LYRICS_CACHE_MAX = 8;
+  const LYRICS_CACHE_HIT_TTL = 24 * 60 * 60 * 1000;
+  const LYRICS_CACHE_MISS_TTL = 10 * 60 * 1000;
+  const LYRICS_CACHE_MAX_LINES = 400;
+  const LYRICS_CACHE_MAX_BYTES = 400 * 1024;
+  const LYRICS_DEADLINE_MS = 15000;
+  const PLAIN_FALLBACK_MS = 5000;
+  // feed 脚本在返回 scrollsita 之前等歌词；比歌词页的 15 秒短，避免 Now Playing
+  // 卡片列表等太久。超时就不补卡，歌词页之后仍可正常重试。
+  const PREFETCH_DEADLINE_MS = 8000;
+
+  const storeBackend = () =>
+    typeof $persistentStore !== "undefined" && $persistentStore ? $persistentStore : null;
+
+  function readJsonMap(key) {
+    const store = storeBackend();
+    if (!store) return null;
+    try {
+      const raw = store.read(key);
+      const map = raw ? JSON.parse(raw) : null;
+      return map && "object" == typeof map && !Array.isArray(map) ? map : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function writeJsonMap(key, map) {
+    const store = storeBackend();
+    if (!store) return;
+    try {
+      store.write(JSON.stringify(map), key);
+    } catch (e) {
+      // 存储写失败不影响本次响应。
+    }
+  }
+
+  function cachedTrackMeta(id) {
+    const map = readJsonMap(TRACK_CACHE_KEY);
+    const value = map && map[id];
+    if (!value || !value[0]) return null;
+    const ms = Number(value[2]);
+    const color = value[4];
+    return {
+      title: String(value[0]),
+      artist: String(value[1] || "").trim(),
+      duration: Number.isFinite(ms) && ms > 10000 ? ms / 1000 : undefined,
+      color: color && Number.isFinite(Number(color.r)) && Number.isFinite(Number(color.g)) && Number.isFinite(Number(color.b))
+        ? { r: Number(color.r), g: Number(color.g), b: Number(color.b) }
+        : null,
+    };
+  }
+
+  // 从 oEmbed / embed 拿到的元数据也写回同一份缓存：下次播放直接命中，
+  // 连 open.spotify.com 都不用请求。顺便缓存封面色，歌词页背景保持一致。
+  function rememberTrackMeta(id, title, artist, durationMs, color) {
+    if (!id || !title) return;
+    const map = readJsonMap(TRACK_CACHE_KEY) || {};
+    const next = [String(title), String(artist || ""), Number(durationMs) || 0, Date.now()];
+    if (color && Number.isFinite(Number(color.r)) && Number.isFinite(Number(color.g)) && Number.isFinite(Number(color.b))) {
+      next[4] = { r: Number(color.r), g: Number(color.g), b: Number(color.b) };
+    }
+    const old = map[id];
+    if (
+      old &&
+      old[0] === next[0] &&
+      old[1] === next[1] &&
+      Number(old[2]) === next[2] &&
+      (!next[4] || (old[4] && old[4].r === next[4].r && old[4].g === next[4].g && old[4].b === next[4].b))
+    ) return;
+    map[id] = next;
+    const ids = Object.keys(map).sort((a, b) => Number(map[b][3] || 0) - Number(map[a][3] || 0));
+    for (const key of ids.slice(TRACK_CACHE_MAX)) delete map[key];
+    writeJsonMap(TRACK_CACHE_KEY, map);
+  }
+
+  function lyricsSourceKey() {
+    const wanted = String(opt.lyrics_source || "auto").toLowerCase();
+    return wanted === "lrclib" || wanted === "musixmatch" || wanted === "netease" || wanted === "qq" ? wanted : "auto";
+  }
+
+  const lyricsCacheKey = (id) => lyricsSourceKey() + "|" + id;
+
+  function readLyricsCache(key) {
+    const map = readJsonMap(LYRICS_CACHE_KEY);
+    const entry = map && map[key];
+    if (!entry || "object" != typeof entry) return null;
+    const ttl = entry.m ? LYRICS_CACHE_MISS_TTL : LYRICS_CACHE_HIT_TTL;
+    if (!(Date.now() - Number(entry.t || 0) < ttl)) return null;
+    if (entry.m) return { miss: true };
+    const lines = Array.isArray(entry.a) ? entry.a : [];
+    if (!lines.length) return null;
+    const signed = (value) => (value > 0x7fffffff ? value - 0x100000000 : value);
+    const provider = String(entry.p || "LRCLIB");
+    return {
+      payload: {
+        lyrics: {
+          syncType: entry.s === "UNSYNCED" ? "UNSYNCED" : "LINE_SYNCED",
+          lines: lines.map((pair) => ({
+            startTimeMs: String(Number(pair && pair[0]) || 0),
+            words: String((pair && pair[1]) || ""),
+            syllables: [],
+            endTimeMs: "0",
+          })),
+          provider: provider,
+          providerLyricsId: entry.i === undefined || entry.i === null ? "" : String(entry.i),
+          providerDisplayName: provider,
+          syncLyricsUri: "",
+          isDenseTypeface: false,
+          alternatives: [],
+          language: String(entry.l || "en"),
+          isRtlLanguage: false,
+          fullscreenAction: "FULLSCREEN_LYRICS",
+        },
+        colors: {
+          background: signed(Number(entry.c && entry.c[0]) || 0xff808080),
+          text: signed(Number(entry.c && entry.c[1]) || 0xff000000),
+          highlightText: signed(Number(entry.c && entry.c[2]) || 0xffffffff),
+        },
+        hasVocalRemoval: false,
+      },
+    };
+  }
+
+  function writeLyricsCache(key, payload) {
+    const map = readJsonMap(LYRICS_CACHE_KEY) || {};
+    const now = Date.now();
+    if (!payload) {
+      map[key] = { t: now, m: 1 };
+    } else {
+      const lyrics = payload.lyrics || {};
+      const colors = payload.colors || {};
+      const lines = [];
+      const raw = Array.isArray(lyrics.lines) ? lyrics.lines : [];
+      for (let i = 0; i < raw.length && i < LYRICS_CACHE_MAX_LINES; i += 1) {
+        const line = raw[i];
+        if (!line || typeof line.words !== "string" || !line.words.trim()) continue;
+        lines.push([Number(line.startTimeMs) || 0, line.words.slice(0, 200)]);
+      }
+      if (!lines.length) return;
+      map[key] = {
+        t: now,
+        m: 0,
+        s: lyrics.syncType === "UNSYNCED" ? "UNSYNCED" : "LINE_SYNCED",
+        p: String(lyrics.provider || "LRCLIB"),
+        i: lyrics.providerLyricsId === undefined || lyrics.providerLyricsId === null ? "" : String(lyrics.providerLyricsId),
+        l: String(lyrics.language || "en"),
+        c: [Number(colors.background) || 0xff808080, Number(colors.text) || 0xff000000, Number(colors.highlightText) || 0xffffffff],
+        a: lines,
+      };
+    }
+    for (const id of Object.keys(map)) {
+      const entry = map[id];
+      const ttl = entry && entry.m ? LYRICS_CACHE_MISS_TTL : LYRICS_CACHE_HIT_TTL;
+      if (!entry || !(now - Number(entry.t || 0) < ttl)) delete map[id];
+    }
+    const byAge = () => Object.keys(map).sort((a, b) => Number(map[b].t || 0) - Number(map[a].t || 0));
+    for (const id of byAge().slice(LYRICS_CACHE_MAX)) delete map[id];
+
+    // 存储空间和解析成本都要控住：整包超过上限时继续按时间淘汰最旧的。
+    const store = storeBackend();
+    if (!store) return;
+    try {
+      let json = JSON.stringify(map);
+      for (const id of byAge()) {
+        if (json.length <= LYRICS_CACHE_MAX_BYTES || Object.keys(map).length <= 1) break;
+        delete map[id];
+        json = JSON.stringify(map);
+      }
+      store.write(json, LYRICS_CACHE_KEY);
+    } catch (e) {
+      // 存储写失败不影响本次响应。
+    }
+  }
+
+  // 歌词页配色在 albumColors() 里按官方规则计算：封面主色做背景，未激活行黑色，
+  // 当前 / 已唱行白色。三项都是 alpha=0xFF 的不透明色，不能依赖 alpha 区分。
+  // 官方 previewLines 给 5 行；超过歌词总行数时按实际行数截断。
+  const PREVIEW_LINES = 5;
+
+  // 这些正则会在逐行解析里反复用到，提到外层只创建一次。
+  const LRC_STAMP = /\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
+  const LRC_OFFSET = /^\[offset:\s*(-?\d+)\s*\]$/i;
+  const LRC_BRACKET = /\[[^\]]*\]/g;
+  const NORMALIZE_DROP = /[^\p{L}\p{M}\p{N}]+/gu;
+  const LIVE_MARK = /(?:\blive\b|live版|现场|現場|[一二三四五六七八九十\d]+公)/i;
+  const STAGE_MARK = /([一二三四五六七八九十\d]+公)/;
+  const INSTRUMENTAL_MARK = /伴奏|instrumental|karaoke/i;
+  const SONG_TITLE_LIVE = /\s*[-–—]\s*[^-–—]*(?:\blive\b|live版|现场|現場).*$/i;
+  const SONG_TITLE_LIVE_BRACKET = /[（(][^()（）]*(?:live|现场|現場)[^()（）]*[)）]/gi;
+  const SONG_TITLE_BRACKET_GROUP = /[（(]([^()（）]*)[)）]/g;
+  // 括号里带这些词时说明是不同版本（Live / Remix / 伴奏…），不能当装饰信息删掉。
+  const SONG_TITLE_VERSION_BRACKET = /\b(?:live|acoustic|unplugged|remix|mix|version|edit|remaster(?:ed)?|instrumental|karaoke|demo|cover|session|mono|stereo|deluxe|bonus|explicit|clean)\b|现场|現場|演唱会|演唱會|伴奏|纯音乐|純音樂|混音|重制|重製|翻唱|翻自|试听|試聽|片段|版/i;
+  const SONG_TITLE_BRACKET_NOISE = /[（(\[][^()（）\[\]]*\b(?:(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?(?:\s+version)?|feat\.?|ft\.?|featuring|with|prod\.?|radio edit|single version|album version|bonus track|deluxe(?: edition)?|explicit|clean|mono|stereo)\b[^()（）\[\]]*[)）\]]/gi;
+  const SONG_TITLE_DASH_FEAT = /\s*[-–—]\s*(?:feat\.?|ft\.?|featuring|with|prod\.?)\b.*$/i;
+  const SONG_TITLE_DASH_EDITION = /\s*[-–—]\s*(?:(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?(?:\s+version)?|radio edit|single version|album version|bonus track|deluxe(?: edition)?|explicit|clean|mono|stereo)\s*$/i;
+  const ARTIST_SPLIT = /[,，、/;&]|\b(?:feat\.?|ft\.?|featuring|with)\b/i;
+  const CJK_MARK = /[\u3400-\u9fff]/;
+  const KANA_MARK = /[\u3040-\u30ff]/;
+  const HANGUL_MARK = /[\uac00-\ud7af]/;
+  const HAN_MARK = /[\u4e00-\u9fff]/;
+
+  // 响应体上限：官方歌词正常 < 300 KiB，第三方 JSON 也远小于 2 MiB。
+  // 超过上限直接放行 / 当作没查到，避免异常响应把脚本内存打爆。
+  const MAX_LYRICS_BYTES = 2 * 1024 * 1024;
+  const MAX_HTTP_JSON_BYTES = 2 * 1024 * 1024;
+
+  let settled = false;
+  let deadline;
+  let plainTimer;
+  let plainFallback = null;
+  // 第三方请求是否出现过网络错误 / 5xx / 429；这类失败不应写成「无歌词」短缓存。
+  let networkFailed = false;
+  let cacheKey = "";
+  let prefetchTimer;
+  let prefetchCallback = null;
+  let prefetchSettle = null;
+  const finish = (value) => {
+    if (settled) return;
+    settled = true;
+    if (deadline !== undefined && typeof clearTimeout === "function") clearTimeout(deadline);
+    if (plainTimer !== undefined && typeof clearTimeout === "function") clearTimeout(plainTimer);
+    $done(value);
+  };
+
+  if (PREFETCH) {
+    // 只暴露一个「先查歌词、写完缓存再回调」的入口。feed 脚本在补歌词卡之前
+    // 调用它：歌词已经准备好才组装卡片，客户端随后请求 color-lyrics 时直接命中
+    // 缓存，不会出现「卡片先出来、歌词过一会儿才到」的空卡。
+    prefetchSettle = (payload) => {
+      if (settled) return;
+      settled = true;
+      if (prefetchTimer !== undefined && typeof clearTimeout === "function") clearTimeout(prefetchTimer);
+      const callback = prefetchCallback;
+      prefetchCallback = null;
+      if (callback) callback(payload);
+    };
+    globalThis.__spotifyLyricsPrefetch = (id, callback) => {
+      if (!id || typeof callback !== "function") return;
+      if (settled || !flag(opt.enable_lyrics, true)) {
+        callback(null);
+        return;
+      }
+      trackId = id;
+      cacheKey = lyricsCacheKey(id);
+      const cached = readLyricsCache(cacheKey);
+      if (cached) {
+        callback(cached.miss ? null : cached.payload);
+        return;
+      }
+      prefetchCallback = callback;
+      if (typeof setTimeout === "function") {
+        prefetchTimer = setTimeout(() => {
+          if (settled) return;
+          // 超时不算「确认没有歌词」，不写 miss，下次歌词页还能重试。
+          networkFailed = true;
+          prefetchSettle(null);
+        }, PREFETCH_DEADLINE_MS);
+      }
+      resolvePublicLyrics((payload) => {
+        if (settled) return;
+        if (payload || !networkFailed) writeLyricsCache(cacheKey, payload);
+        prefetchSettle(payload);
+      });
+    };
+    return;
+  }
+
+  const rawBody = res.body;
+  const rawBytes = toBytes(rawBody);
+  const rawLength = "string" == typeof rawBody ? rawBody.length : rawBytes.length;
+  if (rawLength > MAX_LYRICS_BYTES) {
+    // 超大的官方响应不解析，原样放行；超大 404 也当作没有歌词。
+    finish({});
+    return;
+  }
+
+  // protobuf 不先转 UTF-8：只检查第一个非空白字节来区分 JSON。
+  let start = 0;
+  while (start < rawBytes.length && (rawBytes[start] === 32 || rawBytes[start] === 9 || rawBytes[start] === 10 || rawBytes[start] === 13)) start++;
+  const trimmed = typeof rawBody === "string" ? rawBody.trim() : rawBytes[start] === 123 ? toText(rawBytes).trim() : "";
+  const hasBody = typeof rawBody === "string" ? trimmed.length > 0 : rawBytes.length > 0;
+  const status = Number(res.status || res.statusCode);
+
+  function headerValue(headers, name) {
+    if (!headers || "object" != typeof headers) return "";
+    for (const key in headers) {
+      if (String(key).toLowerCase() !== name) continue;
+      const value = headers[key];
+      if (Array.isArray(value)) return String(value[0] || "");
+      return String(value === undefined || value === null ? "" : value);
+    }
+    return "";
+  }
+
+  // 404 的 body 和 Content-Type 都描述错误，不能用来推断歌词响应格式。
+  // 补全时遵循请求的 format / Accept；没有提示则用客户端默认格式。
+  const accept = headerValue(req && req.headers, "accept").toLowerCase();
+  const format = /[?&]format=(json|protobuf)(?:&|$)/i.exec(url);
+  const requestedProto = format ? format[1].toLowerCase() === "protobuf"
+    : accept.indexOf("protobuf") >= 0 ? true
+    : accept.indexOf("json") >= 0 ? false
+    : null;
+  const protoMode = status === 200 && hasBody
+    ? trimmed.charAt(0) !== "{"
+    : requestedProto !== null ? requestedProto : !desktop;
+
+  // 不把登录、限流或服务端错误伪装成有歌词。
+  if (status !== 200 && status !== 404) {
+    finish({});
+    return;
+  }
+
+  // 官方「没有歌词」不一定回 404：protobuf 请求经常是 200 + 空体。
+  // 空体有两种情况，必须区分开：
+  //   * 上游确实没内容（content-length 缺失或 0）-> 当作没有歌词，去第三方补；
+  //   * body 没交到脚本手里（content-length > 0）-> 原样放行，不能把官方歌词顶掉。
+  if (status === 200 && !hasBody) {
+    const declared = Number(headerValue(res && res.headers, "content-length"));
+    if (Number.isFinite(declared) && declared > 0) {
+      finish({});
+      return;
+    }
+  } else if (status === 200) {
+    if (protoMode) {
+      // 解析不了（拿不到原始字节）时返回 -1，宁可放行也不要顶掉官方歌词。
+      const inspected = rawBytes.length ? inspectProto(rawBytes) : null;
+      const count = inspected ? inspected.count : -1;
+      if (count !== 0) {
+        // 免费号的歌词有每月额度，用完服务端会在 restriction（字段 14）里回
+        // monthlyLimitReached，客户端就只显示「额度已用完」。归一成 showLyrics 再放行。
+        const cleaned = count > 0 ? normalizeRestrictionProto(inspected) : null;
+        if (cleaned) finish({ status: 200, headers: { "Content-Type": "application/x-protobuf" }, body: cleaned });
+        else finish({});
+        return;
+      }
+    } else if (hasLyrics(trimmed)) {
+      const cleaned = stripRestrictionJson(trimmed);
+      if (cleaned) finish({ status: 200, headers: { "Content-Type": "application/json; charset=utf-8" }, body: cleaned });
+      else finish({});
+      return;
+    }
+  }
+
+  // 歌词结果缓存：同一首歌在播放器 / 歌词页 / 歌词卡之间的重复请求不再重复查源。
+  // 只缓存「官方没有歌词」的分支，官方歌词不会走到这里。
+  cacheKey = lyricsCacheKey(trackId);
+  const cachedLyrics = readLyricsCache(cacheKey);
+  if (cachedLyrics) {
+    if (cachedLyrics.miss) {
+      finish({});
+      return;
+    }
+    emit(cachedLyrics.payload);
+    return;
+  }
+
+  // 总时限；超时后用纯文本兜底，没有就按「没有歌词」放行。
+  if (typeof setTimeout === "function") deadline = setTimeout(() => {
+    if (settled) return;
+    // 超时说明至少有一个源没按时回来，不能当作「确认无歌词」写短缓存。
+    networkFailed = true;
+    if (plainFallback) {
+      writeLyricsCache(cacheKey, plainFallback);
+      emit(plainFallback);
+    } else {
+      finish({});
+    }
+  }, LYRICS_DEADLINE_MS);
+  resolveLyrics((payload) => {
+    if (settled) return;
+    // 纯网络失败不写 miss，下一次打开还能重试；只有所有源都明确没结果才记 10 分钟。
+    if (payload || !networkFailed) writeLyricsCache(cacheKey, payload);
+    if (!payload) {
+      finish({});
+      return;
+    }
+    emit(payload);
+  });
+
+  // 取曲目元数据 -> 按配置的歌词源找 -> 回调 payload
+  function resolveLyrics(cb) {
+    resolvePublicLyrics(cb);
+  }
+
+  function resolvePublicLyrics(cb) {
+    // 客户端拉过的元数据优先：命中时直接查歌词，open.spotify.com 一次都不请求，
+    // 歌词页背景用默认底色（不再为封面配色抓 embed 页面）。
+    const cached = cachedTrackMeta(trackId);
+    if (cached) {
+      runSource(sourceOrder(cached.title, cached.artist), cached.title, cached.artist, cb, cached.duration, () => cached.color || null);
+      return;
+    }
+    const oembedUrl = "https://open.spotify.com/oembed?url=" + encodeURIComponent("https://open.spotify.com/track/" + trackId);
+    const embedUrl = "https://open.spotify.com/embed/track/" + trackId;
+    let meta = null;
+    let embed = null;
+    let metaDone = false;
+    let embedStarted = false;
+    let embedDone = false;
+    let started = false;
+    const merged = () => {
+      const oembed = {
+        title: String((meta && meta.title) || ""),
+        artist: String((meta && meta.author_name) || "").trim(),
+      };
+      const page = embed || {};
+      // 缺歌手或 Live 曲目时以 embed 的写法 / 时长为准，其余优先 oEmbed。
+      const preferEmbed = !oembed.title || !oembed.artist || isLive(oembed.title);
+      return {
+        title: String((preferEmbed ? page.title : oembed.title) || oembed.title || page.title || ""),
+        artist: String((preferEmbed ? page.artist : oembed.artist) || oembed.artist || page.artist || "").trim(),
+        duration: page.duration,
+      };
+    };
+    const colorOf = () => (embed && embed.color) || null;
+    const start = () => {
+      if (started) return;
+      const info = merged();
+      if (!info.title) {
+        started = true;
+        cb(null);
+        return;
+      }
+      started = true;
+      rememberTrackMeta(trackId, info.title, info.artist, info.duration ? info.duration * 1000 : 0, colorOf());
+      runSource(sourceOrder(info.title, info.artist), info.title, info.artist,
+        (payload) => cb(payload), info.duration, colorOf);
+    };
+    // embed 提供封面主色与兜底元数据；请求与歌词查询并行，不阻塞歌词响应。
+    const beginEmbed = () => {
+      if (embedStarted) return;
+      embedStarted = true;
+      httpGetText(embedUrl, (html) => {
+        embed = parseEmbedTrack(html);
+        embedDone = true;
+        // 歌词可能已经先返回了；embed 晚到时只补一份封面配色与更准确的元数据。
+        if (started && embed && embed.color) {
+          const info = merged();
+          rememberTrackMeta(trackId, info.title, info.artist, info.duration ? info.duration * 1000 : 0, embed.color);
+        }
+        maybeStart();
+      });
+    };
+    const maybeStart = () => {
+      if (started) return;
+      const info = merged();
+      if (!metaDone) return;
+      if (!info.title) {
+        // oEmbed 没给曲名时靠 embed 补；embed 也失败才放弃。
+        if (!embedDone) {
+          beginEmbed();
+          return;
+        }
+        start();
+        return;
+      }
+      // 缺歌手、或 Live 曲目要靠 embed 的歌手 / 时长做校验，才等 embed。
+      if ((!info.artist || isLive(info.title)) && !embedDone) {
+        beginEmbed();
+        return;
+      }
+      // 正常曲目立即开始查歌词，同时发出配色请求，但不等待它。
+      beginEmbed();
+      start();
+    };
+    httpGetJson(oembedUrl, (data) => {
+      meta = data;
+      metaDone = true;
+      maybeStart();
+    });
+  }
+
+  // ---- 歌词源 -----------------------------------------------------------
+
+  function sourceOrder(title, artist) {
+    const wanted = String(opt.lyrics_source || "auto").toLowerCase();
+    // Musixmatch 是 Spotify 的官方歌词上游，auto 不使用，仅在显式选择时查询。
+    const auto = CJK_MARK.test(title + artist)
+      ? ["netease", "qq", "lrclib"] : ["lrclib", "netease", "qq"];
+    if (wanted === "lrclib" || wanted === "musixmatch" || wanted === "netease" || wanted === "qq") return [wanted];
+    return auto;
+  }
+
+  // 并发查询所有来源：首个通过校验的同步歌词胜出；只有纯文本时等全部结束。
+  function runSource(order, title, artist, done, duration, colorOf) {
+    if (settled) return;
+    if (!order.length) {
+      done(null);
+      return;
+    }
+    let remaining = order.length;
+    let finished = false;
+    for (const name of order) {
+      if (settled || finished) return;
+      lookup(name, title, artist, duration, (record) => {
+        if (settled || finished) return;
+        if (record && colorOf) record.albumColor = colorOf();
+        const payload = buildPayload(record);
+        if (payload && (payload.lyrics.syncType === "LINE_SYNCED" || order.length === 1)) {
+          finished = true;
+          done(payload);
+          return;
+        }
+        if (payload && !plainFallback) {
+          plainFallback = payload;
+          // 有纯文本但同步歌词还在路上时，别让用户干等到总超时：
+          // 5 秒内还没有同步版本就先把纯文本发出去，后续结果不再覆盖。
+          if (typeof setTimeout === "function") plainTimer = setTimeout(() => {
+            if (settled || !plainFallback) return;
+            writeLyricsCache(cacheKey, plainFallback);
+            emit(plainFallback);
+          }, PLAIN_FALLBACK_MS);
+        }
+        remaining -= 1;
+        if (!remaining) {
+          finished = true;
+          done(plainFallback);
+        }
+      });
+    }
+  }
+
+  function lookup(name, title, artist, duration, cb) {
+    if (name === "lrclib") return lookupLrclib(title, artist, duration, cb);
+    if (name === "netease") return lookupNetease(title, artist, duration, cb);
+    if (name === "qq") return lookupQq(title, artist, duration, cb);
+    if (name === "musixmatch") return lookupMusixmatch(title, artist, duration, cb);
+    cb(null);
+  }
+
+  // LRCLIB：/api/get 只认精确的曲名+歌手，命中时可能只有纯文本没有时间轴，
+  // 所以拿它的时长当锚点，再去 /api/search 挑一版时长接近、带时间轴的。
+  function lookupLrclib(title, artist, duration, cb) {
+    const cleanTitle = queryTitle(title);
+    const query = (name) => "track_name=" + encodeURIComponent(name) + (artist ? "&artist_name=" + encodeURIComponent(artist) : "");
+    const finish = (list, record, anchor) => {
+      const picked = pickRecord(list, title, anchor, artist);
+      cb(picked ? withProvider(picked, "LRCLIB") : record && hasAnyLyrics(record) ? withProvider(record, "LRCLIB") : null);
+    };
+    const accept = (record, name) => {
+      if (!record || !matchesSong(title, artist, duration, record.trackName, record.artistName, Number(record.duration))) record = null;
+      let anchor = duration;
+      if (!Number.isFinite(anchor) && record && "object" == typeof record && Number.isFinite(Number(record.duration))) {
+        anchor = Number(record.duration);
+      }
+      if (record && isSynced(record)) {
+        cb(withProvider(record, "LRCLIB"));
+        return;
+      }
+
+      httpGetJson("https://lrclib.net/api/search?" + query(name), (list) => {
+        if (pickRecord(list, title, anchor, artist)) {
+          finish(list, record, anchor);
+          return;
+        }
+        // 歌手写法不一致（feat. / 多歌手 / 翻译名）时，用歌名再搜一次；
+        // pickRecord 仍会按 artist 过滤，不会把别人的同名歌当成结果。
+        if (artist) {
+          httpGetJson("https://lrclib.net/api/search?track_name=" + encodeURIComponent(name), (fallback) => finish(fallback, record, anchor));
+          return;
+        }
+        finish(list, record, anchor);
+      });
+    };
+    // 先按完整曲名查；没有结果时再按去掉 feat / remaster 后缀的曲名查一次，
+    // 与 EeveeSpotify 的 strippedTrackTitle 思路一致。
+    httpGetJson("https://lrclib.net/api/get?" + query(title), (record) => {
+      if (record && matchesSong(title, artist, duration, record.trackName, record.artistName, Number(record.duration))) {
+        accept(record, title);
+        return;
+      }
+      if (cleanTitle !== title) {
+        httpGetJson("https://lrclib.net/api/get?" + query(cleanTitle), (fallback) => accept(fallback, cleanTitle));
+        return;
+      }
+      accept(null, title);
+    });
+  }
+
+  // 网易云：搜索接口不需要 token，中文曲库覆盖最好。
+  function lookupNetease(title, artist, duration, cb) {
+    const query = encodeURIComponent(queryTitle(title) + (artist ? " " + artist : ""));
+    const headers = { Referer: "https://music.163.com/" };
+    httpGetJson("https://music.163.com/api/search/get?s=" + query + "&type=1&limit=10&offset=0", (data) => {
+      const songs = data && data.result && data.result.songs;
+      const select = () => {
+        const candidates = rankSongs(songs, title, artist, duration, (item) => item.name,
+          (item) => (item.artists || []).reduce((names, a) => names.concat(artistNames(a)), []), (item) => Number(item.duration) / 1000);
+        tryCandidates(candidates, (picked, next) => {
+          httpGetJson("https://music.163.com/api/song/lyric?id=" + picked.id + "&lv=-1&kv=-1&tv=-1", (lyric) => {
+            const text = lyric && lyric.lrc && lyric.lrc.lyric;
+            next(text ? { provider: "NetEase", providerId: String(picked.id), syncedLyrics: text } : null);
+          }, headers);
+        }, cb);
+      };
+      // 搜索结果可能缺少歌手别名：只对匹配的曲目按歌手 ID 补全，最多 3 次请求。
+      const pending = [];
+      if (rankSongs(songs, title, artist, duration, (item) => item.name,
+          (item) => (item.artists || []).reduce((names, a) => names.concat(artistNames(a)), []), (item) => Number(item.duration) / 1000).length) {
+        select();
+        return;
+      }
+      if (artist && Array.isArray(songs)) {
+        for (const song of songs) {
+          if (!song || !matchesSong(title, "", duration, song.name, "", Number(song.duration) / 1000)) continue;
+          const people = Array.isArray(song.artists) ? song.artists : [];
+          if (matchesArtist(artist, people.reduce((names, a) => names.concat(artistNames(a)), []))) continue;
+          for (const person of people) {
+            if (!person || !/^\d+$/.test(String(person.id)) || pending.some((p) => p.id === person.id)) continue;
+            if (pending.length < 3) pending.push(person);
+          }
+        }
+      }
+      const resolve = (index) => {
+        if (index >= pending.length) { select(); return; }
+        const person = pending[index];
+        httpGetJson("https://music.163.com/api/artist/" + person.id, (details) => {
+          const verified = details && details.artist;
+          if (verified && String(verified.id) === String(person.id) && Array.isArray(songs)) {
+            for (const song of songs) {
+              for (const candidate of (song && Array.isArray(song.artists) ? song.artists : [])) {
+                if (candidate && candidate.id === person.id) candidate.alias = artistNames(candidate).concat(artistNames(verified));
+              }
+            }
+          }
+          resolve(index + 1);
+        }, headers);
+      };
+      resolve(0);
+    }, headers);
+  }
+
+  // QQ 音乐：搜索拿 songmid，再用 nobase64=1 取明文 LRC。
+  function lookupQq(title, artist, duration, cb) {
+    const query = encodeURIComponent(queryTitle(title) + (artist ? " " + artist : ""));
+    const headers = { Referer: "https://y.qq.com/" };
+    httpGetJson("https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=" + query + "&format=json&n=10&p=1", (data) => {
+      const list = data && data.data && data.data.song && data.data.song.list;
+      const candidates = rankSongs(list, title, artist, duration, (item) => item.songname,
+        (item) => (item.singer || []).reduce((names, a) => names.concat(artistNames(a)), []), (item) => Number(item.interval));
+      tryCandidates(candidates, (picked, next) => {
+        httpGetJson(
+          "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=" + picked.songmid + "&format=json&nobase64=1&g_tk=5381",
+          (lyric) => {
+            const text = lyric && lyric.lyric;
+            next(text ? { provider: "QQ Music", providerId: String(picked.songmid), syncedLyrics: text } : null);
+          },
+          headers,
+        );
+      }, cb);
+    }, headers);
+  }
+
+  // Musixmatch：沿用 EeveeSpotify 的做法，先用固定 app_id 换匿名 token，
+  // 再调 macro.subtitles.get 拿逐行字幕。
+  function lookupMusixmatch(title, artist, duration, cb) {
+    // 该接口不提供足够的场次信息，Live 曲目直接跳过。
+    if (isLive(title)) { cb(null); return; }
+    const APP_ID = "mac-ios-v2.0";
+    httpGetJson("https://apic.musixmatch.com/ws/1.1/token.get?app_id=" + APP_ID, (token) => {
+      const userToken = token && token.message && token.message.body && token.message.body.user_token;
+      if (!userToken) {
+        cb(null);
+        return;
+      }
+      const target =
+        "https://apic.musixmatch.com/ws/1.1/macro.subtitles.get?format=json&app_id=" + APP_ID +
+        "&usertoken=" + encodeURIComponent(userToken) +
+        "&track_spotify_id=" + encodeURIComponent(trackId) +
+        "&subtitle_format=lrc" +
+        "&q_track=" + encodeURIComponent(title) +
+        (artist ? "&q_artist=" + encodeURIComponent(artist) : "") +
+        "&user_language=zh";
+      httpGetJson(target, (data) => {
+        const status = data && data.message && data.message.header && data.message.header.status_code;
+        const calls = data && data.message && data.message.body && data.message.body.macro_calls;
+        const matched = calls && calls["matcher.track.get"] && calls["matcher.track.get"].message;
+        const track = matched && matched.body && matched.body.track;
+        // 字幕接口可能返回无关的默认结果，需同时校验曲目匹配与字幕状态。
+        if (Number(status) !== 200 || !matched || !matched.header || Number(matched.header.status_code) !== 200 || !track || Number(track.instrumental) === 1 ||
+            !matchesSong(title, artist, duration, track.track_name, track.artist_name, Number(track.track_length))) {
+          cb(null);
+          return;
+        }
+        const sub = calls && calls["track.subtitles.get"] && calls["track.subtitles.get"].message;
+        const list = sub && sub.body && sub.body.subtitle_list;
+        const first = Array.isArray(list) ? list[0] : null;
+        const body = first && first.subtitle && first.subtitle.subtitle_body;
+        if (!sub || !sub.header || Number(sub.header.status_code) !== 200 || !body || Number(first.subtitle.restricted) === 1) {
+          cb(null);
+          return;
+        }
+        cb({ provider: "Musixmatch", providerId: String(first.subtitle.subtitle_id || ""), syncedLyrics: body });
+      });
+    });
+  }
+
+  function withProvider(record, name) {
+    const out = {};
+    for (const key in record) {
+      if (Object.prototype.hasOwnProperty.call(record, key)) out[key] = record[key];
+    }
+    out.provider = name;
+    return out;
+  }
+
+  function isSynced(record) {
+    return Boolean(record && "string" == typeof record.syncedLyrics && record.syncedLyrics.trim());
+  }
+
+  function hasAnyLyrics(record) {
+    return Boolean(
+      record &&
+        ((typeof record.syncedLyrics === "string" && record.syncedLyrics.trim()) ||
+          (typeof record.plainLyrics === "string" && record.plainLyrics.trim())),
+    );
+  }
+
+  function rankSongs(list, title, artist, duration, nameOf, artistOf, durationOf) {
+    if (!Array.isArray(list)) return [];
+    const wanted = normalize(queryTitle(title));
+    const singer = normalize(artist);
+    const score = (item) => {
+      const name = normalize(nameOf(item));
+      const seconds = durationOf(item);
+      return (name === wanted ? 4 : name.indexOf(wanted) === 0 ? 2 : 0)
+        + (singer && matchesArtist(artist, artistOf(item)) ? 8 : 0)
+        + (Number.isFinite(duration) && duration > 0 && Math.abs(seconds - duration) <= 4 ? 6 : 0);
+    };
+    return list.filter((item) => item && matchesSong(title, artist, duration, nameOf(item), artistOf(item), durationOf(item)))
+      .sort((a, b) => score(b) - score(a)).slice(0, 3);
+  }
+
+  function isLive(title) {
+    return LIVE_MARK.test(String(title));
+  }
+
+  function songTitle(title) {
+    let text = String(title).replace(SONG_TITLE_LIVE, "").replace(SONG_TITLE_LIVE_BRACKET, "");
+    // 歌手名、版本说明不参与歌名比较：Spotify 常见 "Song (feat. X)"、
+    // "Song - 2011 Remaster" 而曲库只写 "Song"。
+    text = text.replace(SONG_TITLE_DASH_FEAT, "").replace(SONG_TITLE_DASH_EDITION, "");
+    text = text.replace(SONG_TITLE_BRACKET_NOISE, "");
+    return normalize(text);
+  }
+
+  // 查询第三方曲库时也先去掉 feat / remaster 等后缀；Live / Acoustic / Remix
+  // 这类真正决定版本的信息保留，避免把现场版查成录音室版。
+  // 括号里的影视 / 节目 / 歌手等装饰信息也一并去掉；只有包含版本词时才保留。
+  function queryTitle(title) {
+    let text = String(title);
+    text = text.replace(SONG_TITLE_DASH_FEAT, "").replace(SONG_TITLE_DASH_EDITION, "");
+    text = text.replace(SONG_TITLE_BRACKET_NOISE, "");
+    text = text.replace(SONG_TITLE_BRACKET_GROUP, (whole, inner) =>
+      SONG_TITLE_VERSION_BRACKET.test(inner) ? whole : " ");
+    return text.replace(/\s+/g, " ").trim() || String(title);
+  }
+
+  // 曲名可能是 "Song (电影《…》主题曲)"，曲库只写 "Song"；两边都按完整曲名
+  // 和去掉装饰括号后的曲名各比一次。版本词、Live、歌手等校验仍在 matchesSong
+  // 里单独进行。
+  function matchTitles(title, candidateTitle) {
+    const wanted = [];
+    for (const value of [songTitle(title), normalize(queryTitle(title))]) {
+      if (value && wanted.indexOf(value) < 0) wanted.push(value);
+    }
+    for (const value of [songTitle(candidateTitle), normalize(queryTitle(candidateTitle))]) {
+      if (value && wanted.indexOf(value) >= 0) return true;
+    }
+    return false;
+  }
+
+  function artistNames(person) {
+    if (!person || "object" != typeof person) return [];
+    return [person.name, person.trans].concat(Array.isArray(person.alias) ? person.alias : [],
+      Array.isArray(person.transNames) ? person.transNames : []).filter((name) => typeof name === "string" && name.trim());
+  }
+
+  function matchesArtist(artist, candidates) {
+    const names = [];
+    const add = (value) => {
+      if (typeof value !== "string") return;
+      const text = value.trim();
+      if (!text) return;
+      names.push(text);
+      for (const part of text.split(ARTIST_SPLIT)) {
+        const name = part.trim();
+        if (name) names.push(name);
+      }
+    };
+    if (Array.isArray(candidates)) {
+      for (const candidate of candidates) add(candidate);
+    } else {
+      add(candidates);
+    }
+    // 兼容曲库的“姓, 名”写法。
+    const key = (name) => normalize(String(name || "").replace(/^([^,，]+)[,，]\s*([^,，]+)$/, "$2 $1"));
+    const wanted = new Set([key(artist)]);
+    for (const part of String(artist || "").split(ARTIST_SPLIT)) {
+      if (part.trim()) wanted.add(key(part));
+    }
+    wanted.delete("");
+    return names.some((name) => wanted.has(key(name)));
+  }
+
+  function matchesSong(title, artist, duration, candidateTitle, candidateArtist, candidateDuration) {
+    if (!candidateTitle || !matchTitles(title, candidateTitle)) return false;
+    if (isLive(title) !== isLive(candidateTitle)) return false;
+    if (INSTRUMENTAL_MARK.test(candidateTitle) && !INSTRUMENTAL_MARK.test(title)) return false;
+    const singer = normalize(artist);
+    if (singer && !matchesArtist(artist, candidateArtist)) return false;
+    const stage = STAGE_MARK.exec(title);
+    const otherStage = STAGE_MARK.exec(candidateTitle);
+    if (stage && otherStage && stage[1] !== otherStage[1]) return false;
+    // 仅凭 “Live” 无法确定具体场次，需再核对时长和场次信息。
+    if (isLive(title)) {
+      const timed = Number.isFinite(duration) && duration > 0 && Number.isFinite(candidateDuration) && candidateDuration > 0;
+      if (timed && Math.abs(candidateDuration - duration) > 8) return false;
+      if (stage && !otherStage && (!timed || !singer)) return false;
+    }
+    return true;
+  }
+
+  function tryCandidates(candidates, fetch, cb, index = 0) {
+    if (settled) return;
+    if (index >= candidates.length) { cb(null); return; }
+    fetch(candidates[index], (record) => {
+      if (settled) return;
+      if (buildPayload(record)) cb(record);
+      else tryCandidates(candidates, fetch, cb, index + 1);
+    });
+  }
+
+  // ---- 工具函数 ---------------------------------------------------------
+
+  function toText(value) {
+    if (typeof value === "string") return value;
+    if (value instanceof ArrayBuffer) return utf8.decode(new Uint8Array(value));
+    if (value && ArrayBuffer.isView(value)) return utf8.decode(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+    return "";
+  }
+
+  function toBytes(value) {
+    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+    if (value && ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    return new Uint8Array(0);
+  }
+
+  function hasLyrics(text) {
+    try {
+      const data = JSON.parse(text);
+      const lines = data && data.lyrics && data.lyrics.lines;
+      return Array.isArray(lines) && lines.some((line) => line && String(line.words || "").trim());
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function httpGetJson(target, callback, extraHeaders) {
+    httpGetText(target, (data) => {
+      let parsed = null;
+      try { parsed = data ? JSON.parse(data) : null; } catch (e) {}
+      callback(parsed);
+    }, extraHeaders);
+  }
+
+  function httpGetText(target, callback, extraHeaders, timeoutMs) {
+    if (settled) return;
+    let done = false;
+    const reply = (value) => {
+      if (done || settled) return;
+      done = true;
+      callback(value);
+    };
+    try {
+      const headers = { "User-Agent": USER_AGENT, Accept: target.indexOf("/embed/track/") >= 0 ? "text/html" : "application/json" };
+      if (extraHeaders) {
+        for (const key in extraHeaders) {
+          if (Object.prototype.hasOwnProperty.call(extraHeaders, key)) headers[key] = extraHeaders[key];
+        }
+      }
+      const options = { url: target, headers: headers, timeout: timeoutMs || 8000 };
+      const onReply = (error, response, data) => {
+        if (done || settled) return;
+        const statusCode = Number(response && response.status);
+        if (error || !response) {
+          networkFailed = true;
+          reply(null);
+          return;
+        }
+        // 429 / 5xx 是临时故障，标记后不写「无歌词」短缓存，下次还能重试。
+        if (statusCode === 429 || statusCode >= 500) networkFailed = true;
+        if (statusCode >= 400 || !data) {
+          reply(null);
+          return;
+        }
+        // 第三方接口不可控：超长响应不解析，避免 JSON.parse 占满内存。
+        if ("string" != typeof data || data.length > MAX_HTTP_JSON_BYTES) {
+          reply(null);
+          return;
+        }
+        reply(data);
+      };
+
+      // 优先用客户端的 $httpClient；没有注入时回退到 QX 的 $task.fetch 和
+      // 运行时自带的 fetch。某个客户端只实现了其中一种时也不会静默失败。
+      if (typeof $httpClient !== "undefined" && $httpClient && typeof $httpClient.get === "function") {
+        $httpClient.get(options, onReply);
+        return;
+      }
+      if (typeof $task !== "undefined" && $task && typeof $task.fetch === "function") {
+        $task.fetch({ url: target, headers: headers, timeout: timeoutMs || 8000 }).then(
+          (res) => onReply(null, { status: res.statusCode || res.status }, res.body),
+          (err) => onReply(err, null, null),
+        );
+        return;
+      }
+      if (typeof fetch === "function") {
+        fetch(target, { headers: headers }).then(
+          (res) => res.text().then((text) => onReply(null, { status: res.status }, text)),
+          (err) => onReply(err, null, null),
+        );
+        return;
+      }
+      onReply(new Error("no http client"), null, null);
+    } catch (e) {
+      networkFailed = true;
+      reply(null);
+    }
+  }
+
+  function emit(payload) {
+    if (PREFETCH) {
+      if (prefetchSettle) prefetchSettle(payload);
+      return;
+    }
+    if (protoMode) {
+      const bytes = encodeProto(payload.lyrics.lines, payload.lyrics.syncType, payload.lyrics.provider,
+        payload.lyrics.providerLyricsId, payload.lyrics.language, payload.colors);
+      // 与官方响应头保持一致。
+      finish({ status: 200, headers: { "Content-Type": "application/vnd.google.protobuf" }, body: bytes });
+      return;
+    }
+
+    finish({
+      status: 200,
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  // ---- protobuf ---------------------------------------------------------
+  //
+  // 字段与官方 color-lyrics 响应一致（Content-Type: application/vnd.google.protobuf）：
+  //   message Response   { LyricsData data = 1; LyricsColors colors = 2; }
+  //   message LyricsData {
+  //     bool timeSynchronized = 1;         // 1 = 逐行同步
+  //     repeated LyricsLine lines = 2;     // 完整歌词
+  //     string provider = 3;               // "MusixMatch"
+  //     string providerLyricsId = 4;       // "9539392"
+  //     string providerDisplayName = 5;    // "Musixmatch"
+  //     bool isDenseTypeface = 8;          // 中日韩用更紧的字形
+  //     string language = 10;              // "zh-Hant"
+  //     LyricsRestriction restriction = 14;// 1 = showLyrics
+  //     repeated LyricsLine previewLines = 17;  // 歌词卡用的前几行
+  //   }
+  //   message LyricsLine { int32 offsetMs = 1; string content = 2; }
+  //   message LyricsColors { uint32 backgroundColor = 1; uint32 lineColor = 2; uint32 activeLineColor = 3; }
+  //
+  // previewLines 供 Now Playing 歌词卡使用，必须和完整歌词一起返回。
+
+  function encodeLine(line) {
+    const content = encoder.encode(String(line.words || ""));
+    return pbConcat([pbUint(1, Number(line.startTimeMs) || 0), pbBytes(2, content)]);
+  }
+
+  function encodeProto(lines, syncType, provider, providerId, language, colors) {
+    const parts = [pbUint(1, syncType === "LINE_SYNCED" ? 1 : 0)];
+    for (let i = 0; i < lines.length; i += 1) parts.push(pbBytes(2, encodeLine(lines[i])));
+    parts.push(pbBytes(3, encoder.encode(provider || "LRCLIB")));
+    parts.push(pbBytes(4, encoder.encode(String(providerId === undefined || providerId === null ? "" : providerId))));
+    parts.push(pbBytes(5, encoder.encode(provider || "LRCLIB")));
+
+    const lang = String(language || "");
+    const dense = /^(?:zh|ja|ko)(?:-|$)/i.test(lang);
+    if (dense) parts.push(pbUint(8, 1));
+    if (lang) parts.push(pbBytes(10, encoder.encode(lang)));
+    parts.push(pbUint(14, 1));
+    for (let i = 0; i < lines.length && i < PREVIEW_LINES; i += 1) parts.push(pbBytes(17, encodeLine(lines[i])));
+
+    const lyrics = pbConcat(parts);
+    // colors 必须给：客户端拿它刷歌词页的背景和文字，字段缺失时是 0，alpha 也是 0，
+    // 整页歌词就成了透明的。JSON 用有符号整数，protobuf 这里必须还原成 uint32。
+    const argb = (value) => Number(value) >>> 0;
+    const palette = colors || {};
+    const colorsBytes = pbConcat([
+      pbUint(1, argb(palette.background === undefined ? 0xff808080 : palette.background)),
+      pbUint(2, argb(palette.text === undefined ? 0xff000000 : palette.text)),
+      pbUint(3, argb(palette.highlightText === undefined ? 0xffffffff : palette.highlightText)),
+    ]);
+    return pbConcat([pbBytes(1, lyrics), pbBytes(2, colorsBytes)]);
+  }
+
+  function inspectProto(bytes) {
+    try {
+      const top = pbFields(bytes);
+      for (let i = 0; i < top.length; i += 1) {
+        const field = top[i];
+        if (field.field !== 1 || field.wire !== 2) continue;
+        const inner = pbFields(field.bytes);
+        let count = 0;
+        for (let j = 0; j < inner.length; j += 1) {
+          if (inner[j].field === 2 && inner[j].wire === 2 && inner[j].bytes && inner[j].bytes.length) count += 1;
+        }
+        return { count, top, lyrics: field, inner };
+      }
+    } catch (e) {
+      return null;
+    }
+    return null;
+  }
+
+  // 把 LyricsData.restriction（字段 14）统一成 1 = showLyrics。
+  // 免费号额度用完时服务端回 3，客户端只显示额度提示；这里改回 1 后正常放行。
+  function normalizeRestrictionProto(inspected) {
+    const top = inspected.top;
+    let changed = false;
+    const outTop = [];
+    for (let i = 0; i < top.length; i += 1) {
+      const f = top[i];
+      if (f !== inspected.lyrics) {
+        outTop.push(pbEncodeField(f));
+        continue;
+      }
+      const inner = inspected.inner;
+      const outInner = [];
+      for (let j = 0; j < inner.length; j += 1) {
+        const g = inner[j];
+        if (g.field === 14 && g.wire === 0) {
+          if (g.value !== 1) {
+            changed = true;
+          }
+          outInner.push(pbUint(14, 1));
+          continue;
+        }
+        outInner.push(pbEncodeField(g));
+      }
+      outTop.push(pbBytes(1, pbConcat(outInner)));
+    }
+    return changed ? pbConcat(outTop) : null;
+  }
+
+  function stripRestrictionJson(text) {
+    try {
+      const data = JSON.parse(text);
+      const lyrics = data && data.lyrics;
+      if (!lyrics || !Object.prototype.hasOwnProperty.call(lyrics, "restriction")) return null;
+      delete lyrics.restriction;
+      return JSON.stringify(data);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function pbEncodeField(f) {
+    return f.raw;
+  }
+
+  // 直接拼 Uint8Array，避免逐字节 push 到普通数组：长歌词时既慢，
+  // 也可能撞上 Function.prototype.apply 的参数上限。
+  function pbConcat(list) {
+    let size = 0;
+    for (let i = 0; i < list.length; i += 1) size += list[i].length;
+    const out = new Uint8Array(size);
+    let at = 0;
+    for (let i = 0; i < list.length; i += 1) {
+      out.set(list[i], at);
+      at += list[i].length;
+    }
+    return out;
+  }
+
+  function pbFields(bytes) {
+    const out = [];
+    let pos = 0;
+    while (pos < bytes.length) {
+      const start = pos;
+      const key = pbReadVarint(bytes, pos);
+      if (key.next < 0 || !Number.isSafeInteger(key.value) || key.value < 8) throw new Error("protobuf key");
+      const field = Math.floor(key.value / 8);
+      const wire = key.value % 8;
+      if (wire === 0) {
+        const value = pbReadVarint(bytes, key.next);
+        if (value.next < 0) throw new Error("protobuf varint");
+        out.push({ field: field, wire: 0, value: value.value });
+        pos = value.next;
+      } else if (wire === 2) {
+        const len = pbReadVarint(bytes, key.next);
+        if (len.next < 0 || !Number.isSafeInteger(len.value) || len.value > bytes.length - len.next) throw new Error("protobuf length");
+        out.push({ field: field, wire: 2, bytes: bytes.subarray(len.next, len.next + len.value) });
+        pos = len.next + len.value;
+      } else if (wire === 5) {
+        pos = key.next + 4;
+        out.push({ field, wire });
+      } else if (wire === 1) {
+        pos = key.next + 8;
+        out.push({ field, wire });
+      } else {
+        throw new Error("protobuf wire");
+      }
+      if (pos > bytes.length) throw new Error("protobuf truncated");
+      out[out.length - 1].raw = bytes.subarray(start, pos);
+    }
+    return out;
+  }
+
+  function pbReadVarint(bytes, pos) {
+    let value = 0;
+    let shift = 0;
+    while (pos < bytes.length) {
+      const byte = bytes[pos];
+      // 绝大多数是 1-4 字节的小整数，走位运算快路径；超出后再退回乘法。
+      if (shift < 28) value |= (byte & 0x7f) << shift;
+      else value += (byte & 0x7f) * Math.pow(2, shift);
+      pos += 1;
+      if (shift === 63 && byte > 1) break;
+      if ((byte & 0x80) === 0) return { value: value, next: pos };
+      shift += 7;
+      if (shift > 63) break;
+    }
+    return { value: 0, next: -1 };
+  }
+
+  function pbWriteVarint(value) {
+    const out = [];
+    let rest = Math.max(0, Math.floor(value));
+    // 字段号 / 长度 / 毫秒时间戳都小于 2^31，位运算比 % 和 Math.floor 快。
+    if (rest <= 0x7fffffff) {
+      while (rest >= 128) {
+        out.push((rest & 0x7f) | 0x80);
+        rest >>>= 7;
+      }
+      out.push(rest);
+      return out;
+    }
+    while (rest >= 128) {
+      out.push((rest % 128) | 128);
+      rest = Math.floor(rest / 128);
+    }
+    out.push(rest);
+    return out;
+  }
+
+  function pbUint(field, value) {
+    return pbConcat([pbWriteVarint(field * 8), pbWriteVarint(value)]);
+  }
+
+  function pbBytes(field, bytes) {
+    return pbConcat([pbWriteVarint(field * 8 + 2), pbWriteVarint(bytes.length), bytes]);
+  }
+
+  function buildPayload(record) {
+    if (!record || "object" != typeof record || record.instrumental) return null;
+
+    if (typeof record.syncedLyrics === "string") {
+      const lines = parseLrc(record.syncedLyrics);
+      if (lines.length) return makePayload("LINE_SYNCED", lines, record);
+    }
+
+    if (typeof record.plainLyrics === "string") {
+      const lines = record.plainLyrics
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((words) => ({ startTimeMs: "0", words: words, syllables: [], endTimeMs: "0" }));
+      if (lines.length) return makePayload("UNSYNCED", lines, record);
+    }
+
+    return null;
+  }
+
+  // 客户端按 startTimeMs 递增定位当前行，并据此滚动列表。外部来源的行统一在这里
+  // 规范化：类型转字符串、丢掉无效和空行、按时间升序，避免乱序或空文本影响定位。
+  function normalizeLines(raw) {
+    if (!Array.isArray(raw)) return [];
+    const out = [];
+    for (const line of raw) {
+      if (!line || typeof line.words !== "string" || !line.words.trim()) continue;
+      const ms = Number(line.startTimeMs);
+      if (!Number.isSafeInteger(ms) || ms < 0) continue;
+      out.push({ startTimeMs: String(ms), words: line.words, syllables: [], endTimeMs: "0" });
+    }
+    out.sort((a, b) => Number(a.startTimeMs) - Number(b.startTimeMs));
+    return out;
+  }
+
+  // 客户端按严格结构读取这个对象，字段形状需要与官方 color-lyrics/v2 一致：
+  //
+  //   { lyrics: { syncType, lines[], provider, providerLyricsId, providerDisplayName,
+  //               syncLyricsUri, isDenseTypeface, alternatives, language,
+  //               isRtlLanguage, fullscreenAction },
+  //     colors: { background, text, highlightText },
+  //     hasVocalRemoval }
+  //
+  // iOS 与桌面共用同一套 JSON 形状。
+  function makePayload(syncType, rawLines, record) {
+    const lines = normalizeLines(rawLines);
+    if (!lines.length) return null;
+    const provider = record.provider || "LRCLIB";
+    const id = record.providerId !== undefined ? record.providerId : record.id;
+    const language = detectLanguage(lines);
+    // 值是 32 位有符号整数。
+    const signed = (v) => (v > 0x7fffffff ? v - 0x100000000 : v);
+    const palette = albumColors(record);
+    return {
+      lyrics: {
+        syncType: syncType,
+        lines: lines,
+        provider: provider,
+        providerLyricsId: id === undefined || id === null ? "" : String(id),
+        providerDisplayName: provider,
+        syncLyricsUri: "",
+        isDenseTypeface: false,
+        alternatives: [],
+        language: language,
+        isRtlLanguage: false,
+        fullscreenAction: "FULLSCREEN_LYRICS",
+      },
+      colors: {
+        background: signed(palette.background),
+        text: signed(palette.line),
+        highlightText: signed(palette.active),
+      },
+      hasVocalRemoval: false,
+    };
+  }
+
+  // ---- 歌词页配色 -------------------------------------------------------
+  //
+  // 官方歌词页把封面主色当背景，未激活的行用黑字，当前 / 已唱行用白字
+  // （参考 EeveeSpotify 的 LyricsColors：backgroundColor=封面提取色，
+  // lineColor=黑，activeLineColor=白）。默认值 0 会让整页透明，所以必须显式给。
+  // 封面色统一压到中等亮度，黑字才不会在深色封面上消失；拿不到封面色时用
+  // 灰色底，与参考实现的 Color.gray 兜底一致。
+  function albumColors(record) {
+    const line = 0xff000000;
+    const active = 0xffffffff;
+    const fallback = 0xff808080;
+    const source = record && record.albumColor;
+    const channel = (value) => Math.max(0, Math.min(255, Math.round(Number(value) || 0)));
+    if (!source || !Number.isFinite(Number(source.r)) || !Number.isFinite(Number(source.g)) || !Number.isFinite(Number(source.b))) {
+      return { background: fallback, line: line, active: active };
+    }
+    const r = channel(source.r);
+    const g = channel(source.g);
+    const b = channel(source.b);
+    const brightness = (r * 299 + g * 587 + b * 114) / 255000;
+    const amount = Math.abs(0.5 - brightness);
+    const mix = (value) => (brightness < 0.5
+      ? Math.round(value * (1 - amount) + 255 * amount)
+      : Math.round(value * (1 - amount)));
+    const background = (0xff000000 | (mix(r) << 16) | (mix(g) << 8) | mix(b)) >>> 0;
+    return { background: background, line: line, active: active };
+  }
+
+  // 公开 embed 页面（__NEXT_DATA__）同时带曲目元数据与封面主色。
+  function parseEmbedTrack(html) {
+    try {
+      const match = /<script\b[^>]*\bid=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i.exec(String(html || ""));
+      const data = match && JSON.parse(match[1]);
+      const entity = data && data.props && data.props.pageProps && data.props.pageProps.state && data.props.pageProps.state.data && data.props.pageProps.state.data.entity;
+      if (!entity || entity.type !== "track" || entity.id !== trackId || !(entity.title || entity.name)) return null;
+      const artists = Array.isArray(entity.artists)
+        ? entity.artists.filter(Boolean).map((item) => item && item.name).filter((name) => typeof name === "string" && name.trim())
+        : [];
+      const base = entity.visualIdentity && entity.visualIdentity.backgroundBase;
+      const color = base && Number.isFinite(Number(base.red)) && Number.isFinite(Number(base.green)) && Number.isFinite(Number(base.blue))
+        ? { r: Number(base.red), g: Number(base.green), b: Number(base.blue) }
+        : null;
+      return {
+        title: String(entity.title || entity.name),
+        artist: artists.join(", "),
+        duration: Number(entity.duration) / 1000,
+        color: color,
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // LRC -> Spotify 的 lines。支持一行多个时间戳、[offset:±ms]、两位或三位毫秒。
+  function parseLrc(text) {
+    const out = [];
+    let offset = 0;
+
+    for (const raw of String(text).split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line) continue;
+
+      const off = LRC_OFFSET.exec(line);
+      if (off) {
+        offset = parseInt(off[1], 10) || 0;
+        continue;
+      }
+
+      const stamps = [];
+      let m;
+      LRC_STAMP.lastIndex = 0;
+      while ((m = LRC_STAMP.exec(line))) stamps.push(m);
+      if (!stamps.length) continue;
+
+      const words = line.replace(LRC_BRACKET, "").trim();
+      if (!words) continue;
+
+      for (const s of stamps) {
+        const minutes = parseInt(s[1], 10);
+        const seconds = parseInt(s[2], 10);
+        const fracRaw = s[3] || "0";
+        const frac = parseInt(fracRaw, 10) / Math.pow(10, fracRaw.length);
+        let ms = Math.round((minutes * 60 + seconds + frac) * 1000) - offset;
+        if (ms < 0) ms = 0;
+        out.push({ startTimeMs: String(ms), words: words, syllables: [], endTimeMs: "0" });
+      }
+    }
+
+    out.sort((a, b) => Number(a.startTimeMs) - Number(b.startTimeMs));
+    return out;
+  }
+
+  // 同名曲目往往有好几版（原版、Video Edit、Extended Mix）。打分选版本：
+  // 时长贴近的优先（时间轴才对得上），其次要有同步时间轴，其次曲名精确匹配。
+  function pickRecord(list, title, duration, artist) {
+    if (!Array.isArray(list) || !list.length) return null;
+    const wanted = normalize(title);
+    const usable = list.filter((item) => {
+      if (!item || "object" != typeof item || item.instrumental) return false;
+      if (!matchesSong(title, artist, duration, item.trackName, item.artistName, Number(item.duration))) return false;
+      return Boolean(
+        (typeof item.syncedLyrics === "string" && item.syncedLyrics.trim()) ||
+          (typeof item.plainLyrics === "string" && item.plainLyrics.trim()),
+      );
+    });
+    if (!usable.length) return null;
+
+    const synced = (item) => Boolean(item.syncedLyrics && item.syncedLyrics.trim());
+    const named = (item) => normalize(item.trackName) === wanted;
+    const near = (item) =>
+      Number.isFinite(duration) &&
+      duration > 0 &&
+      Number.isFinite(Number(item.duration)) &&
+      Math.abs(Number(item.duration) - duration) <= 3;
+    const singer = normalize(artist);
+    const score = (item) => (synced(item) ? 2 : 0) + (named(item) ? 1 : 0) + (near(item) ? 4 : 0)
+      + (singer && matchesArtist(artist, item.artistName) ? 8 : 0);
+
+    let best = usable[0];
+    let bestScore = score(best);
+    for (let i = 1; i < usable.length; i += 1) {
+      const current = score(usable[i]);
+      if (current > bestScore) {
+        best = usable[i];
+        bestScore = current;
+      }
+    }
+    return best;
+  }
+
+  function normalize(text) {
+    // NFKC 处理全角 / 组合字符；翻译与简繁转换需要来源提供对应文本。
+    return String(text || "")
+      .normalize("NFKC")
+      .toLowerCase()
+      .replace(NORMALIZE_DROP, "");
+  }
+
+  function detectLanguage(lines) {
+    const sample = lines
+      .slice(0, 20)
+      .map((line) => line.words)
+      .join("");
+    if (KANA_MARK.test(sample)) return "ja";
+    if (HANGUL_MARK.test(sample)) return "ko";
+    if (HAN_MARK.test(sample)) return "zh";
+    return "en";
+  }
+})();
 
   // ------------------------------------------------------------ lyrics card
   //
@@ -615,10 +2142,27 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // 官方没有歌词的曲目，服务端不下发这一格。这里按真实形状补一格，section id
   // 复用真实歌词 section 的值；只补当前曲目的列表，已有歌词 section 时不重复补。
   const LYRICS_SECTION_ID = "spotify:section:0JQ5DB6s3cssW5Bo6cGq21";
+  const LYRICS_SECTION_ID_BYTES = new TextEncoder().encode(LYRICS_SECTION_ID);
 
   function scrollTrackId(url) {
     const match = /\/scrollsita\/v\d+\/scroll\/(?:spotify%3Atrack%3A|spotify:track:)([A-Za-z0-9]{22})/i.exec(url);
     return match ? match[1] : "";
+  }
+
+  // 补卡前先做一次廉价的字节扫描：列表里已经有歌词 section 时不用去查歌词，
+  // 避免每首官方有歌词的歌都白等一次第三方查询。完整的 section 结构仍由
+  // patchScroll 在重编码时确认。
+  function hasLyricsCard(buffer) {
+    if (!buffer || !buffer.length || buffer.length < LYRICS_SECTION_ID_BYTES.length) return false;
+    const needle = LYRICS_SECTION_ID_BYTES;
+    const last = buffer.length - needle.length;
+    for (let i = 0; i <= last; i += 1) {
+      if (buffer[i] !== needle[0]) continue;
+      let j = 1;
+      while (j < needle.length && buffer[i + j] === needle[j]) j += 1;
+      if (j === needle.length) return true;
+    }
+    return false;
   }
 
   function lyricsSection(trackId) {
@@ -732,6 +2276,27 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return;
   }
 
+  const trackId = isScroll ? scrollTrackId(url) : "";
+  const finish = (out) => {
+    if (!out || same(out, body)) {
+      $done({});
+      return;
+    }
+    $done({ body: out });
+  };
+
+  // 滚动页的歌词卡：先让歌词脚本把结果写进缓存，再补 section。这样卡片出现时
+  // 客户端随后请求 color-lyrics 会直接命中缓存，不会先显示空卡、重进才加载。
+  // 列表里已经有歌词 section（官方歌词）时不做这次查询。
+  const prefetch = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsPrefetch : null;
+  if (isScroll && wantCard && trackId && typeof prefetch === "function" &&
+      !(typeof hasLyricsCard === "function" && hasLyricsCard(body))) {
+    prefetch(trackId, (payload) => {
+      finish(patchScroll(body, trackId, wantAds, !!payload));
+    });
+    return;
+  }
+
   let out = null;
   if (isHome) {
     out = wantAds ? stripHomeAds(body) : null;
@@ -740,14 +2305,9 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   } else {
     // 滚动页一次遍历完成：先删广告 section，再按过滤后的列表补歌词 section，
     // 避免补在会被丢弃的 section 之后。
-    out = patchScroll(body, scrollTrackId(url), wantAds, wantCard);
+    out = patchScroll(body, trackId, wantAds, wantCard);
   }
 
-  if (!out || same(out, body)) {
-    $done({});
-    return;
-  }
-
-  $done({ body: out });
+  finish(out);
 
 })();

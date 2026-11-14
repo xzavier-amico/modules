@@ -9,10 +9,27 @@
   // 官方没有歌词的曲目，服务端不下发这一格。这里按真实形状补一格，section id
   // 复用真实歌词 section 的值；只补当前曲目的列表，已有歌词 section 时不重复补。
   const LYRICS_SECTION_ID = "spotify:section:0JQ5DB6s3cssW5Bo6cGq21";
+  const LYRICS_SECTION_ID_BYTES = new TextEncoder().encode(LYRICS_SECTION_ID);
 
   function scrollTrackId(url) {
     const match = /\/scrollsita\/v\d+\/scroll\/(?:spotify%3Atrack%3A|spotify:track:)([A-Za-z0-9]{22})/i.exec(url);
     return match ? match[1] : "";
+  }
+
+  // 补卡前先做一次廉价的字节扫描：列表里已经有歌词 section 时不用去查歌词，
+  // 避免每首官方有歌词的歌都白等一次第三方查询。完整的 section 结构仍由
+  // patchScroll 在重编码时确认。
+  function hasLyricsCard(buffer) {
+    if (!buffer || !buffer.length || buffer.length < LYRICS_SECTION_ID_BYTES.length) return false;
+    const needle = LYRICS_SECTION_ID_BYTES;
+    const last = buffer.length - needle.length;
+    for (let i = 0; i <= last; i += 1) {
+      if (buffer[i] !== needle[0]) continue;
+      let j = 1;
+      while (j < needle.length && buffer[i + j] === needle[j]) j += 1;
+      if (j === needle.length) return true;
+    }
+    return false;
   }
 
   function lyricsSection(trackId) {

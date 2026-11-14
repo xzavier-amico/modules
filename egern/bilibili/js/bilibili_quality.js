@@ -156,7 +156,7 @@ export default async function (ctx) {
   let opt = {};
   try {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
-    if (Array.isArray(raw)) opt = { auto_quality: raw[0] };
+    if (Array.isArray(raw)) opt = { auto_quality: raw[0], web: raw[1] };
     else if (typeof raw === "string") opt = JSON.parse(raw || "{}") || {};
     else if (raw && "object" == typeof raw) opt = raw;
   } catch (e) {
@@ -166,6 +166,13 @@ export default async function (ctx) {
     v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0");
 
   if (!flag(opt.auto_quality, true)) {
+    $done({});
+    return;
+  }
+  // 网页版播放请求只改 query；关闭网页版支持时直接放行。
+  const web = flag(opt.web, true);
+  const isWebPlayurl = /\/x\/player\/wbi\/playurl|\/pgc\/player\/web\/playurl|\/x\/web-interface\//i.test(url);
+  if (!web && isWebPlayurl) {
     $done({});
     return;
   }

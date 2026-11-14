@@ -18,6 +18,7 @@ block_members_only = switch,false,type=boolean,tag=屏蔽会员专属视频,desc
 home_cleanup = select,"standard","all","off",type=string,tag=首页内容清理,desc=standard 表示 Playables；all 表示再加竖屏直播；off 表示不清理。
 jump_ahead = switch,true,type=boolean,tag=Jump Ahead 按钮,desc=启用播放器中的 Jump Ahead 快进按钮。
 max_speed = select,"4","3","2","off",type=string,tag=最大倍速,desc=允许的最高播放倍速；选 off 表示不修改倍速数值与倍速上限。
+web = switch,true,type=boolean,tag=支持网页版,desc=同时处理 www.youtube.com / m.youtube.com / music.youtube.com 的 YouTube 与 YouTube Music 网页。
 
 [Rule]
 # 拒绝 QUIC，强制回落 TCP。HTTP/3 不经过 HTTP 代理，脚本拿不到 ad_break / player 请求。
@@ -27,18 +28,18 @@ AND, ((DOMAIN, youtubei.googleapis.com), (PROTOCOL, QUIC)), REJECT
 
 [Script]
 # 请求阶段：ad_break / log_event 不需要请求体，单独一条避免缓冲 body。
-request if ${url} ~= /^https:\/\/(?:youtubei\.googleapis\.com|music\.youtube\.com)\/youtubei\/v1\/(?:(?:player|music)\/ad_break|log_event)(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.request.js?v=20261114-2", {${block_ads}, ${block_ai}, ${max_height}, ${caption_lang}, ${home_menu}, ${block_shorts_feed}, ${youtube_music}, ${block_members_only}, ${home_cleanup}, ${jump_ahead}, ${max_speed}}) with tag="youtube.request.meta", timeout=10
+request if ${url} ~= /^https:\/\/(?:youtubei\.googleapis\.com|(?:www|m)\.youtube\.com|music\.youtube\.com)\/youtubei\/v1\/(?:(?:player|music)\/ad_break|log_event)(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.request.js?v=20261114-3", {${block_ads}, ${block_ai}, ${max_height}, ${caption_lang}, ${home_menu}, ${block_shorts_feed}, ${youtube_music}, ${block_members_only}, ${home_cleanup}, ${jump_ahead}, ${max_speed}, ${web}}) with tag="youtube.request.meta", timeout=10
 # 请求阶段：initplayback / videoplayback 需要请求体。
-request if ${url} ~= /^https?:\/\/[\w-]+\.googlevideo\.com\/(?:initplayback|videoplayback)(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.request.js?v=20261114-2", {${block_ads}, ${block_ai}, ${max_height}, ${caption_lang}, ${home_menu}, ${block_shorts_feed}, ${youtube_music}, ${block_members_only}, ${home_cleanup}, ${jump_ahead}, ${max_speed}}) with requires_body=true, binary_body_mode=true, tag="youtube.request.playback", timeout=30
+request if ${url} ~= /^https?:\/\/[\w-]+\.googlevideo\.com\/(?:initplayback|videoplayback)(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.request.js?v=20261114-3", {${block_ads}, ${block_ai}, ${max_height}, ${caption_lang}, ${home_menu}, ${block_shorts_feed}, ${youtube_music}, ${block_members_only}, ${home_cleanup}, ${jump_ahead}, ${max_speed}, ${web}}) with requires_body=true, binary_body_mode=true, tag="youtube.request.playback", timeout=30
 # 响应阶段：config / log_event 只做 UMP 密钥提取。
-response if ${url} ~= /^https:\/\/(?:youtubei\.googleapis\.com|music\.youtube\.com)\/youtubei\/v1\/(?:config|log_event)(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.key.js?v=20261114-2") with requires_body=true, binary_body_mode=true, tag="youtube.key", timeout=10
+response if ${url} ~= /^https:\/\/(?:youtubei\.googleapis\.com|music\.youtube\.com)\/youtubei\/v1\/(?:config|log_event)(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.key.js?v=20261114-3") with requires_body=true, binary_body_mode=true, tag="youtube.key", timeout=10
 # 响应阶段：browse / next / player 等常规接口。
-response if ${url} ~= /^https:\/\/(?:youtubei\.googleapis\.com|music\.youtube\.com)\/youtubei\/v1\/(?:navigation\/resolve_url|browse|next|player|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch)(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.response.js?v=20261114-2", {${block_ads}, ${block_ai}, ${max_height}, ${caption_lang}, ${home_menu}, ${block_shorts_feed}, ${youtube_music}, ${block_members_only}, ${home_cleanup}, ${jump_ahead}, ${max_speed}}) with requires_body=true, binary_body_mode=true, tag="youtube.response", timeout=60
+response if ${url} ~= /^https:\/\/(?:youtubei\.googleapis\.com|(?:www|m)\.youtube\.com|music\.youtube\.com)\/youtubei\/v1\/(?:navigation\/resolve_url|browse|next|player|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch)(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.response.js?v=20261114-3", {${block_ads}, ${block_ai}, ${max_height}, ${caption_lang}, ${home_menu}, ${block_shorts_feed}, ${youtube_music}, ${block_members_only}, ${home_cleanup}, ${jump_ahead}, ${max_speed}, ${web}}) with requires_body=true, binary_body_mode=true, tag="youtube.response", timeout=60
 # 响应阶段：initplayback 的 UMP 解密。
-response if ${url} ~= /^https?:\/\/[\w-]+\.googlevideo\.com\/initplayback(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.response.js?v=20261114-2", {${block_ads}, ${block_ai}, ${max_height}, ${caption_lang}, ${home_menu}, ${block_shorts_feed}, ${youtube_music}, ${block_members_only}, ${home_cleanup}, ${jump_ahead}, ${max_speed}}) with requires_body=true, binary_body_mode=true, tag="youtube.ump", timeout=60
+response if ${url} ~= /^https?:\/\/[\w-]+\.googlevideo\.com\/initplayback(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.response.js?v=20261114-3", {${block_ads}, ${block_ai}, ${max_height}, ${caption_lang}, ${home_menu}, ${block_shorts_feed}, ${youtube_music}, ${block_members_only}, ${home_cleanup}, ${jump_ahead}, ${max_speed}, ${web}}) with requires_body=true, binary_body_mode=true, tag="youtube.ump", timeout=60
 [Rewrite]
 request if ${url} ~= /^https:\/\/www\.youtube\.com\/(pagead|pcs)\// then reject(404)
 request if ${url} ~= /^https:\/\/s\.youtube\.com\/api\/stats\/ads/ then reject(404)
 
 [MitM]
-hostname = *.googlevideo.com, youtubei.googleapis.com, www.youtube.com, music.youtube.com, s.youtube.com
+hostname = *.googlevideo.com, youtubei.googleapis.com, www.youtube.com, m.youtube.com, music.youtube.com, s.youtube.com

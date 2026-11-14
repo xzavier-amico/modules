@@ -4,7 +4,8 @@
 - Loon：`loon/bilibili/bilibili-clean.plugin`
 
 精简版，只保留四件事：去广告、去会员推广、去遥测、播放请求自动要最高画质。
-不重写首页、不换 CDN、不碰播放签名。
+不重写首页、不换 CDN、不碰播放签名。App / gRPC 与网页版 API 共用同一套过滤，
+网页版由 `web` 开关控制（默认开启）。
 
 ## 改了什么
 
@@ -13,7 +14,16 @@
 | `app.bilibili.com/x/v2/splash/*` | 开屏：清空 `list` / `event_list` / `brand_list` |
 | `app.bilibili.com/x/v2/feed/index*` | 首页：删 `cm_*` / `ad_*` / 游戏推广卡，大图 banner 只删其中的广告项；竖屏流删 `vertical_ad_*` |
 | `app.bilibili.com/x/v2/search/square` | 搜索：同上 |
-| `api.bilibili.com/x/web-interface/wbi/index/top/feed/rcmd` | 网页推荐流：同上 |
+| `api.bilibili.com/x/web-interface/wbi/index/top/feed/rcmd` | 网页推荐流：只过滤 `data.item` 里 `goto=ad` 的条目 |
+| `api.bilibili.com/x/web-interface/wbi/search/type` | 网页搜索：过滤 `data.result` / 分组 `data` 里的广告项 |
+| `api.bilibili.com/x/web-interface/wbi/search/square` | 网页搜索热词 / 推荐位：过滤广告项 |
+| `api.bilibili.com/x/web-interface/archive/related` | 网页相关推荐：过滤 `data` 数组里的广告项 |
+| `api.bilibili.com/x/web-interface/view` | 网页详情：删 `cm_config` / `cm_ipad` / `cm_under_player`，过滤 `relates` 广告 |
+| `api.bilibili.com/x/web-interface/wbi/view/detail` | 网页详情聚合：交给同一套详情处理 |
+| `api.bilibili.com/x/polymer/web-dynamic/v1/feed/all` | 网页动态：删 `DYNAMIC_TYPE_AD` 条目 |
+| `api.bilibili.com/pgc/view/web/season` | 网页番剧页：删 `result.payment`（会员付费块） |
+| `api.live.bilibili.com/xlive/web-interface/v1/index/getList` | 网页直播首页：只删 `banner` 里带 `is_ad` / `show_ad_icon` 的卡片 |
+| `api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom` | 网页直播间：只删 banner 与购物位 |
 | `api.bilibili.com/x/vip/ads/materials` | 大会员广告素材：清空 |
 | `api.bilibili.com/pgc/view/v2/app/season` | 番剧页：删 `data.payment`（会员付费块） |
 | `api.bilibili.com/pgc/page/*` | 番剧页：删 `module_style` / `module_type` 为 `ad` 的模块 |
@@ -85,6 +95,7 @@ gRPC 帧的 flag 是 1 表示消息体 gzip（帧级压缩，不是 `Content-Enc
 | `hide_vip` | true | 番剧页 payment 块、大会员广告素材、VIP 卡片、我的页大会员推广 |
 | `clean_ui` | true | 底部「发布」+「会员购」、顶部「游戏中心」、「我的」页的「我的服务」分区 |
 | `auto_quality` | true | playurl 的 qn 改成 120（4K） |
+| `web` | true | 支持网页版：处理网页推荐、搜索、相关推荐、详情、动态、番剧与直播 API；关闭后网页版请求完全放行 |
 
 ## 注意
 
@@ -95,6 +106,8 @@ gRPC 帧的 flag 是 1 表示消息体 gzip（帧级压缩，不是 `Content-Enc
   保留 MITM，需要从模块里去掉 `grpc.biliapi.net` 才会完全恢复。
 - 「我的」页顶部的会员入口仍是 App 本地 UI，不走 HTTP，代理层删不掉；能删的是接口下发的
   VIP 卡片、大会员推广块、我的服务分区和番剧页付费块。
+- 网页版只处理 API 返回的 JSON，不改网页 HTML 里的 `__INITIAL_STATE__`；网页首屏如果直接内嵌了
+  某些广告数据，脚本看不到。`web` 关闭后所有网页 API 原样放行。
 - 首页广告卡如果换了新的 `card_type` 命名，脚本会当成普通卡片放行，不会误删内容。
 - 模块对 `bilibili.com`、`biliapi.net` 的 QUIC 直接 REJECT，强制回落 TCP；HTTP/3 走 UDP
   不经过代理，不拒绝时 gRPC 与 playurl 的请求/响应脚本拿不到。

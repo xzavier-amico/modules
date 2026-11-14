@@ -1,6 +1,6 @@
 # YouTube Enhance — Egern 版
 
-**Egern** 模块：屏蔽广告、字幕翻译、YouTube Music 去广告与后台播放、默认分辨率、首页菜单与 Shorts 过滤。
+**Egern** 模块：屏蔽广告、字幕翻译、YouTube Music 去广告与后台播放、默认分辨率、首页菜单与 Shorts 过滤；支持 www / m / YouTube Music 网页版。
 
 脚本按请求阶段拆成 `js/youtube.request.js` / `js/youtube.key.js` / `js/youtube.response.js`，入口是 Egern 原生的
 `export default async function (ctx)`，参数经 `env_schema` → `ctx.env` 传入。构建时外层会套一层
@@ -52,11 +52,11 @@ modules:
 ```
 
 3. HTTPS 改写需要 **安装并信任 Egern CA 证书并开启 MITM**
-   （`*.googlevideo.com`、`youtubei.googleapis.com`、`www.youtube.com`、`music.youtube.com`、`s.youtube.com`）。
+   （`*.googlevideo.com`、`youtubei.googleapis.com`、`www.youtube.com`、`m.youtube.com`、`music.youtube.com`、`s.youtube.com`）。
 
 ## 参数
 
-共 11 个参数。广告、画质、首页菜单都做了聚合；后台播放、PiP、热更新哈希这些不再单独给开关，脚本常开。
+共 12 个参数。广告、画质、首页菜单都做了聚合；后台播放、PiP、热更新哈希这些不再单独给开关，脚本常开。
 
 ### 广告与 AI
 
@@ -88,6 +88,7 @@ modules:
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
 | `youtube_music` | true | YouTube Music 增强：去广告、后台播放、PiP；关闭后 YouTube Music 的请求完全放行 |
+| `web` | true | 支持网页版：处理 `www.youtube.com` / `m.youtube.com` / `music.youtube.com` 的 youtubei JSON 响应；关闭后网页版请求完全放行 |
 
 补充说明：
 
@@ -97,6 +98,8 @@ modules:
 - `background_play`、`pip`、`strip_hot_hash` 已从参数表移除，脚本始终按开启处理。
 - On-the-go 依赖 YouTube Premium 的服务端校验，注入的入口点开仍会提示开通 Premium，已整体移除；`jump_ahead` 与原生章节显示不受影响。
 - `block_members_only` 只从列表页移除会员专属视频，不会解锁播放；它按徽章文字（`会员专享` / `Members only` 等）匹配，极少数标题恰好同名的视频可能被误删。
+- 网页版响应是 JSON，脚本走单独的保守过滤：只删已知广告 renderer、播放器广告字段、Shorts 货架、会员专属视频与 AI/商店控件；画质只裁剪 `streamingData.adaptiveFormats`，不改渐进式 `formats` 和音频。
+- 网页版不处理网页 HTML 本身，也不改直播聊天 / 弹幕；网页播放页如果某些广告只在 HTML 里，脚本看不到。
 - 脚本按请求阶段拆分，独立维护，不自动同步外部改动；外部实现若有变化，需要人工对比后再决定是否跟进。
 
 ## 转换对照（Surge → Egern）

@@ -201,6 +201,11 @@
     try {
       // 参数解析也放进 try：任何异常都不能让 ad_break 漏过去。
       const options = readOptions();
+      // 网页版开关关闭时，网页请求完全放行，不拦 ad_break、不剥热更新头。
+      if (isWebRequest(request) && false === options.web) {
+        $done(undefined);
+        return;
+      }
       const musicDisabled = isMusicRequest(request) && false === options.youtubeMusic;
 
       if (path.endsWith("/ad_break")) {

@@ -8,6 +8,7 @@
     stripHomeAds,
     hideBrowseAds,
     hideScrollAds,
+    hasLyricsCard,
     patchConfigurationResponse,
     patchAttributesResponse,
     looksLikeUcs,

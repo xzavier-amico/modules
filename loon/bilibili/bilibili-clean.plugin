@@ -11,6 +11,7 @@ block_ads = switch,true,type=boolean,tag=去广告,desc=删除开屏、首页推
 hide_vip = switch,true,type=boolean,tag=去会员推广,desc=删除番剧页 payment 块、大会员广告素材和 VIP 卡片。
 clean_ui = switch,true,type=boolean,tag=精简界面,desc=删除底部「发布」+「会员购」、顶部「游戏中心」，以及「我的」页的「我的服务」分区。
 auto_quality = switch,true,type=boolean,tag=自动最高画质,desc=把 playurl 请求的 qn 改成 120（4K），服务端按账号权限返回实际最高档。
+web = switch,true,type=boolean,tag=支持网页版,desc=同时处理 B 站网页版的推荐、搜索、相关推荐、详情、动态、番剧和直播接口。
 
 [Rule]
 # 遥测与广告
@@ -27,10 +28,10 @@ AND, ((DOMAIN-SUFFIX, biliapi.net), (PROTOCOL, QUIC)), REJECT
 request if ${url} ~= /^https?:\/\/api\.bilibili\.com\/x\/report\/click\// then reject(404)
 
 [Script]
-response if ${url} ~= /^https?:\/\/(?:app\.bilibili\.com|api\.bilibili\.com|api\.live\.bilibili\.com)\/(?:x\/v2\/splash\/|x\/v2\/feed\/index|x\/v2\/search\/square|x\/web-interface\/wbi\/index\/top\/feed\/rcmd|x\/vip\/ads\/materials|pgc\/view\/v2\/app\/season|pgc\/page\/|pgc\/activity\/deliver\/material\/receive|x\/resource\/show\/tab|x\/v2\/account\/mine|xlive\/(?:app-interface\/v2\/(?:index\/feed|room\/recList)|app-room\/v1\/index\/getInfoByRoom))/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/js/bilibili_clean.js", {${block_ads}, ${hide_vip}, ${clean_ui}}) with requires_body=true, tag="BiliBili Clean", timeout=20
-request if ${url} ~= /^https?:\/\/(?:api|app)\.bilibili\.com\/(?:x|pgc)\/.*playurl/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/js/bilibili_quality.js", {${auto_quality}}) with tag="BiliBili Clean", timeout=10
+response if ${url} ~= /^https?:\/\/(?:app\.bilibili\.com|api\.bilibili\.com|api\.live\.bilibili\.com)\/(?:x\/v2\/splash\/|x\/v2\/feed\/index|x\/v2\/search\/square|x\/web-interface\/(?:view|archive\/related|wbi\/(?:index\/top\/feed\/rcmd|search\/(?:type|square)|view\/detail))|x\/polymer\/web-dynamic\/v1\/feed\/all|x\/vip\/ads\/materials|pgc\/view\/(?:v2\/app|web)\/season|pgc\/page\/|pgc\/activity\/deliver\/material\/receive|x\/resource\/show\/tab|x\/v2\/account\/mine|xlive\/(?:app-interface\/v2\/(?:index\/feed|room\/recList)|(?:app|web)-room\/v1\/index\/getInfoByRoom|web-interface\/v1\/index\/getList))/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/js/bilibili_clean.js?v=20261114-1", {${block_ads}, ${hide_vip}, ${clean_ui}, ${web}}) with requires_body=true, tag="BiliBili Clean", timeout=20
+request if ${url} ~= /^https?:\/\/(?:api|app)\.bilibili\.com\/(?:x|pgc)\/.*playurl/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/js/bilibili_quality.js?v=20261114-1", {${auto_quality}, ${web}}) with tag="BiliBili Clean", timeout=10
 # gRPC 的播放请求体里也有 qn，改完再放行。
-request if ${url} ~= /^https?:\/\/(?:app|grpc)\.bili(?:bili\.com|api\.net)\/bilibili\.(?:app\.playurl\.v1\.PlayURL|pgc\.gateway\.player\.v2\.PlayURL|app\.playerunite\.v1\.Player)\/(?:PlayView|PlayViewUnite)$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/js/bilibili_quality.js", {${auto_quality}}) with requires_body=true, binary_body_mode=true, tag="BiliBili Clean", timeout=10
+request if ${url} ~= /^https?:\/\/(?:app|grpc)\.bili(?:bili\.com|api\.net)\/bilibili\.(?:app\.playurl\.v1\.PlayURL|pgc\.gateway\.player\.v2\.PlayURL|app\.playerunite\.v1\.Player)\/(?:PlayView|PlayViewUnite)$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/js/bilibili_quality.js?v=20261114-1", {${auto_quality}, ${web}}) with requires_body=true, binary_body_mode=true, tag="BiliBili Clean", timeout=10
 # 详情页 / 评论区 / 播放器走 gRPC（protobuf over HTTP/2），需要二进制 body。
 response if ${url} ~= /^https?:\/\/(?:grpc\.biliapi\.net|grpc\.bilibili\.com|app\.biliapi\.net|app\.bilibili\.com)\/bilibili\.(?:app\.(?:(?:view|viewunite)\.v1\.View|dynamic\.v2\.Dynamic)|main\.community\.reply\.v1\.Reply)\// then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/js/bilibili_grpc.js", {${block_ads}}) with requires_body=true, binary_body_mode=true, tag="BiliBili Clean gRPC", timeout=20
 

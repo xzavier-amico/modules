@@ -266,6 +266,98 @@ test("no third-party match keeps the official 404", async () => {
   assert.equal(response.headers.get("x-spotify-mock"), "passthrough");
 });
 
+test("scroll adds the lyrics card only when lyrics are ready, then reuses the cache", async () => {
+  const id = "0VjIjW4GlUZAMYd2vXMi3b";
+  const trackUri = "spotify:track:" + id;
+  const section = bytes(1, concat([str(2, "normal-card")]));
+  const scrollBody = bytes(1, concat([section]));
+  const fullTitle = "晚秋（电影《晚秋》主题曲）";
+  const calls = stubNetwork([
+    [
+      "spclient.wg.spotify.com",
+      (target) =>
+        target.includes("/color-lyrics/")
+          ? upstreamResponse(new Uint8Array(0), 404, "application/x-protobuf")
+          : upstreamResponse(scrollBody, 200, "application/x-protobuf"),
+    ],
+    [
+      "open.spotify.com/oembed",
+      () => upstreamResponse(JSON.stringify({ title: fullTitle, author_name: "毛宁" }), 200, "application/json"),
+    ],
+    [
+      "lrclib.net/api/get",
+      (target) =>
+        target.includes(encodeURIComponent(fullTitle))
+          ? upstreamResponse("not found", 404, "text/plain")
+          : upstreamResponse(
+              JSON.stringify({ trackName: "晚秋", artistName: "毛宁", duration: 200000, syncedLyrics: "[00:01.00]秋" }),
+              200,
+              "application/json",
+            ),
+    ],
+    ["lrclib.net/api/search", () => upstreamResponse(JSON.stringify([]), 200, "application/json")],
+  ]);
+
+  const env = { BLOCK_ADS: "false", LYRICS_SOURCE: "lrclib" };
+  const response = await handle(
+    new Request("http://localhost/music/scrollsita/v1/scroll/" + trackUri),
+    env,
+  );
+  assert.equal(response.status, 200);
+  const out = new Uint8Array(await response.arrayBuffer());
+  const list = parse(out).find((field) => field.no === 1).bytes;
+  const sections = parse(list).filter((field) => field.no === 1).map((field) => parse(field.bytes));
+  const card = sections.find((fields) => fields.some((field) => field.no === 5));
+  assert.ok(card, "the card is added after lyrics are found");
+  const trackRef = parse(card.find((field) => field.no === 5).bytes).find((field) => field.no === 1);
+  assert.equal(decoder.decode(trackRef.bytes), trackUri);
+  assert.ok(
+    calls.some((url) => url.includes("track_name=" + encodeURIComponent("晚秋") + "&")),
+    "the lookup retries without the decorative parentheses",
+  );
+
+  // The color-lyrics request that follows the card must hit the same cache.
+  const oembedCalls = calls.filter((url) => url.includes("open.spotify.com/oembed")).length;
+  const lyricsResponse = await handle(
+    new Request("http://localhost/music/color-lyrics/v2/track/" + id + "?format=json", {
+      headers: { accept: "application/json" },
+    }),
+    env,
+  );
+  assert.equal(lyricsResponse.status, 200);
+  assert.equal((await lyricsResponse.json()).lyrics.lines[0].words, "秋");
+  assert.equal(
+    calls.filter((url) => url.includes("open.spotify.com/oembed")).length,
+    oembedCalls,
+    "the prefetched lyrics must be reused instead of looking the track up again",
+  );
+});
+
+test("scroll leaves out the lyrics card when the lookup has no result", async () => {
+  const id = "0VjIjW4GlUZAMYd2vXMi3b";
+  const section = bytes(1, concat([str(2, "normal-card")]));
+  const scrollBody = bytes(1, concat([section]));
+  stubNetwork([
+    ["spclient.wg.spotify.com", () => upstreamResponse(scrollBody, 200, "application/x-protobuf")],
+    [
+      "open.spotify.com/oembed",
+      () => upstreamResponse(JSON.stringify({ title: "Missing", author_name: "Nobody" }), 200, "application/json"),
+    ],
+    ["lrclib.net/api/get", () => upstreamResponse("not found", 404, "text/plain")],
+    ["lrclib.net/api/search", () => upstreamResponse(JSON.stringify([]), 200, "application/json")],
+  ]);
+
+  const response = await handle(
+    new Request("http://localhost/music/scrollsita/v1/scroll/spotify:track:" + id),
+    { BLOCK_ADS: "false", LYRICS_SOURCE: "lrclib" },
+  );
+  assert.equal(response.status, 200);
+  const out = new Uint8Array(await response.arrayBuffer());
+  const list = parse(out).find((field) => field.no === 1).bytes;
+  const sections = parse(list).filter((field) => field.no === 1).map((field) => parse(field.bytes));
+  assert.equal(sections.some((fields) => fields.some((field) => field.no === 5)), false);
+});
+
 test("health reports the lyrics options", async () => {
   const response = await handle(new Request("http://localhost/health"), {
     LYRICS_SOURCE: "auto",

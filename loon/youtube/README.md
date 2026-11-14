@@ -1,6 +1,6 @@
 # YouTube Enhance — Loon 插件
 
-**Loon** 插件：屏蔽广告、字幕翻译、YouTube Music 去广告与后台播放、默认分辨率、首页菜单与 Shorts 过滤。脚本按请求阶段拆成 `js/youtube.request.js`（请求改写）、`js/youtube.key.js`（UMP 密钥提取）、`js/youtube.response.js`（youtubei 响应 + UMP），Loon 与 Egern 共用同一份代码。
+**Loon** 插件：屏蔽广告、字幕翻译、YouTube Music 去广告与后台播放、默认分辨率、首页菜单与 Shorts 过滤；支持 www / m / YouTube Music 网页版。脚本按请求阶段拆成 `js/youtube.request.js`（请求改写）、`js/youtube.key.js`（UMP 密钥提取）、`js/youtube.response.js`（youtubei 响应 + UMP），Loon 与 Egern 共用同一份代码。
 
 脚本在参数入口做了兼容处理：Loon 传入的 snake_case 对象（或位置数组）会自动映射为 camelCase 键，Egern 传入的 JSON 字符串同样兼容。
 
@@ -14,11 +14,11 @@
 
 `https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/youtube-enhance.plugin`
 
-需要开启 MitM（`*.googlevideo.com`、`youtubei.googleapis.com`、`www.youtube.com`、`music.youtube.com`、`s.youtube.com`）。
+需要开启 MitM（`*.googlevideo.com`、`youtubei.googleapis.com`、`www.youtube.com`、`m.youtube.com`、`music.youtube.com`、`s.youtube.com`）。
 
 ## 参数
 
-共 11 个参数，均可在插件设置页调整。广告、画质、首页菜单都做了聚合；后台播放、PiP、热更新哈希不再单独给开关，脚本常开。
+共 12 个参数，均可在插件设置页调整。广告、画质、首页菜单都做了聚合；后台播放、PiP、热更新哈希不再单独给开关，脚本常开。
 
 ### 广告与 AI
 
@@ -50,6 +50,7 @@
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
 | `youtube_music` | true | YouTube Music 增强：去广告、后台播放、PiP；关闭后 YouTube Music 的请求完全放行 |
+| `web` | true | 支持网页版：处理 `www.youtube.com` / `m.youtube.com` / `music.youtube.com` 的 youtubei JSON 响应；关闭后网页版请求完全放行 |
 
 ## 注意事项
 
@@ -60,5 +61,7 @@
 - On-the-go 依赖 YouTube Premium 的服务端校验，注入的入口点开仍会提示开通 Premium，已整体移除；`jump_ahead` 与原生章节显示不受影响。
 - `block_members_only` 只从列表页（首页、频道页、Shorts 货架）中移除会员专属视频，不会解锁播放；它按徽章文字（`会员专享` / `Members only` 等）匹配，极少数标题恰好同名的视频可能被误删。
 - `[Rewrite]` 中的 `pagead/pcs` 与 `stats/ads` 两条 404 规则无法按参数条件启用；即使关闭 `block_ads`，这两条静态规则仍会生效（响应体内的广告位不会再改）。
+- 网页版响应是 JSON，脚本走单独的保守过滤：只删已知广告 renderer、播放器广告字段、Shorts 货架、会员专属视频与 AI/商店控件；画质只裁剪 `streamingData.adaptiveFormats`，不改渐进式 `formats` 和音频。
+- 网页版不处理网页 HTML 本身，也不改直播聊天 / 弹幕；网页播放页如果某些广告只在 HTML 里，脚本看不到。
 - 脚本按请求阶段拆分，独立维护，不自动同步外部改动；外部实现若有变化，需要人工对比后再决定是否跟进。
 - `[Rule]` 里对 `googlevideo.com`、`youtube.com`、`youtubei.googleapis.com` 的 QUIC 直接 REJECT，强制客户端回落 TCP；HTTP/3 走 UDP 不经过代理，不拒绝时 `ad_break` / `player` 请求脚本完全看不到。日志里没有脚本记录时先查这一项。

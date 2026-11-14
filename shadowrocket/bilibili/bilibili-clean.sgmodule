@@ -2,8 +2,8 @@
 #!desc=去广告、去会员推广、去遥测、精简界面，播放请求自动要最高画质。JSON 与 gRPC 都改，不碰视频流。
 #!author=xzavier-amico
 #!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/bilibili.png
-#!arguments=去广告:true, 去会员推广:true, 精简界面:true, 自动最高画质:true
-#!arguments-desc=去广告：删除开屏、首页推荐、搜索、番剧页、直播推荐、番剧弹窗、详情页、评论区和暂停广告。\n去会员推广：删除番剧页 payment 块、大会员广告素材和 VIP 卡片。\n精简界面：删除底部「发布」+「会员购」、顶部「游戏中心」，以及「我的」页的「我的服务」分区。\n自动最高画质：把 playurl 的 qn 改成 120（4K），服务端按账号权限返回实际最高档。
+#!arguments=去广告:true, 去会员推广:true, 精简界面:true, 自动最高画质:true, 支持网页版:true
+#!arguments-desc=去广告：删除开屏、首页推荐、搜索、番剧页、直播推荐、番剧弹窗、详情页、评论区和暂停广告。\n去会员推广：删除番剧页 payment 块、大会员广告素材和 VIP 卡片。\n精简界面：删除底部「发布」+「会员购」、顶部「游戏中心」，以及「我的」页的「我的服务」分区。\n自动最高画质：把 playurl 的 qn 改成 120（4K），服务端按账号权限返回实际最高档。\n支持网页版：同时处理 B 站网页版的推荐、搜索、相关推荐、详情、动态、番剧和直播接口。
 
 [Rule]
 # 遥测与广告
@@ -20,10 +20,10 @@ AND,((DOMAIN-SUFFIX,biliapi.net),(PROTOCOL,QUIC)),REJECT
 ^https?:\/\/api\.bilibili\.com\/x\/report\/click\/ reject
 
 [Script]
-bilibili.clean = type=http-response,pattern=^https?:\/\/(?:app\.bilibili\.com|api\.bilibili\.com|api\.live\.bilibili\.com)\/(?:x\/v2\/splash\/|x\/v2\/feed\/index|x\/v2\/search\/square|x\/web-interface\/wbi\/index\/top\/feed\/rcmd|x\/vip\/ads\/materials|pgc\/view\/v2\/app\/season|pgc\/page\/|pgc\/activity\/deliver\/material\/receive|x\/resource\/show\/tab|x\/v2\/account\/mine|xlive\/(?:app-interface\/v2\/(?:index\/feed|room\/recList)|app-room\/v1\/index\/getInfoByRoom)),requires-body=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/bilibili/js/bilibili_clean.js,argument="{"block_ads":{{{去广告}}},"hide_vip":{{{去会员推广}}},"clean_ui":{{{精简界面}}}}"
-bilibili.quality = type=http-request,pattern=^https?:\/\/(?:api|app)\.bilibili\.com\/(?:x|pgc)\/.*playurl,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/bilibili/js/bilibili_quality.js,argument="{"auto_quality":{{{自动最高画质}}}}"
+bilibili.clean = type=http-response,pattern=^https?:\/\/(?:app\.bilibili\.com|api\.bilibili\.com|api\.live\.bilibili\.com)\/(?:x\/v2\/splash\/|x\/v2\/feed\/index|x\/v2\/search\/square|x\/web-interface\/(?:view|archive\/related|wbi\/(?:index\/top\/feed\/rcmd|search\/(?:type|square)|view\/detail))|x\/polymer\/web-dynamic\/v1\/feed\/all|x\/vip\/ads\/materials|pgc\/view\/(?:v2\/app|web)\/season|pgc\/page\/|pgc\/activity\/deliver\/material\/receive|x\/resource\/show\/tab|x\/v2\/account\/mine|xlive\/(?:app-interface\/v2\/(?:index\/feed|room\/recList)|(?:app|web)-room\/v1\/index\/getInfoByRoom|web-interface\/v1\/index\/getList)),requires-body=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/bilibili/js/bilibili_clean.js?v=20261114-1,argument="{"block_ads":{{{去广告}}},"hide_vip":{{{去会员推广}}},"clean_ui":{{{精简界面}}},"web":{{{支持网页版}}}}"
+bilibili.quality = type=http-request,pattern=^https?:\/\/(?:api|app)\.bilibili\.com\/(?:x|pgc)\/.*playurl,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/bilibili/js/bilibili_quality.js?v=20261114-1,argument="{"auto_quality":{{{自动最高画质}}},"web":{{{支持网页版}}}}"
 # gRPC 的播放请求体里也有 qn，改完再放行。
-bilibili.quality.grpc = type=http-request,pattern=^https?:\/\/(?:app|grpc)\.bili(?:bili\.com|api\.net)\/bilibili\.(?:app\.playurl\.v1\.PlayURL|pgc\.gateway\.player\.v2\.PlayURL|app\.playerunite\.v1\.Player)\/(?:PlayView|PlayViewUnite)$,requires-body=1,binary-body-mode=1,max-size=1048576,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/bilibili/js/bilibili_quality.js,argument="{"auto_quality":{{{自动最高画质}}}}"
+bilibili.quality.grpc = type=http-request,pattern=^https?:\/\/(?:app|grpc)\.bili(?:bili\.com|api\.net)\/bilibili\.(?:app\.playurl\.v1\.PlayURL|pgc\.gateway\.player\.v2\.PlayURL|app\.playerunite\.v1\.Player)\/(?:PlayView|PlayViewUnite)$,requires-body=1,binary-body-mode=1,max-size=1048576,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/bilibili/js/bilibili_quality.js?v=20261114-1,argument="{"auto_quality":{{{自动最高画质}}},"web":{{{支持网页版}}}}"
 # 详情页 / 评论区 / 播放器走 gRPC（protobuf over HTTP/2），需要二进制 body。
 bilibili.grpc = type=http-response,pattern=^https?:\/\/(?:grpc\.biliapi\.net|grpc\.bilibili\.com|app\.biliapi\.net|app\.bilibili\.com)\/bilibili\.(?:app\.(?:(?:view|viewunite)\.v1\.View|dynamic\.v2\.Dynamic)|main\.community\.reply\.v1\.Reply)\/,requires-body=1,binary-body-mode=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/bilibili/js/bilibili_grpc.js,argument="{"block_ads":{{{去广告}}}}"
 

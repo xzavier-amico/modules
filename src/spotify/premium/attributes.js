@@ -3,6 +3,8 @@
   const yearOn = new Date(Date.now() + 365 * 86400000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
   const ATTR_CORE = {
+    // 不写 enable-crossfade-product-state / enable-gapless-product-state：
+    // 那会把客户端的播放衔接强制打开，导致上一首结尾和下一首重叠。
     "catalogue": "premium",
     "financial-product": "pr:premium,tc:0",
     "is-eligible-premium-unboxing": true,
@@ -19,8 +21,6 @@
     "type": "premium",
     "unrestricted": true,
     "can_use_superbird": true,
-    "enable-crossfade-product-state": "1",
-    "enable-gapless-product-state": "1",
     "high-bitrate": true,
     "loudness-levels": "1:-5.0,0.0,3.0:-2.0",
     "mixing-tools": "EDIT",

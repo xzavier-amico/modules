@@ -16,6 +16,7 @@
     home_cleanup: "homeCleanup",
     jump_ahead: "jumpAhead",
     max_speed: "maxSpeed",
+    web: "web",
   };
 
   // 旧版插件的 26 个参数顺序。Loon 旧版按位置传数组时用它还原；
@@ -50,8 +51,25 @@
     "stripHotHash",
   ];
 
+  // 当前 Loon 位置数组（12 项，最后一项是 web）。web 是布尔值；
+  // 上一版 12 项数组的最后一项是 max_speed 字符串，用这个区分新旧 tuple。
+  const CURRENT_ARG_ORDER = [
+    "block_ads",
+    "block_ai",
+    "max_height",
+    "caption_lang",
+    "home_menu",
+    "block_shorts_feed",
+    "youtube_music",
+    "block_members_only",
+    "home_cleanup",
+    "jump_ahead",
+    "max_speed",
+    "web",
+  ];
+
   // 上一版 Loon 位置数组（12 项，含 on_the_go）。升级插件前客户端可能还缓存着
-  // 旧 tuple；按长度区分，避免 12 项数组被当成 26 项旧版参数串位。
+  // 旧 tuple；按长度和最后一项类型区分，避免把旧数组当成新数组。
   const PREV_ARG_ORDER = [
     "block_ads",
     "block_ai",
@@ -83,9 +101,11 @@
       const order =
         raw.length === LEGACY_ARG_ORDER.length
           ? LEGACY_ARG_ORDER
-          : raw.length === PREV_ARG_ORDER.length
+          : raw.length === PREV_ARG_ORDER.length && "string" == typeof raw[raw.length - 1]
             ? PREV_ARG_ORDER
-            : Object.keys(ARG_ALIASES);
+            : raw.length === CURRENT_ARG_ORDER.length
+              ? CURRENT_ARG_ORDER
+              : Object.keys(ARG_ALIASES);
       order.forEach((key, index) => {
         if (index < raw.length) out[key] = raw[index];
       });
@@ -257,6 +277,8 @@
     options.blockMembersOnly = asBool(options.blockMembersOnly, false);
     options.jumpAhead = asBool(options.jumpAhead, true);
     options.youtubeMusic = asBool(options.youtubeMusic, true);
+    // 网页版 YouTube / YouTube Music 的 JSON 响应处理，默认开启。
+    options.web = asBool(options.web, true);
 
     const result = { ...defaults, ...options };
     if (noDefaults) OPTIONS_CACHE = result;

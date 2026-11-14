@@ -141,12 +141,19 @@ export default async function (ctx) {
 //   /x/v2/feed/index*         首页：只过滤 data.items 里 card_type=cm_* / card_goto=ad_* / goto=ad 的卡片
 //   /x/v2/search/square       搜索：只过滤 data 数组里的广告项
 //   /x/web-interface/wbi/...  网页推荐流：只过滤 data.item 里 goto=ad 的条目
+//   /x/web-interface/wbi/search/type    网页搜索：过滤 data.result 里的广告项
+//   /x/web-interface/archive/related    网页相关推荐：过滤 data 数组里的广告项
+//   /x/web-interface/view              网页详情：删 cm_config，过滤 relates 广告
+//   /x/polymer/web-dynamic/v1/feed/all 网页动态：删 DYNAMIC_TYPE_AD
 //   /x/vip/ads/materials      大会员广告素材：清空
 //   /pgc/view/v2/app/season   番剧页：删 data.payment（会员付费块）
+//   /pgc/view/web/season      网页番剧页：删 result.payment
 //   /pgc/page/bangumi         番剧页模块：删 module_style/type 为 ad 的模块
 //   /xlive/app-interface/v2/index/feed  直播首页：只删 small_card_v1 里的广告卡
 //   /xlive/app-interface/v2/room/recList 直播推荐：同上
+//   /xlive/web-interface/v1/index/getList 网页直播首页：只删 banner 广告卡
 //   /xlive/app-room/v1/index/getInfoByRoom 房间页：只删 banner / 购物位，不碰房间信息
+//   /xlive/web-room/v1/index/getInfoByRoom 网页房间页：同上
 //   /pgc/activity/.../receive 番剧弹窗广告：返回关闭
 //   /x/resource/show/tab*     底部 tab：删「发布」+「会员购」，顶部删「游戏中心」
 //   /x/v2/account/mine        我的页：删「我的服务」、大会员推广块与 VIP 分区
@@ -164,7 +171,7 @@ export default async function (ctx) {
   let opt = {};
   try {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
-    if (Array.isArray(raw)) opt = { block_ads: raw[0], hide_vip: raw[1], clean_ui: raw[2] };
+    if (Array.isArray(raw)) opt = { block_ads: raw[0], hide_vip: raw[1], clean_ui: raw[2], web: raw[3] };
     else if (typeof raw === "string") opt = JSON.parse(raw || "{}") || {};
     else if (raw && "object" == typeof raw) opt = raw;
   } catch (e) {
@@ -176,6 +183,7 @@ export default async function (ctx) {
   const blockAds = flag(opt.block_ads, true);
   const hideVip = flag(opt.hide_vip, true);
   const cleanUi = flag(opt.clean_ui, true);
+  const web = flag(opt.web, true);
 
   const body = res.body;
   if (typeof body !== "string" || !body) {
@@ -204,12 +212,18 @@ export default async function (ctx) {
     path.indexOf("/x/v2/feed/index") >= 0 ||
     path.indexOf("/x/v2/search/square") >= 0 ||
     path.indexOf("/x/web-interface/wbi/index/top/feed/rcmd") >= 0 ||
+    path.indexOf("/x/web-interface/wbi/search/type") >= 0 ||
+    path.indexOf("/x/web-interface/wbi/search/square") >= 0 ||
+    path.indexOf("/x/web-interface/archive/related") >= 0 ||
+    path.indexOf("/x/web-interface/view") >= 0 ||
     path.indexOf("/x/vip/ads/materials") >= 0 ||
     path.indexOf("/pgc/view/v2/app/season") >= 0 ||
+    path.indexOf("/pgc/view/web/season") >= 0 ||
     path.indexOf("/pgc/page/") >= 0 ||
     path.indexOf("/pgc/activity/deliver/material/receive") >= 0 ||
     path.indexOf("/x/resource/show/tab") >= 0 ||
     path.indexOf("/x/v2/account/mine") >= 0 ||
+    path.indexOf("/x/polymer/web-dynamic/v1/feed/all") >= 0 ||
     path.indexOf("/xlive/") >= 0;
   if (!handled) {
     $done({});
@@ -294,10 +308,13 @@ export default async function (ctx) {
     }
   }
 
-  // 番剧页的会员付费块。
-  if (path.indexOf("/pgc/view/v2/app/season") >= 0 && isObj(data.data) && data.data.payment) {
-    delete data.data.payment;
-    changed = true;
+  // 番剧页的会员付费块：App 在 data，网页版在 result。
+  if (path.indexOf("/pgc/view/v2/app/season") >= 0 || (web && path.indexOf("/pgc/view/web/season") >= 0)) {
+    [data.data, data.result].forEach((d) => {
+      if (!isObj(d) || !hideVip || !d.payment) return;
+      delete d.payment;
+      changed = true;
+    });
   }
 
   // 直播：只处理这三个接口。通用 walk 会顺着对象树把
@@ -317,8 +334,15 @@ export default async function (ctx) {
         d.list = kept;
         changed = true;
       }
-    } else if (path.indexOf("/xlive/app-room/v1/index/getInfoByRoom") >= 0) {
-      // 房间页只删 banner 和购物位，其余一律不碰。
+    } else if (web && path.indexOf("/xlive/web-interface/v1/index/getList") >= 0 && Array.isArray(d.banner)) {
+      // 网页版直播首页：banner 里带 is_ad / show_ad_icon 的卡片才删。
+      const kept = d.banner.filter((card) => !isLiveCardAd(card));
+      if (kept.length !== d.banner.length) {
+        d.banner = kept;
+        changed = true;
+      }
+    } else if (path.indexOf("getInfoByRoom") >= 0 && (web || path.indexOf("web-room") < 0)) {
+      // App / 网页房间页只删 banner 和购物位，其余一律不碰。
       if ("activity_banner_info" in d) {
         delete d.activity_banner_info;
         changed = true;
@@ -364,10 +388,85 @@ export default async function (ctx) {
   }
 
   // 网页版推荐流：只过滤 data.item 里 goto=ad 的条目。
-  if (blockAds && path.indexOf("/x/web-interface/wbi/index/top/feed/rcmd") >= 0) {
+  if (web && blockAds && path.indexOf("/x/web-interface/wbi/index/top/feed/rcmd") >= 0) {
     const kept = keepNotAd(data.data?.item);
     if (kept) {
       data.data.item = kept;
+      changed = true;
+    }
+  }
+
+  // 网页版搜索：/wbi/search/type 的 data.result 是视频数组；部分聚合接口
+  // 会再包一层 { result_type, data: [...] }，两种都按同样的广告标记过滤。
+  if (web && blockAds && (path.indexOf("/x/web-interface/wbi/search/type") >= 0 || path.indexOf("/x/web-interface/wbi/search/square") >= 0)) {
+    const d = data.data;
+    if (Array.isArray(d)) {
+      const kept = keepNotAd(d);
+      if (kept) {
+        data.data = kept;
+        changed = true;
+      }
+    } else if (isObj(d)) {
+      const result = d.result;
+      if (Array.isArray(result)) {
+        let touched = false;
+        for (const group of result) {
+          if (!isObj(group) || !Array.isArray(group.data)) continue;
+          const inner = keepNotAd(group.data);
+          if (inner) {
+            group.data = inner;
+            touched = true;
+          }
+        }
+        const kept = keepNotAd(result);
+        if (kept) {
+          d.result = kept;
+          touched = true;
+        }
+        if (touched) changed = true;
+      }
+    }
+  }
+
+  // 网页版相关推荐：data 本身就是数组，只过滤广告项。
+  if (web && blockAds && path.indexOf("/x/web-interface/archive/related") >= 0) {
+    const kept = keepNotAd(data.data);
+    if (kept) {
+      data.data = kept;
+      changed = true;
+    }
+  }
+
+  // 网页版视频详情：cm_config 是播放器广告配置；relates / relates 里的广告卡
+  // 只在存在时过滤，不碰播放地址和分 P。
+  if (web && path.indexOf("/x/web-interface/view") >= 0 && isObj(data.data)) {
+    const d = data.data;
+    if (blockAds) {
+      ["cm_config", "cm_ipad", "cm_under_player"].forEach((key) => {
+        if (key in d) {
+          delete d[key];
+          changed = true;
+        }
+      });
+      const kept = keepNotAd(d.relates);
+      if (kept) {
+        d.relates = kept;
+        changed = true;
+      }
+    }
+  }
+
+  // 网页版动态流：广告条目是 DYNAMIC_TYPE_AD，部分版本放在 module_dynamic 里。
+  if (web && blockAds && path.indexOf("/x/polymer/web-dynamic/v1/feed/all") >= 0 && isObj(data.data) && Array.isArray(data.data.items)) {
+    const items = data.data.items;
+    const kept = items.filter((item) => {
+      if (!isObj(item)) return true;
+      if (item.type === "DYNAMIC_TYPE_AD") return false;
+      const dynamic = item.modules?.module_dynamic;
+      return dynamic?.additional?.type !== "DYNAMIC_TYPE_AD" && dynamic?.major?.type !== "DYNAMIC_TYPE_AD";
+    });
+    if (kept.length !== items.length) {
+      data.data.items = kept;
       changed = true;
     }
   }
@@ -382,10 +481,12 @@ export default async function (ctx) {
   }
 
   // 番剧页的广告模块（module_style / module_type / type 为 ad）。
+  // App 在 data.modules，网页版在 result.modules。
   if (blockAds && path.indexOf("/pgc/page/") >= 0) {
-    const d = data.data;
-    if (isObj(d) && Array.isArray(d.modules)) {
-      const kept = d.modules.filter((m) => {
+    (web ? [data.data, data.result] : [data.data]).forEach((d) => {
+      if (!isObj(d) || !Array.isArray(d.modules)) return;
+      const modules = d.modules;
+      const kept = modules.filter((m) => {
         if (!isObj(m)) return true;
         const style = str(m.module_style);
         const type = str(m.module_type) || str(m.type);
@@ -393,8 +494,8 @@ export default async function (ctx) {
         if (ad) changed = true;
         return !ad;
       });
-      d.modules = kept;
-    }
+      if (kept.length !== modules.length) d.modules = kept;
+    });
   }
 
   // 底部 tab：去掉中间的「发布」按钮和「会员购」入口；顶部去掉「游戏中心」。

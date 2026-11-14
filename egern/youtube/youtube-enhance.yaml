@@ -76,6 +76,11 @@ env_schema:
     description: "YouTube Music 去广告、后台播放、PiP"
     default_value: "true"
     options: ["true", "false"]
+  web:
+    name: "支持网页版"
+    description: "同时处理 www.youtube.com / m.youtube.com / music.youtube.com 的 YouTube 与 YouTube Music 网页"
+    default_value: "true"
+    options: ["true", "false"]
   block_members_only:
     name: "屏蔽会员专属视频"
     description: "从首页、频道页等列表中移除需要频道会员的视频"
@@ -133,15 +138,15 @@ scriptings:
   # 请求阶段：log_event 不需要请求体，单独一条避免缓冲 body。
   - http_request:
       name: "youtube.request.log"
-      match: "^https://(?:youtubei\\.googleapis\\.com|music\\.youtube\\.com)/youtubei/v1/log_event(?:\\?.*)?$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.request.js?v=20261114-2"
+      match: "^https://(?:youtubei\\.googleapis\\.com|(?:www|m)\\.youtube\\.com|music\\.youtube\\.com)/youtubei/v1/log_event(?:\\?.*)?$"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.request.js?v=20261114-3"
       timeout: 10
 
   # 请求阶段：initplayback / videoplayback 需要请求体。
   - http_request:
       name: "youtube.request.playback"
       match: "^https?://[\\w-]+\\.googlevideo\\.com/(?:initplayback|videoplayback)(?:\\?.*)?$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.request.js?v=20261114-2"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.request.js?v=20261114-3"
       body_required: true
       binary_body: true
       max_size: 8388608
@@ -151,7 +156,7 @@ scriptings:
   - http_response:
       name: "youtube.key"
       match: "^https://(?:youtubei\\.googleapis\\.com|music\\.youtube\\.com)/youtubei/v1/(?:config|log_event)(?:\\?.*)?$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.key.js?v=20261114-2"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.key.js?v=20261114-3"
       body_required: true
       binary_body: true
       max_size: 8388608
@@ -160,8 +165,8 @@ scriptings:
   # 响应阶段：browse / next / player 等常规接口。
   - http_response:
       name: "youtube.response"
-      match: "^https://(?:youtubei\\.googleapis\\.com|music\\.youtube\\.com)/youtubei/v1/(?:navigation/resolve_url|browse|next|player|search|reel/reel_watch_sequence|guide|account/get_setting|get_watch)(?:\\?.*)?$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.response.js?v=20261114-2"
+      match: "^https://(?:youtubei\\.googleapis\\.com|(?:www|m)\\.youtube\\.com|music\\.youtube\\.com)/youtubei/v1/(?:navigation/resolve_url|browse|next|player|search|reel/reel_watch_sequence|guide|account/get_setting|get_watch)(?:\\?.*)?$"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.response.js?v=20261114-3"
       body_required: true
       binary_body: true
       max_size: 8388608
@@ -171,7 +176,7 @@ scriptings:
   - http_response:
       name: "youtube.ump"
       match: "^https?://[\\w-]+\\.googlevideo\\.com/initplayback(?:\\?.*)?$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.response.js?v=20261114-2"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.response.js?v=20261114-3"
       body_required: true
       binary_body: true
       max_size: 5242880
@@ -188,7 +193,7 @@ url_rewrites:
     location: "http://reject/"
   - match: "^https://s\\.youtube\\.com/api/stats/ads"
     location: "http://reject/"
-  - match: "^https://(?:youtubei\\.googleapis\\.com|music\\.youtube\\.com)/youtubei/v1/(?:player|music)/ad_break(?:\\?.*)?$"
+  - match: "^https://(?:youtubei\\.googleapis\\.com|(?:www|m)\\.youtube\\.com|music\\.youtube\\.com)/youtubei/v1/(?:player|music)/ad_break(?:\\?.*)?$"
     location: "http://reject-200/"
 
 # ---- MITM（Surge [MITM] hostname %APPEND% 直译）----
@@ -198,5 +203,6 @@ mitm:
       - "*.googlevideo.com"
       - "youtubei.googleapis.com"
       - "www.youtube.com"
+      - "m.youtube.com"
       - "music.youtube.com"
       - "s.youtube.com"

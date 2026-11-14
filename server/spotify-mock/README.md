@@ -10,10 +10,15 @@
   直接在响应体里删除；桌面端 / 移动端的 `/ads/*`、`ad-*`、`ad-on-app-open`、
   `premium-marketing/upsellOffer` 由客户端模块直接拒绝；
 - 解锁播放限制：试听时长、队列上限、强制随机等（`unlockPlayback`）；
+- 播放衔接：不改写 `crossfade_enabled` / `automix_enabled` / `use_playback_settings_*`，
+  也不写 `enable-crossfade-product-state` / `enable-gapless-product-state`，播放衔接
+  交给客户端自己的设置，避免上一首最后 1–2 秒被下一首顶掉；
 - 歌词前置条件：把 Track 的 `has_lyrics` 改成 true，客户端才会去请求
   `color-lyrics`；
 - 歌词：官方有歌词时清掉免费号的额度限制；官方没有歌词时查第三方歌词源并合成
-  JSON / protobuf 响应。
+  JSON / protobuf 响应；曲名里的影视剧名、节目名等装饰括号会先去掉再查一次；
+- 歌词卡：滚动页缺少歌词 section 时，服务端先查歌词并写入缓存，确认有歌词才补卡，
+  查不到或超时不补，避免客户端先显示空卡。
 
 客户端模块只做 URL 改写，**不加载任何脚本**；第三方接口请求、歌词解析、缓存和
 响应合成全部在服务端完成。
@@ -188,7 +193,7 @@ Access、WAF Rate Limiting，或在反向代理上加 Basic Auth / IP 白名单�
 | `/music/color-lyrics/v{N}/track/...` | 清歌词额度限制；官方没歌词时合成第三方歌词 |
 | `/music/casita/v{N}/home...` | 删除首页里的广告 / 赞助区块 |
 | `/music/browsita/v{N}/browse...` | 隐藏搜索页的赞助区块 |
-| `/music/scrollsita/v{N}/scroll/{uri}` | 隐藏滚动页的广告区块 |
+| `/music/scrollsita/v{N}/scroll/{uri}` | 隐藏滚动页的广告区块；查到歌词时才补歌词 section，并预热歌词缓存 |
 | `/music/remote-config-resolver/...` | 改写远程配置里的广告开关（含 `unauth` 启动配置） |
 | `/music/nebula/...` | 改写远程配置里的广告属性 |
 | 其它 `/music/*` | 原样透传 |

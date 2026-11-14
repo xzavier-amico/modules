@@ -621,6 +621,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return false;
   }
 
+  // 网页版 YouTube / YouTube Music。移动网页最终也会落到 www.youtube.com。
+  function isWebRequest(request) {
+    return /^https?:\/\/(?:www|m|music)\.youtube\.com\//i.test(String(request?.url ?? ""));
+  }
+
   function clientKeyFor(request) {
     return isMusicRequest(request) ? "youtubeMusic" : "youtube";
   }

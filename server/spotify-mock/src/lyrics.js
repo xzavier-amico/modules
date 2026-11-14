@@ -133,22 +133,33 @@ async function lookupMetadata(trackId, ctx) {
 // --------------------------------------------------------------------- sources
 
 async function lookupLrclib(title, artist, ctx) {
-  const query =
-    "track_name=" + encodeURIComponent(title) + (artist ? "&artist_name=" + encodeURIComponent(artist) : "");
-  const record = await getJson("https://lrclib.net/api/get?" + query, ctx);
+  const query = (name) =>
+    "track_name=" + encodeURIComponent(name) + (artist ? "&artist_name=" + encodeURIComponent(artist) : "");
+  const clean = queryTitle(title);
+  const names = clean && clean !== title ? [title, clean] : [title];
+
+  // Track titles often carry decorative parentheses the lyric databases omit
+  // ("晚秋 (电影《…》主题曲)"). Ask for the full title first, then the cleaned
+  // title; LRCLIB's /api/get is exact, so this is the fallback that matters.
+  let record = null;
+  for (const name of names) {
+    const candidate = await getJson("https://lrclib.net/api/get?" + query(name), ctx);
+    if (candidate && (!record || isSynced(candidate))) record = candidate;
+    if (record && isSynced(record)) break;
+  }
 
   let anchor = NaN;
   if (record && Number.isFinite(Number(record.duration))) anchor = Number(record.duration);
   if (record && isSynced(record)) return buildLyrics(withProvider(record, "LRCLIB"));
 
-  const list = await getJson("https://lrclib.net/api/search?" + query, ctx);
+  const list = await getJson("https://lrclib.net/api/search?" + query(clean || title), ctx);
   const picked = pickRecord(list, title, anchor);
   if (picked) return buildLyrics(withProvider(picked, "LRCLIB"));
   return record && hasAnyLyrics(record) ? buildLyrics(withProvider(record, "LRCLIB")) : null;
 }
 
 async function lookupNetease(title, artist, ctx) {
-  const query = encodeURIComponent(title + (artist ? " " + artist : ""));
+  const query = encodeURIComponent(queryTitle(title) + (artist ? " " + artist : ""));
   const headers = { Referer: "https://music.163.com/" };
   const data = await getJson(
     "https://music.163.com/api/search/get?s=" + query + "&type=1&limit=5&offset=0",
@@ -170,7 +181,7 @@ async function lookupNetease(title, artist, ctx) {
 }
 
 async function lookupQq(title, artist, ctx) {
-  const query = encodeURIComponent(title + (artist ? " " + artist : ""));
+  const query = encodeURIComponent(queryTitle(title) + (artist ? " " + artist : ""));
   const headers = { Referer: "https://y.qq.com/" };
   const data = await getJson(
     "https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=" + query + "&format=json&n=5&p=1",
@@ -210,7 +221,7 @@ async function lookupMusixmatch(title, artist, ctx) {
     "&usertoken=" +
     userToken +
     "&q_track=" +
-    encodeURIComponent(title) +
+    encodeURIComponent(queryTitle(title)) +
     (artist ? "&q_artist=" + encodeURIComponent(artist) : "") +
     "&user_language=zh";
   const data = await getJson(target, ctx);
@@ -258,13 +269,13 @@ function hasAnyLyrics(record) {
 
 function pickSong(list, title, nameOf) {
   if (!Array.isArray(list) || !list.length) return null;
-  const wanted = normalize(title);
+  const wanted = titleKeys(title);
   let fallback = null;
   for (const item of list) {
     if (!item) continue;
     if (!fallback) fallback = item;
     const name = normalize(nameOf(item));
-    if (name === wanted || name.indexOf(wanted) === 0) return item;
+    if (wanted.some((key) => name === key || name.indexOf(key) === 0)) return item;
   }
   return fallback;
 }
@@ -273,7 +284,7 @@ function pickSong(list, title, nameOf) {
 // Prefer a close duration, then synced lyrics, then an exact title.
 function pickRecord(list, title, duration) {
   if (!Array.isArray(list) || !list.length) return null;
-  const wanted = normalize(title);
+  const wanted = titleKeys(title);
   const usable = list.filter((item) => {
     if (!item || typeof item !== "object" || item.instrumental) return false;
     return Boolean(
@@ -284,7 +295,7 @@ function pickRecord(list, title, duration) {
   if (!usable.length) return null;
 
   const synced = (item) => Boolean(item.syncedLyrics && item.syncedLyrics.trim());
-  const named = (item) => normalize(item.trackName) === wanted;
+  const named = (item) => titleKeys(item.trackName).some((key) => wanted.indexOf(key) >= 0);
   const near = (item) =>
     Number.isFinite(duration) &&
     duration > 0 &&
@@ -302,6 +313,36 @@ function pickRecord(list, title, duration) {
     }
   }
   return best;
+}
+
+// Decorative parentheses are common in Spotify metadata but absent from lyric
+// databases: "Song (电影《…》主题曲)", "Song (电视剧片尾曲)", "Song (歌手名)".
+// Remove those groups, but keep version-defining ones such as (Live), (Remix)
+// and (伴奏) so a studio track is not matched to a live recording.
+const TITLE_BRACKET_GROUP = /[（(]([^()（）]*)[)）]/g;
+const TITLE_VERSION_BRACKET =
+  /\b(?:live|acoustic|unplugged|remix|mix|version|edit|remaster(?:ed)?|instrumental|karaoke|demo|cover|session|mono|stereo|deluxe|bonus|explicit|clean)\b|现场|現場|演唱会|演唱會|伴奏|纯音乐|純音樂|混音|重制|重製|翻唱|翻自|试听|試聽|片段|版/i;
+const TITLE_BRACKET_NOISE =
+  /[（(\[][^()（）\[\]]*\b(?:(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?(?:\s+version)?|feat\.?|ft\.?|featuring|with|prod\.?|radio edit|single version|album version|bonus track|deluxe(?: edition)?|explicit|clean|mono|stereo)\b[^()（）\[\]]*[)）\]]/gi;
+const TITLE_DASH_FEAT = /\s*[-–—]\s*(?:feat\.?|ft\.?|featuring|with|prod\.?)\b.*$/i;
+const TITLE_DASH_EDITION =
+  /\s*[-–—]\s*(?:(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?(?:\s+version)?|radio edit|single version|album version|bonus track|deluxe(?: edition)?|explicit|clean|mono|stereo)\s*$/i;
+
+function queryTitle(title) {
+  let text = String(title || "");
+  text = text.replace(TITLE_DASH_FEAT, "").replace(TITLE_DASH_EDITION, "");
+  text = text.replace(TITLE_BRACKET_NOISE, "");
+  text = text.replace(TITLE_BRACKET_GROUP, (whole, inner) =>
+    TITLE_VERSION_BRACKET.test(inner) ? whole : " ");
+  return text.replace(/\s+/g, " ").trim() || String(title || "");
+}
+
+function titleKeys(title) {
+  const keys = [];
+  for (const value of [normalize(title), normalize(queryTitle(title))]) {
+    if (value && keys.indexOf(value) < 0) keys.push(value);
+  }
+  return keys;
 }
 
 function normalize(text) {
