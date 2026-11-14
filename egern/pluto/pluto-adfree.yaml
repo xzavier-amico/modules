@@ -1,0 +1,99 @@
+#=======================================================================================
+# Pluto TV Ad-Free — Egern 模块
+#
+# Pluto 的广告是服务端拼接（SSAI）：stitcher 把广告片直接缝进 HLS，客户端只是照单
+# 播放。所以这里不拦广告素材，而是把 boot 接口的 serverSideAds 改成 false，让
+# stitcher 返回纯内容清单。
+#
+# 证据：
+#   GET https://boot.pluto.tv/v4/start?...&serverSideAds=true
+#   返回 JWT payload 里 "serverSideAds": true
+#   同一接口传 false，JWT 里就是 false
+#   网页端一直传 false（网页自己用 IMA 做客户端广告）
+#
+# 注意：
+#   - 需要 MITM boot.pluto.tv。
+#   - 模块不在 rules 里指定 PROXY：Egern 的模块规则按名字引用策略，组名不存在时
+#     整条规则不可用。Pluto 美国内容需要美国节点，请在主配置里把 pluto.tv /
+#     plutotv.net 指向你自己的美国策略组。
+#   - doubleclick / springserve 是客户端广告和广告同步域名，直接 REJECT。
+#=======================================================================================
+
+name: "Pluto TV Ad-Free"
+description: "去广告：boot 的 serverSideAds 改成 false，再按 clip 分组删掉 HLS 点播清单里的广告段。字幕翻译：翻译外挂 WebVTT，默认英文原句在上、中文翻译在下。"
+author: "xzavier-amico"
+homepage: "https://github.com/xzavier-amico/modules"
+icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/pluto.png"
+
+# ---- 参数（Egern 原生 env_schema：设置页自动生成开关 / 选择器 / 输入框）----
+# options 为 ["true","false"] 时渲染开关，其它 options 渲染选择器，不写 options 渲染输入框。
+env_schema:
+  block_ads:
+    name: "去除广告"
+    description: "把 boot 请求的 serverSideAds 改成 false，stitcher 返回的清单里就没有广告段"
+    default_value: "true"
+    options: ["true", "false"]
+  caption_lang:
+    name: "字幕翻译"
+    description: "翻译 Pluto 的外挂英文字幕；off 关闭字幕翻译"
+    default_value: "zh-Hans"
+    options: ["zh-Hans", "zh-Hant", "off"]
+  bilingual:
+    name: "双语字幕"
+    description: "英文原句在上、中文翻译在下；关闭后只显示中文"
+    default_value: "true"
+    options: ["true", "false"]
+  translate_key:
+    name: "翻译密钥"
+    description: "DeepL Auth Key 或 Google Cloud Translation API Key（AIza 开头）；留空使用免费的 Edge 接口"
+    default_value: ""
+  translate_provider:
+    name: "翻译接口"
+    description: "auto：有密钥时优先 DeepL / Google Cloud，无密钥或密钥接口失败时回退到 Edge"
+    default_value: "auto"
+    options: ["auto", "edge", "deepl", "google"]
+
+scriptings:
+  - http_request:
+      name: "pluto.adfree"
+      match: "^https?:\\/\\/boot\\.pluto\\.tv\\/v4\\/start"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_adfree.js"
+      body_required: true
+      timeout: 10
+  # 字幕：主清单里把英文字幕轨改名，外挂 WebVTT 分片翻译成双语。
+  - http_response:
+      name: "pluto.manifest"
+      match: "^https?:\\/\\/[^\\/]*(?:pluto\\.tv|plutotv\\.net)\\/[^?]*\\/master\\.m3u8"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_manifest.js"
+      body_required: true
+      timeout: 10
+  - http_response:
+      name: "pluto.subtitle"
+      match: "^https?:\\/\\/[^\\/]*(?:pluto\\.tv|plutotv\\.net)\\/[^?]*\\.vtt(?:\\?|$)"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_subtitle.js"
+      body_required: true
+      max_size: 2097152
+      timeout: 60
+  # 第二道：点播清单里按广告标记删段（直播清单脚本内部会跳过）。
+  - http_response:
+      name: "pluto.hls"
+      match: "^https?:\\/\\/[^\\/]*(?:pluto\\.tv|plutotv\\.net)\\/[^?]*\\.m3u8"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_hls.js"
+      body_required: true
+      timeout: 10
+  # 第三道：把会话里的 adBreaks 清空，进度条广告块和左上角 Ad 角标跟着消失（直播跳过）。
+  - http_response:
+      name: "pluto.session"
+      match: "^https?:\\/\\/[^\\/]*pluto\\.tv\\/[^?]*session\\.json"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/pluto/js/pluto_session.js"
+      body_required: true
+      timeout: 10
+
+mitm:
+  hostnames:
+    includes:
+      - "boot.pluto.tv"
+      - "pluto.tv"
+      - "*.pluto.tv"
+      - "*.prd.pluto.tv"
+      - "*.plutotv.net"

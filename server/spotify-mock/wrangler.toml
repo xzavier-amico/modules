@@ -1,0 +1,25 @@
+name = "spotify-mock"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+workers_dev = true
+
+# 这些是 Worker 侧的开关；模块只负责把请求改写过来。改完执行 `npm run deploy`。
+# [vars]
+# SPOOF_PREMIUM = "true"
+# BLOCK_ADS = "true"
+# 不写时移动端默认 true、桌面端默认 false；要给桌面端也解锁播放再打开。
+# UNLOCK_PLAYBACK = "true"
+# auto / true / false；auto 按请求的 User-Agent 识别客户端
+# DESKTOP = "auto"
+# 歌词补全（服务端处理，客户端模块不加载脚本）
+# LYRICS_ENABLED = "true"
+# lrclib / musixmatch / netease / qq / auto
+# LYRICS_SOURCE = "lrclib"
+# LYRICS_TIMEOUT_MS = "8000"
+# LYRICS_CACHE_TTL = "21600"
+# LYRICS_NEGATIVE_CACHE_TTL = "600"
+# MOCK_PREFIX = ""
+
+# 建议打开日志，方便确认补丁有没有命中。日志里不会打印请求体或 Authorization。
+[observability]
+enabled = true

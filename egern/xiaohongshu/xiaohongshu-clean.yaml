@@ -1,0 +1,75 @@
+#=======================================================================================
+# Xiaohongshu Clean — Egern 模块
+#
+# 只改 JSON 响应，按结构删数组元素或字段：
+#
+#   /api/sns/v<n>/homefeed            首页瀑布流：删 data[] 里 is_ads 为 true 的卡片
+#   /api/sns/v<n>/search/notes        搜索结果：删 data.items[] 里 ads 为 true 的笔记
+#   /api/sns/v<n>/note/comment/list   评论区：删带 is_ads 标记的评论与子评论
+#   /api/sns/v<n>/note/widgets        视频播放页商品推广位：清空 data
+#   /api/sns/v<n>/note/feed           笔记详情相关推荐：删 is_ads 条目
+#   /api/sns/v<n>/system_service/splash_config
+#                                     开屏：把 ads_groups 的投放时间推到 2040 年
+#   /api/sns/v<n>/system_service/config
+#                                     启动配置：删 splash / loading_img / app_theme 等推广字段
+#
+# 界面精简（clean_ui，默认关闭）：
+#   /api/sns/v<n>/homefeed/categories 删「购物」「市集」「直播」三个 tab
+#   /api/sns/v<n>/system_service/config 额外删 store（商城入口）
+#
+# 结构对不上、解析失败、响应过大、处理中抛异常都原样放行。
+# 一页被删空时保留原样，客户端不会把它当成「没有内容」。
+#=======================================================================================
+
+name: "Xiaohongshu Clean"
+description: "小红书去广告：首页瀑布流、搜索结果、评论区、开屏与商品推广位；可选精简购物/直播 tab。"
+author: "xzavier-amico"
+homepage: "https://github.com/xzavier-amico/modules"
+icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/xiaohongshu.png"
+
+# ---- 参数（Egern 原生 env_schema：设置页自动生成开关 / 选择器 / 输入框）----
+# options 为 ["true","false"] 时渲染开关，其它 options 渲染选择器，不写 options 渲染输入框。
+env_schema:
+  block_ads:
+    name: "去广告"
+    description: "删除首页瀑布流、搜索结果、评论区的推广内容，以及开屏素材、商品推广位和启动配置里的推广字段"
+    default_value: "true"
+    options: ["true", "false"]
+  clean_ui:
+    name: "精简界面"
+    description: "删除首页「购物」「市集」「直播」三个 tab 和启动配置里的商城入口"
+    default_value: "false"
+    options: ["true", "false"]
+
+rules:
+  # 拒绝 QUIC，强制回落 TCP：HTTP/3 走 UDP，不经过 MITM，脚本看不到这些请求。
+  - and:
+      match:
+        - domain_suffix:
+            match: "xiaohongshu.com"
+        - protocol:
+            match: quic
+      policy: REJECT
+
+url_rewrites:
+  # 纯广告接口：直接 404，App 会当成没有素材
+  - match: "^https?:\\/\\/[a-z]+\\.xiaohongshu\\.com\\/api\\/sns\\/v\\d+\\/(?:tag\\/)?ads"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/[a-z]+\\.xiaohongshu\\.com\\/api\\/sns\\/v\\d+\\/search\\/notes\\/recommend_info"
+    location: "http://reject/"
+
+scriptings:
+  - http_response:
+      name: "xiaohongshu.clean"
+      match: "^https?:\\/\\/(?:edith|www|pages)\\.xiaohongshu\\.com\\/api\\/sns\\/v\\d+\\/(?:homefeed(?:\\/categories)?|search\\/notes|note\\/(?:comment\\/list|widgets|tabfeed|videofeed|imagefeed|redtube|feed)|system_service\\/(?:splash_config|config))"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/xiaohongshu/js/xiaohongshu_clean.js"
+      body_required: true
+      max_size: 8388608
+      timeout: 20
+
+mitm:
+  hostnames:
+    includes:
+      - "edith.xiaohongshu.com"
+      - "www.xiaohongshu.com"
+      - "pages.xiaohongshu.com"

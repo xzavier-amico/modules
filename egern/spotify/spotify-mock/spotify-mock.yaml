@@ -1,0 +1,127 @@
+#=======================================================================================
+# Spotify Mock — Egern 模块
+#
+# 自建 Mock 服务版：把 Spotify 的 bootstrap / user-customization-service / 曲目元数据 /
+# color-lyrics / 首页 / 搜索 / 滚动页 / 远程配置请求改写到自己的服务，由服务端按 protobuf
+# 字段改写响应，实现去广告、伪装 Premium、解锁播放限制、把 Track 的 has_lyrics 改成 true，
+# 并在官方没有歌词时用第三方歌词补全。客户端不加载任何脚本。
+#
+# 前提：先按 server/spotify-mock/README.md 部署服务，再把下面的 mock_base 改成
+# 自己的地址。留空时模块不改写任何请求；不部署不要填写地址。
+#
+# 与「Spotify Premium」模块二选一：两边都会改写同一批响应，同时启用会互相覆盖。
+#=======================================================================================
+
+name: "Spotify Mock"
+description: "自建 Mock 服务版：服务端改写 bootstrap/UCS/元数据/首页/搜索/滚动页/远程配置 protobuf 并补全歌词，去广告、伪装 Premium、解锁播放限制；客户端零脚本。需先部署 server/spotify-mock。"
+author: "xzavier-amico"
+homepage: "https://github.com/xzavier-amico/modules"
+icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/spotify.png"
+
+compat_arguments:
+  mock_base: ""
+
+compat_arguments_desc: |
+  mock_base       — 自建服务的 /music 地址，不要带结尾斜杠，默认留空
+                    Cloudflare Worker：https://xxx.workers.dev/music
+                    本机：http://192.168.x.x:8787/music
+                    留空时本模块不改写任何请求（Spotify 仍走官方接口）
+
+compat_arguments_schema:
+  mock_base:
+    name: "Mock 服务地址"
+    description: "自建服务的 /music 地址，不要带结尾斜杠。留空时本模块不改写任何请求；不部署服务不要填"
+    options: []
+
+rules:
+  # 广告域名兜底。服务端改的是下发的开关，这里再拦一层真正投放广告的域名。
+  - domain_suffix:
+      match: "ads.spotify.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "adeventtracker.spotify.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "aet.spotify.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "pubads.g.doubleclick.net"
+      policy: REJECT
+  - domain_suffix:
+      match: "securepubads.g.doubleclick.net"
+      policy: REJECT
+  - domain_suffix:
+      match: "googleads.g.doubleclick.net"
+      policy: REJECT
+  - domain_suffix:
+      match: "pagead2.googlesyndication.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "tpc.googlesyndication.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "adservice.google.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "www.googletagservices.com"
+      policy: REJECT
+  # 强制 Spotify 的 QUIC 回落到 TCP。QUIC 不经过 HTTP 代理，开启后 Rewrite / MITM
+  # 规则对走 QUIC 的接口完全不生效；代价是个别版本可能出现播放几秒后跳歌。
+  - and:
+      match:
+        - domain_suffix:
+            match: "spotify.com"
+        - protocol:
+            match: quic
+      policy: REJECT
+
+# Header 模式（不写 status_code）会透明改 URL 和 Host，客户端无感知。
+# 显式捕获路径与查询串，避免替换后丢参数。
+# mock_base 留空时 location 变成相对路径，等价于原请求；不部署服务不要启用模块。
+url_rewrites:
+  # 纯广告路径。不要拦 /social、gabo、pendragon：它们分别是好友动态、事件上报与消息服务。
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/ad-"
+    location: "http://reject/"
+  # 桌面端和播放器核心会请求 /ads/*、/ad-logic/*、ad-on-app-open，Premium 推广会请求
+  # /premium-marketing/upsellOffer。
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9-]+-spclient)\\.spotify\\.com(?::443)?(?:\\/ads\\/|\\/premium-marketing\\/|[^?#]*\\/ad-on-app-open)"
+    location: "http://reject/"
+
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/bootstrap(\\/.*)?(\\?.*)?$"
+    location: "{{{mock_base}}}/bootstrap$1$2"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/user-customization-service(\\/.*)?(\\?.*)?$"
+    location: "{{{mock_base}}}/user-customization-service$1$2"
+
+  # 曲目元数据：请求体 etag 由服务端删，响应里的 has_lyrics 由服务端补。
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/extended-metadata(\\/.*)?(\\?.*)?$"
+    location: "{{{mock_base}}}/extended-metadata$1$2"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/context-resolve(\\/.*)?(\\?.*)?$"
+    location: "{{{mock_base}}}/context-resolve$1$2"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/connect-state(\\/.*)?(\\?.*)?$"
+    location: "{{{mock_base}}}/connect-state$1$2"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/metadata\\/4\\/track(\\/.*)?(\\?.*)?$"
+    location: "{{{mock_base}}}/metadata/4/track$1$2"
+
+  # 歌词：官方有歌词时清掉免费号的额度限制，没有歌词时由服务端用第三方歌词合成。
+  # 客户端不加载脚本，304 / 校验头由服务端处理。
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/color-lyrics(\\/.*)?(\\?.*)?$"
+    location: "{{{mock_base}}}/color-lyrics$1$2"
+
+  # 首页 / 搜索页 / 滚动页的赞助内容由服务端改响应体删除；远程配置接口也要一起
+  # 改写，否则 App 重新拉配置后会把广告开关重新打开。
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/casita(\\/.*)?(\\?.*)?$"
+    location: "{{{mock_base}}}/casita$1$2"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/browsita(\\/.*)?(\\?.*)?$"
+    location: "{{{mock_base}}}/browsita$1$2"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/scrollsita(\\/.*)?(\\?.*)?$"
+    location: "{{{mock_base}}}/scrollsita$1$2"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/remote-config-resolver(\\/.*)?(\\?.*)?$"
+    location: "{{{mock_base}}}/remote-config-resolver$1$2"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/nebula(\\/.*)?(\\?.*)?$"
+    location: "{{{mock_base}}}/nebula$1$2"
+
+mitm:
+  hostnames:
+    includes:
+      - "*-spclient.spotify.com"
+      - "spclient.wg.spotify.com"

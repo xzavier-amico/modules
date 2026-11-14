@@ -1,0 +1,21 @@
+#!name=Xiaohongshu Clean
+#!desc=小红书去广告：首页瀑布流、搜索结果、评论区、开屏与商品推广位；可选精简购物/直播 tab。
+#!author=xzavier-amico
+#!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/xiaohongshu.png
+#!arguments=去广告:true, 精简界面:false
+#!arguments-desc=去广告：删除首页瀑布流、搜索结果、评论区的推广内容，以及开屏素材、商品推广位和启动配置里的推广字段。\n精简界面：删除首页「购物」「市集」「直播」三个 tab 和启动配置里的商城入口。
+
+[Rule]
+# 拒绝 QUIC，强制回落 TCP：HTTP/3 走 UDP，不经过 MITM，脚本看不到这些请求。
+AND,((DOMAIN-SUFFIX,xiaohongshu.com),(PROTOCOL,QUIC)),REJECT
+
+[URL Rewrite]
+# 纯广告接口：直接 404，App 会当成没有素材
+^https?:\/\/[a-z]+\.xiaohongshu\.com\/api\/sns\/v\d+\/(?:tag\/)?ads reject
+^https?:\/\/[a-z]+\.xiaohongshu\.com\/api\/sns\/v\d+\/search\/notes\/recommend_info reject
+
+[Script]
+xiaohongshu.clean = type=http-response,pattern=^https?:\/\/(?:edith|www|pages)\.xiaohongshu\.com\/api\/sns\/v\d+\/(?:homefeed(?:\/categories)?|search\/notes|note\/(?:comment\/list|widgets|tabfeed|videofeed|imagefeed|redtube|feed)|system_service\/(?:splash_config|config)),requires-body=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/xiaohongshu/js/xiaohongshu_clean.js,argument="{"block_ads":{{{去广告}}},"clean_ui":{{{精简界面}}}}"
+
+[MITM]
+hostname = %APPEND% edith.xiaohongshu.com, www.xiaohongshu.com, pages.xiaohongshu.com

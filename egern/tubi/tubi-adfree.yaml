@@ -1,0 +1,89 @@
+#=======================================================================================
+# Tubi Ad-Free — Egern 模块
+#
+# 去广告。Tubi 是客户端插广告（CSAI）：内容清单是干净的 VOD playlist，广告位来自
+# 内容元数据里的 cue_points，播到那一秒再去广告接口要一批广告。
+#
+# 两道防线：
+#   1. 内容元数据（/oz/videos/<id>/content 等）里的 cue_points 直接清空。
+#      播放器没有广告位，中途那些 30 秒的广告位根本不会触发，也不会走到
+#      「广告服务没返回 → 播备用推广片」的兜底分支。
+#   2. 广告接口一律回答「没有广告」：
+#      rainmaker*.production-public.tubi.io   广告决策，返回 {"ads":[...],"metrics":{...}}
+#      ads.adrise.tv / ads.tubi.io / ads.production-public.tubi.io
+#                                             广告素材 / 暂停广告，VAST、VMAP 或 JSON
+#
+# 注意：
+#   - 需要开启 MITM 并信任证书。
+#   - 不要再用别的规则 reject 上面这些域名。Tubi 有反广告拦截（网页端会拉
+#     mcdn.tubitv.com/js/ads.js 这个诱饵），请求直接失败会被计入拦截次数；
+#     本模块返回的是合法的空广告响应，走「这次没广告」的正常分支。
+#   - MITM 用通配域名，避免广告请求换到 ads.tubitv.com 这类没列到的子域后静默失效。
+#   - 本模块不在 rules 里指定 PROXY：Egern 的模块规则按名字引用策略，
+#     组名不存在时整条规则不可用。Tubi 需要美国节点，请在主配置里把
+#     tubitv.com / tubi.com / tubi.tv / tubi.video / tubi.io / adrise.tv
+#     指向你自己的美国策略组，避免被「国内直连」规则带走。
+#=======================================================================================
+
+name: "Tubi Ad-Free"
+description: "去广告：清空内容元数据里的 cue_points，广告接口返回空广告列表 / 空 VAST。字幕翻译：在内容元数据里加一条中文 SRT 轨并翻译，默认英文原句 + 中文双语显示。不改动视频流，不触发 Tubi 的广告拦截检测。"
+author: "xzavier-amico"
+homepage: "https://github.com/xzavier-amico/modules"
+icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/tubi.png"
+
+# ---- 参数（Egern 原生 env_schema：设置页自动生成开关 / 选择器 / 输入框）----
+# options 为 ["true","false"] 时渲染开关，其它 options 渲染选择器，不写 options 渲染输入框。
+env_schema:
+  block_ads:
+    name: "去除广告"
+    description: "清空 cue_points 与 ads 列表，并把 VAST / VMAP 换成空文档"
+    default_value: "true"
+    options: ["true", "false"]
+  caption_lang:
+    name: "字幕翻译"
+    description: "在内容元数据里追加一条翻译后的字幕轨；off 关闭字幕翻译"
+    default_value: "zh-Hans"
+    options: ["zh-Hans", "zh-Hant", "off"]
+  bilingual:
+    name: "双语字幕"
+    description: "中文轨保留英文原句并在下方显示中文翻译；关闭后只显示中文"
+    default_value: "true"
+    options: ["true", "false"]
+  translate_key:
+    name: "翻译密钥"
+    description: "DeepL Auth Key 或 Google Cloud Translation API Key（AIza 开头）；留空使用免费的 Edge 接口"
+    default_value: ""
+  translate_provider:
+    name: "翻译接口"
+    description: "auto：有密钥时优先 DeepL / Google Cloud，无密钥或密钥接口失败时回退到 Edge"
+    default_value: "auto"
+    options: ["auto", "edge", "deepl", "google"]
+
+scriptings:
+  - http_response:
+      name: "tubi.adfree"
+      # 前半段：广告侧主机；后半段：内容元数据 / API（cue_points 从这里来）。
+      match: "^https?:\\/\\/(?:(?:[a-z0-9-]+\\.)*(?:ads|rainmaker)[a-z0-9.-]*\\.(?:tubi\\.io|tubitv\\.com|tubi\\.video|adrise\\.tv)\\/|(?:[a-z0-9-]+\\.)*(?:tubitv\\.com|tubi\\.io)\\/(?:oz|api)\\/)"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/tubi/js/tubi_adfree.js"
+      body_required: true
+      timeout: 10
+
+  # 带 tlang 标记的字幕轨：把 SRT 文本送去翻译，时间轴 / 序号保持原样。
+  - http_response:
+      name: "tubi.caption"
+      match: "^https?://(?:[a-z0-9-]+\\.)*(?:adrise\\.tv|tubitv\\.com|tubi\\.io)/.*\\.srt(?:\\?.*)?$"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/tubi/js/tubi_caption.js"
+      body_required: true
+      max_size: 2097152
+      timeout: 60
+
+mitm:
+  # 通配，别只列已知的五个主机：广告请求换个子域就会从 MITM 里漏掉，
+  # 表现就是「前面能去广告，播到一半的 mid-roll 又出来了」。
+  hostnames:
+    includes:
+      - "tubitv.com"
+      - "*.tubitv.com"
+      - "tubi.io"
+      - "*.tubi.io"
+      - "*.adrise.tv"

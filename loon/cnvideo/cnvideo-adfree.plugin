@@ -1,0 +1,42 @@
+#!name=CN Video Ad-Free
+#!desc=优酷 / 爱奇艺 / 腾讯视频：拒绝广告、广告 SDK 与遥测域名。纯规则，不需要 MITM。
+#!category=ADBlock
+#!author=xzavier-amico
+#!homepage=https://github.com/xzavier-amico/modules
+#!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/cnvideo.png
+#!tag=ADBlock
+
+[Rule]
+# ---------- 优酷 ----------
+# atm 系列：adp / count / m / val 都在这个后缀下，纯广告计数。
+# ad.api.3g.youku.com / ad.m.youku.com / iyes.youku.com 故意不拦：
+# 播放器起播前会同步等广告接口，连接直接失败会卡住整次播放（实测反馈）。
+DOMAIN-SUFFIX,atm.youku.com,REJECT
+DOMAIN,ems.youku.com,REJECT
+
+# ---------- 爱奇艺 ----------
+# cupid 后缀覆盖 t7z.cupid / api.cupid
+DOMAIN-SUFFIX,cupid.iqiyi.com,REJECT
+DOMAIN,ads.iqiyi.com,REJECT
+DOMAIN,act.vip.iqiyi.com,REJECT
+DOMAIN,msg.71.am,REJECT
+DOMAIN,data.video.iqiyi.com,REJECT
+DOMAIN,t7z.cupid.ptqy.gitv.tv,REJECT
+
+# ---------- 腾讯视频 ----------
+DOMAIN,ads.video.qq.com,REJECT
+DOMAIN,adsmind.gdtimg.com,REJECT
+DOMAIN,adsmind.ugdtimg.com,REJECT
+DOMAIN,pgdt.gtimg.cn,REJECT
+DOMAIN,pgdt.ugdtimg.com,REJECT
+DOMAIN,qzs.gdtimg.com,REJECT
+DOMAIN,mi.gdt.qq.com,REJECT
+DOMAIN,sdk.e.qq.com,REJECT
+DOMAIN,tangram.e.qq.com,REJECT
+DOMAIN,btrace.video.qq.com,REJECT
+DOMAIN,info4.video.qq.com,REJECT
+DOMAIN,info6.video.qq.com,REJECT
+DOMAIN,trace.video.qq.com,REJECT
+DOMAIN,vd.l.qq.com,REJECT
+DOMAIN,pingfore.qq.com,REJECT
+DOMAIN,news.ssp.qq.com,REJECT

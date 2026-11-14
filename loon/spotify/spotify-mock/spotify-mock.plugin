@@ -1,0 +1,63 @@
+#!name=Spotify Mock
+#!desc=自建 Mock 服务版：把 bootstrap / UCS / 元数据 / 歌词 / 首页 / 搜索 / 滚动页 / 远程配置请求改写到自己的服务，由服务端改写 protobuf 实现去广告、伪装 Premium、解锁播放限制、has_lyrics 与第三方歌词补全；客户端不加载任何脚本。需先部署 server/spotify-mock。iPhone / iPad 与 Loon for Mac 共用同一份插件。
+#!category=Spotify
+#!author=xzavier-amico
+#!homepage=https://github.com/xzavier-amico/modules
+#!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/spotify.png
+#!tag=Spotify
+#!loon_version=3.5.1(978)
+
+[Argument]
+mock_base = input,"",tag=Mock 服务地址,desc=自建服务的 /music 地址，不要带结尾斜杠，例如 https://mock.example.com/music。留空时本插件不改写任何请求（Spotify 仍走官方接口）。Cloudflare Worker 填 https://xxx.workers.dev/music；本机填 http://192.168.x.x:8787/music。
+
+[Rule]
+# 广告域名兜底。服务端改的是下发的开关，这里再拦一层真正投放广告的域名。
+# 免费号的音频广告是服务端缝进流里的，拦域名没用；能挡的是展示位、播客外链广告
+# 和广告曝光回传。doubleclick / googlesyndication 是全局域名，其它 App 也会一起被拦。
+DOMAIN-SUFFIX,ads.spotify.com,REJECT
+DOMAIN-SUFFIX,adeventtracker.spotify.com,REJECT
+DOMAIN-SUFFIX,aet.spotify.com,REJECT
+DOMAIN-SUFFIX,pubads.g.doubleclick.net,REJECT
+DOMAIN-SUFFIX,securepubads.g.doubleclick.net,REJECT
+DOMAIN-SUFFIX,googleads.g.doubleclick.net,REJECT
+DOMAIN-SUFFIX,pagead2.googlesyndication.com,REJECT
+DOMAIN-SUFFIX,tpc.googlesyndication.com,REJECT
+DOMAIN-SUFFIX,adservice.google.com,REJECT
+DOMAIN-SUFFIX,www.googletagservices.com,REJECT
+# 强制 Spotify 的 QUIC 回落到 TCP。QUIC 不经过 HTTP 代理，开启后 Rewrite / MITM
+# 规则对走 QUIC 的接口完全不生效；代价是个别版本可能出现播放几秒后跳歌，可先确认。
+AND, ((DOMAIN-SUFFIX, spotify.com), (PROTOCOL, QUIC)), REJECT
+
+[Rewrite]
+# 纯广告路径。桌面端和播放器核心会请求 /ads/*、/ad-logic/*、ad-on-app-open，
+# Premium 推广会请求 /premium-marketing/upsellOffer；直接 404，让 App 跳过广告或推广。
+# 不要拦 /social、gabo、pendragon：它们分别是好友动态、事件上报与消息服务。
+request if ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/ad-/ then reject(404)
+request if ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?(?:\/ads\/|\/premium-marketing\/|[^?#]*\/ad-on-app-open)/i then reject(404)
+
+# 账号状态与远程配置交给自建服务。mock_base 留空时第一段条件不成立，保持官方请求。
+# url.replace 只替换正则命中的前缀，查询串会原样保留。
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/bootstrap/ then url.replace("${mock_base}/bootstrap")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/user-customization-service/ then url.replace("${mock_base}/user-customization-service")
+
+# 曲目元数据也交给服务端：请求体里的 etag 由服务端删，响应里的 has_lyrics 由服务端补。
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/extended-metadata/ then url.replace("${mock_base}/extended-metadata")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/context-resolve/ then url.replace("${mock_base}/context-resolve")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/connect-state/ then url.replace("${mock_base}/connect-state")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/metadata\/4\/track/ then url.replace("${mock_base}/metadata/4/track")
+
+# 歌词也交给服务端：官方有歌词时清掉免费号的额度限制，没有歌词时由服务端
+# 用第三方歌词合成 JSON / protobuf。客户端不再加载脚本，304 由服务端处理。
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/color-lyrics\// then url.replace("${mock_base}/color-lyrics/")
+
+# 首页 / 搜索页 / 滚动页的赞助内容由服务端改响应体删除；远程配置接口也要一起
+# 改写，否则 App 重新拉配置后会把广告开关重新打开。url.replace 保留版本号和查询串。
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/casita\// then url.replace("${mock_base}/casita/")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/browsita\// then url.replace("${mock_base}/browsita/")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/scrollsita\// then url.replace("${mock_base}/scrollsita/")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/remote-config-resolver\// then url.replace("${mock_base}/remote-config-resolver/")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/nebula\// then url.replace("${mock_base}/nebula/")
+
+[MitM]
+# iPhone / iPad 与 Mac 共用同一组 spclient 主机。
+hostname = *-spclient.spotify.com, spclient.wg.spotify.com

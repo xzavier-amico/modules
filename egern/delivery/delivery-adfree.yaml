@@ -1,0 +1,163 @@
+#=======================================================================================
+# Delivery Ad-Free — Egern 模块
+#
+# 京东 / 美团 / 饿了么：拒绝广告域名，并把独立的广告接口用 MITM 改写成空响应。
+#
+# 两层：
+#   1) 域名层：广告素材 CDN、DSP、广告点击/曝光上报、第三方广告 SDK，直接 REJECT；
+#   2) MITM 层：开屏、点餐页广告板、首页促销楼层这类「只返回广告」的接口，
+#      把响应改成 {}，客户端拿不到素材就跳过，不会留白块。
+#
+# 不拦各家的 API 网关（api.m.jd.com、client-api.ele.me、newton-api.ele.me 等），
+# 也不拦推送、登录、支付相关域名——这些被拒会直接导致 App 打不开或收不到消息。
+#
+# 信息流里的原生广告是主接口 JSON 里的一个条目，和商品/店铺卡片同结构，
+# 没有抓包就写不出精确的删除条件，本模块不做猜测性改写，见 README。
+#=======================================================================================
+
+name: "Delivery Ad-Free"
+description: "京东 / 美团 / 饿了么：拒绝广告域名，并用 MITM 把开屏、广告板、促销接口改写成空响应。"
+author: "xzavier-amico"
+homepage: "https://github.com/xzavier-amico/modules"
+icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/delivery.png"
+
+rules:
+  # ---------- 京东 ----------
+  # img-x：广告素材 CDN；ccc-x：广告点击；c-nfa：曝光/效果监测；
+  # dsp-x / bdsp.x：广告投放；ads-union：联盟广告；jzt：京准通；addata：广告数据。
+  - domain_suffix:
+      match: "img-x.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "ccc-x.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "c-nfa.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "dsp-x.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "bdsp.x.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "ads-union.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "jzt.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "addata.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "x.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "cc.m.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "knicks.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "mars.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "orbit.jd.com"
+      policy: REJECT
+
+  # ---------- 美团 ----------
+  # impdsp 是美团 DSP（首页返回 "This is MtDsp"）；ad.e.waimai 是外卖广告接口。
+  # d.meituan.net 是统计/日志域名，mads.meituan.com 解析到点评会员营销、用途不明，
+  # 两者都不拦。
+  - domain_suffix:
+      match: "impdsp.meituan.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "ad.e.waimai.sankuai.com"
+      policy: REJECT
+
+  # ---------- 饿了么 ----------
+  # adashx 是阿里妈妈系的广告曝光/点击统计（三个入口）。
+  # client-api / newton-api 是业务接口，grand.ele.me 解析到 sopush 推送，都不拦。
+  - domain_suffix:
+      match: "adashx.ut.ele.me"
+      policy: REJECT
+  - domain_suffix:
+      match: "h-adashx.ut.ele.me"
+      policy: REJECT
+  - domain_suffix:
+      match: "v6-adashx.ut.ele.me"
+      policy: REJECT
+
+  # ---------- 第三方广告 SDK ----------
+  # 三家都会接穿山甲 / 优量汇 / 百度联盟 / 艾瑞这类 SDK，素材与曝光都走这些域名。
+  # 这是全局规则，其它 App 用到同一批 SDK 时也会一起被拦。
+  - domain_suffix:
+      match: "pangolin-sdk-toutiao.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "pangolin-sdk-toutiao-b.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "pglstatp-toutiao.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "pangle.io"
+      policy: REJECT
+  - domain_suffix:
+      match: "gdt.qq.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "pgdt.gtimg.cn"
+      policy: REJECT
+  - domain_suffix:
+      match: "mobads.baidu.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "cpro.baidu.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "cpro2.baidu.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "irs01.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "irs01.net"
+      policy: REJECT
+
+scriptings:
+  # 保守过滤：只删数组里 is_ad=true / ad_type+ad_id / card_type=ad_* 的条目。
+  # 三家首页信息流的广告字段名没有抓包，这个脚本不一定命中；命中才改写，否则原样放行。
+  - http_response:
+      name: "delivery.clean"
+      match: "^https?:\\/\\/(?:wmapi|apimobile|i)\\.meituan\\.com\\/|^https?:\\/\\/(?:waimai-guide|client-api|newton-api)\\.ele\\.me\\/|^https?:\\/\\/api\\.m\\.jd\\.com\\/"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/delivery/js/delivery_clean.js"
+      body_required: true
+      max_size: 8388608
+      timeout: 10
+
+url_rewrites:
+  # 美团外卖开屏：startpicture 返回开屏素材，loadInfo 带开屏配置，openscreen 是曝光回调。
+  # 三个都只服务开屏，改成 {} 后客户端直接跳过，不影响首页数据。
+  - match: "^https?:\\/\\/wmapi\\.meituan\\.com\\/api\\/v\\d+\\/(?:startpicture|loadInfo|openscreen)"
+    location: "http://reject-dict/"
+  # 美团点餐页的广告板。
+  - match: "^https?:\\/\\/rms\\.meituan\\.com\\/diancan\\/api\\/queryAdBoard"
+    location: "http://reject-dict/"
+  # 京东首页的促销楼层网关。
+  - match: "^https?:\\/\\/homepage-gw\\.jd\\.com\\/npromotion"
+    location: "http://reject-dict/"
+
+mitm:
+  hostnames:
+    includes:
+      - "wmapi.meituan.com"
+      - "apimobile.meituan.com"
+      - "i.meituan.com"
+      - "rms.meituan.com"
+      - "waimai-guide.ele.me"
+      - "client-api.ele.me"
+      - "newton-api.ele.me"
+      - "api.m.jd.com"
+      - "homepage-gw.jd.com"

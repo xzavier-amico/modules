@@ -1,0 +1,107 @@
+#=======================================================================================
+# CN Video Ad-Free — Egern 模块
+#
+# 优酷 / 爱奇艺 / 腾讯视频：直接 REJECT 广告 SDK 与遥测域名。
+#
+# 爱奇艺 / 腾讯视频的开屏、暂停、Feed 广告从各自的广告服务或广告 SDK 取素材，
+# 域名拒绝后请求失败，客户端通常跳过广告继续播放。
+#
+# 优酷只保留埋点域名：ad.api.3g.youku.com / iyes.youku.com 被硬拒后，
+# 播放器起播前同步等广告接口会卡住整次播放（实测反馈）。
+#
+# 纯规则模块，不需要 MITM，也不会和播放接口（vv.video.qq.com、acs.youku.com 等）
+# 冲突——那些域名没有列进来。
+#
+# 说明：App 里「我的」「设置」页的推广入口是本地 UI 或接口下发的位置，
+# 域名拒绝只能让它们加载不出内容，删不掉入口本身；这层需要改响应结构，
+# 目前没有可靠的抓包，不做猜测性改写。
+#=======================================================================================
+
+name: "CN Video Ad-Free"
+description: "优酷 / 爱奇艺 / 腾讯视频：拒绝广告、广告 SDK 与遥测域名。纯规则，不需要 MITM。"
+author: "xzavier-amico"
+homepage: "https://github.com/xzavier-amico/modules"
+icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/cnvideo.png"
+
+rules:
+  # ---------- 优酷 ----------
+  # atm 系列：adp / count / m / val 都在这个后缀下，纯广告计数。
+  # ad.api.3g.youku.com / ad.m.youku.com / iyes.youku.com 故意不拦：
+  # 播放器起播前会同步等广告接口，连接直接失败会卡住整次播放（实测反馈）。
+  - domain_suffix:
+      match: "atm.youku.com"
+      policy: REJECT
+  - domain:
+      match: "ems.youku.com"
+      policy: REJECT
+
+  # ---------- 爱奇艺 ----------
+  # cupid 后缀覆盖 t7z.cupid / api.cupid
+  - domain_suffix:
+      match: "cupid.iqiyi.com"
+      policy: REJECT
+  - domain:
+      match: "ads.iqiyi.com"
+      policy: REJECT
+  - domain:
+      match: "act.vip.iqiyi.com"
+      policy: REJECT
+  - domain:
+      match: "msg.71.am"
+      policy: REJECT
+  - domain:
+      match: "data.video.iqiyi.com"
+      policy: REJECT
+  - domain:
+      match: "t7z.cupid.ptqy.gitv.tv"
+      policy: REJECT
+
+  # ---------- 腾讯视频 ----------
+  - domain:
+      match: "ads.video.qq.com"
+      policy: REJECT
+  - domain:
+      match: "adsmind.gdtimg.com"
+      policy: REJECT
+  - domain:
+      match: "adsmind.ugdtimg.com"
+      policy: REJECT
+  - domain:
+      match: "pgdt.gtimg.cn"
+      policy: REJECT
+  - domain:
+      match: "pgdt.ugdtimg.com"
+      policy: REJECT
+  - domain:
+      match: "qzs.gdtimg.com"
+      policy: REJECT
+  - domain:
+      match: "mi.gdt.qq.com"
+      policy: REJECT
+  - domain:
+      match: "sdk.e.qq.com"
+      policy: REJECT
+  - domain:
+      match: "tangram.e.qq.com"
+      policy: REJECT
+  - domain:
+      match: "btrace.video.qq.com"
+      policy: REJECT
+  - domain:
+      match: "info4.video.qq.com"
+      policy: REJECT
+  - domain:
+      match: "info6.video.qq.com"
+      policy: REJECT
+  - domain:
+      match: "trace.video.qq.com"
+      policy: REJECT
+  - domain:
+      match: "vd.l.qq.com"
+      policy: REJECT
+  - domain:
+      match: "pingfore.qq.com"
+      policy: REJECT
+  - domain:
+      match: "news.ssp.qq.com"
+      policy: REJECT

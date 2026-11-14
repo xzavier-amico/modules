@@ -1,0 +1,26 @@
+#!name=Xiaohongshu Clean
+#!desc=小红书去广告：首页瀑布流、搜索结果、评论区、开屏与商品推广位；可选精简购物/直播 tab。
+#!category=Xiaohongshu
+#!author=xzavier-amico
+#!homepage=https://github.com/xzavier-amico/modules
+#!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/xiaohongshu.png
+#!tag=Xiaohongshu
+
+[Argument]
+block_ads = switch,true,type=boolean,tag=去广告,desc=删除首页瀑布流、搜索结果、评论区的推广内容，以及开屏素材、商品推广位和启动配置里的推广字段。
+clean_ui = switch,false,type=boolean,tag=精简界面,desc=删除首页「购物」「市集」「直播」三个 tab 和启动配置里的商城入口。
+
+[Rule]
+# 拒绝 QUIC，强制回落 TCP：HTTP/3 走 UDP，不经过 MITM，脚本看不到这些请求。
+AND, ((DOMAIN-SUFFIX, xiaohongshu.com), (PROTOCOL, QUIC)), REJECT
+
+[Rewrite]
+# 纯广告接口：直接 404，App 会当成没有素材
+request if ${url} ~= /^https?:\/\/[a-z]+\.xiaohongshu\.com\/api\/sns\/v\d+\/(?:tag\/)?ads/ then reject(404)
+request if ${url} ~= /^https?:\/\/[a-z]+\.xiaohongshu\.com\/api\/sns\/v\d+\/search\/notes\/recommend_info/ then reject(404)
+
+[Script]
+response if ${url} ~= /^https?:\/\/(?:edith|www|pages)\.xiaohongshu\.com\/api\/sns\/v\d+\/(?:homefeed(?:\/categories)?|search\/notes|note\/(?:comment\/list|widgets|tabfeed|videofeed|imagefeed|redtube|feed)|system_service\/(?:splash_config|config))/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/xiaohongshu/js/xiaohongshu_clean.js", {${block_ads}, ${clean_ui}}) with requires_body=true, tag="Xiaohongshu Clean", timeout=20
+
+[MitM]
+hostname = edith.xiaohongshu.com, www.xiaohongshu.com, pages.xiaohongshu.com

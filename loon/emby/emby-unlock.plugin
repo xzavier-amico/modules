@@ -1,0 +1,16 @@
+#!name=Emby Unlock
+#!desc=解锁 Emby iOS 客户端的完整播放：把 mb3admin.com 的授权校验响应改成已注册。不涉及服务器端的 Premiere 能力。
+#!category=Emby
+#!author=xzavier-amico
+#!homepage=https://github.com/xzavier-amico/modules
+#!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/emby.png
+#!tag=Emby
+
+[Argument]
+unlock_playback = switch,true,type=boolean,tag=解锁完整播放,desc=把 mb3admin.com 的授权校验响应改成已注册。关闭后脚本不做任何修改。
+
+[Script]
+response if ${url} ~= /^https?:\/\/(?:www\.)?mb3admin\.com\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/emby/js/emby_unlock.js", {${unlock_playback}}) with tag="Emby Unlock", timeout=10
+
+[MitM]
+hostname = mb3admin.com, www.mb3admin.com

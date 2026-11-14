@@ -1,0 +1,8 @@
+.cache/
+.state/
+__pycache__/
+node_modules/
+.wrangler/
+.dev.vars
+.env
+server/spotify-mock/certs/

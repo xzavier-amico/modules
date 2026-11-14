@@ -1,0 +1,44 @@
+#!name=YouTube Enhance
+#!desc=屏蔽广告、字幕翻译、YouTube Music 去广告/后台播放、默认分辨率、首页菜单与 Shorts 过滤；后台播放与 PiP 常开。
+#!author=xzavier-amico
+#!homepage=https://github.com/xzavier-amico/modules
+#!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/youtube.png
+#!tag=YouTube
+#!system=iOS,iPadOS,macOS,tvOS
+
+[Argument]
+block_ads = switch,true,type=boolean,tag=屏蔽广告,desc=播放器 / 信息流 / Shorts 广告、付费推广、广告追踪、Premium 推广、创作者商店一次关掉。
+block_ai = switch,true,type=boolean,tag=移除 AI 组件,desc=移除 Ask、AI 摘要及相关控件。
+max_height = select,"max","4320","2160","1440","1080","720","480","off",type=string,tag=默认分辨率,desc=max 表示最高可用；off 表示不修改画质。
+caption_lang = select,"zh-Hans","zh-Hant","en","ja","ko","es","fr","de","ru","pt","it","vi","th","id","ar","hi","tr","pl","nl","off",type=string,tag=字幕翻译,desc=选择默认翻译语言；off 关闭字幕翻译。
+home_menu = input,"",type=string,tag=首页菜单保留项,desc=多选：填写要保留的入口，逗号分隔。留空表示仅隐藏上传；all 表示全部保留；none 表示全部隐藏；-shorts 表示保留全部但隐藏 Shorts。支持 upload/shorts/explore/music/history/playlists/downloads/trending/library/later/liked 或 browseId。
+block_shorts_feed = switch,false,type=boolean,tag=移除 Shorts 推荐,desc=移除首页、搜索和推荐信息流中的 Shorts 货架。
+youtube_music = switch,true,type=boolean,tag=YouTube Music 增强,desc=YouTube Music 去广告、后台播放、PiP。
+block_members_only = switch,false,type=boolean,tag=屏蔽会员专属视频,desc=从首页、频道页等列表中移除需要频道会员才能观看的视频。
+home_cleanup = select,"standard","all","off",type=string,tag=首页内容清理,desc=standard 表示 Playables；all 表示再加竖屏直播；off 表示不清理。
+jump_ahead = switch,true,type=boolean,tag=Jump Ahead 按钮,desc=启用播放器中的 Jump Ahead 快进按钮。
+max_speed = select,"4","3","2","off",type=string,tag=最大倍速,desc=允许的最高播放倍速；选 off 表示不修改倍速数值与倍速上限。
+
+[Rule]
+# 拒绝 QUIC，强制回落 TCP。HTTP/3 不经过 HTTP 代理，脚本拿不到 ad_break / player 请求。
+AND, ((DOMAIN-SUFFIX, googlevideo.com), (PROTOCOL, QUIC)), REJECT
+AND, ((DOMAIN-SUFFIX, youtube.com), (PROTOCOL, QUIC)), REJECT
+AND, ((DOMAIN, youtubei.googleapis.com), (PROTOCOL, QUIC)), REJECT
+
+[Script]
+# 请求阶段：ad_break / log_event 不需要请求体，单独一条避免缓冲 body。
+request if ${url} ~= /^https:\/\/(?:youtubei\.googleapis\.com|music\.youtube\.com)\/youtubei\/v1\/(?:(?:player|music)\/ad_break|log_event)(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.request.js?v=20261114-2", {${block_ads}, ${block_ai}, ${max_height}, ${caption_lang}, ${home_menu}, ${block_shorts_feed}, ${youtube_music}, ${block_members_only}, ${home_cleanup}, ${jump_ahead}, ${max_speed}}) with tag="youtube.request.meta", timeout=10
+# 请求阶段：initplayback / videoplayback 需要请求体。
+request if ${url} ~= /^https?:\/\/[\w-]+\.googlevideo\.com\/(?:initplayback|videoplayback)(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.request.js?v=20261114-2", {${block_ads}, ${block_ai}, ${max_height}, ${caption_lang}, ${home_menu}, ${block_shorts_feed}, ${youtube_music}, ${block_members_only}, ${home_cleanup}, ${jump_ahead}, ${max_speed}}) with requires_body=true, binary_body_mode=true, tag="youtube.request.playback", timeout=30
+# 响应阶段：config / log_event 只做 UMP 密钥提取。
+response if ${url} ~= /^https:\/\/(?:youtubei\.googleapis\.com|music\.youtube\.com)\/youtubei\/v1\/(?:config|log_event)(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.key.js?v=20261114-2") with requires_body=true, binary_body_mode=true, tag="youtube.key", timeout=10
+# 响应阶段：browse / next / player 等常规接口。
+response if ${url} ~= /^https:\/\/(?:youtubei\.googleapis\.com|music\.youtube\.com)\/youtubei\/v1\/(?:navigation\/resolve_url|browse|next|player|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch)(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.response.js?v=20261114-2", {${block_ads}, ${block_ai}, ${max_height}, ${caption_lang}, ${home_menu}, ${block_shorts_feed}, ${youtube_music}, ${block_members_only}, ${home_cleanup}, ${jump_ahead}, ${max_speed}}) with requires_body=true, binary_body_mode=true, tag="youtube.response", timeout=60
+# 响应阶段：initplayback 的 UMP 解密。
+response if ${url} ~= /^https?:\/\/[\w-]+\.googlevideo\.com\/initplayback(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/youtube/js/youtube.response.js?v=20261114-2", {${block_ads}, ${block_ai}, ${max_height}, ${caption_lang}, ${home_menu}, ${block_shorts_feed}, ${youtube_music}, ${block_members_only}, ${home_cleanup}, ${jump_ahead}, ${max_speed}}) with requires_body=true, binary_body_mode=true, tag="youtube.ump", timeout=60
+[Rewrite]
+request if ${url} ~= /^https:\/\/www\.youtube\.com\/(pagead|pcs)\// then reject(404)
+request if ${url} ~= /^https:\/\/s\.youtube\.com\/api\/stats\/ads/ then reject(404)
+
+[MitM]
+hostname = *.googlevideo.com, youtubei.googleapis.com, www.youtube.com, music.youtube.com, s.youtube.com

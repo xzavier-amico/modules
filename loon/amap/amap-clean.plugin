@@ -1,0 +1,58 @@
+#!name=AMap Clean
+#!desc=高德地图：去开屏、首页信息流、探索推荐、路线页、我的页面广告，拒绝广告素材与遥测域名。
+#!category=Navigation
+#!author=xzavier-amico
+#!homepage=https://github.com/xzavier-amico/modules
+#!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/amap.png
+#!tag=Navigation
+
+[Rule]
+# ---------- 广告 ----------
+# optimus-ads 是广告素材 CDN，首页左上角 GIF、运营图都从这里走。
+DOMAIN-SUFFIX,optimus-ads.amap.com,REJECT
+
+# ---------- 遥测 ----------
+# logs / dualstack-logs：日志上传（含 IPv4 / IPv6 双栈入口）。
+# adashx.ut：阿里妈妈系的曝光 / 点击 / 用户行为上报，高德复用同一套。
+# awaken：H5 日志入口（/ws/h5_log），新版一次冷启动会上报几十条。
+DOMAIN-SUFFIX,logs.amap.com,REJECT
+DOMAIN-SUFFIX,dualstack-logs.amap.com,REJECT
+DOMAIN-SUFFIX,adashx.ut.amap.com,REJECT
+DOMAIN-SUFFIX,h-adashx.ut.amap.com,REJECT
+DOMAIN-SUFFIX,v6-adashx.ut.amap.com,REJECT
+DOMAIN-SUFFIX,awaken.amap.com,REJECT
+# apiinit.amap.com 在公开广告列表里也有，但它是高德 SDK 的初始化域名，
+# 其它接入高德地图 SDK 的 App 也会请求，拦了可能误伤，先不放进默认规则。
+# 更激进的做法（可能影响首页配置 / 第三方 App）：
+# DOMAIN-SUFFIX,amap-aos-info-nogw.amap.com,REJECT
+# DOMAIN-SUFFIX,apiinit.amap.com,REJECT
+
+[Rewrite]
+# 纯广告接口：直接失败 / 返回空，客户端拿不到素材就跳过。
+^https?:\/\/.*\.amap\.com\/ws\/asa\/ads_attribution reject
+^https?:\/\/.*\.amap\.com\/ws\/aos\/alimama\/ reject-200
+^https?:\/\/.*\.amap\.com\/ws\/faas\/amap-navigation\/card-service-route-plan\? reject-dict
+# 行为 / 日志上报。amapstream 的路径写成 //ws/...（双斜杠），会绕过按单斜杠写的
+# 规则；这里用 \/+ 兼容，upload 与 alc/collect 一起拦。
+^https?:\/\/m5-x\.amap\.com\/+ws\/shield\/(?:amapstream\/upload|alc\/collect) reject-200
+# 首页左上角 GIF 与广告图。
+^https?:\/\/optimus-ads\.amap\.com\/uploadimg\/.+ reject-img
+^https?:\/\/.*\.amap\.com\/uploadimg\/\w+\.gif reject-img
+# 打车订单页顶部 Tip 广告。若订单页出现异常，先删这一条。
+^https?:\/\/.*\.amap\.com\/ws\/boss\/order_web\/\w{8}_information reject-200
+
+# 首页资产 / AI 快捷搜索：客户端拿不到就退回本地默认资源。
+^https?:\/\/.*\.amap\.com\/ws\/faas\/amap-navigation\/main-page-(?:assets|aiqs) reject-dict
+# 搜索页的营销运营位。
+^https?:\/\/.*\.amap\.com\/ws\/shield\/search_business\/process\/marketingOperationStructured reject-dict
+
+[Script]
+# 避免 304 空响应让脚本拿不到 body，客户端继续用缓存里的旧广告配置。
+request if ${url} ~= /^https?:\/\/.*\.amap\.com\/(?:v1\/ai_rec\/home_explore|ws\/valueadded\/alimama\/splash_screen|ws\/faas\/amap-navigation\/(?:main-page|usr-profile-fc\/homeV2)|ws\/shield\/dsp\/profile\/index\/node|ws\/shield\/search\/new_hotword|ws\/promotion-web\/resource|ws\/msgbox\/pull|ws\/message\/notice\/list|ws\/shield\/frogserver\/aocs|ws\/boss\/car\/order\/content_info|ws\/amap\/hitch\/passenger\/content_info|ws\/shield\/scene\/recommend|ws\/shield\/search_business\/process\/middleLayer\/sug|ws\/c3frontend\/af-search\/search|ws\/amc\/server\/conv\/raise_list|ws\/smartui\/near_recommend|ws\/opc\/tools\/list|ws\/shield\/search\/nearbyrec_smart)/ then request.header.del("if-none-match")
+request if ${url} ~= /^https?:\/\/.*\.amap\.com\/(?:v1\/ai_rec\/home_explore|ws\/valueadded\/alimama\/splash_screen|ws\/faas\/amap-navigation\/(?:main-page|usr-profile-fc\/homeV2)|ws\/shield\/dsp\/profile\/index\/node|ws\/shield\/search\/new_hotword|ws\/promotion-web\/resource|ws\/msgbox\/pull|ws\/message\/notice\/list|ws\/shield\/frogserver\/aocs|ws\/boss\/car\/order\/content_info|ws\/amap\/hitch\/passenger\/content_info|ws\/shield\/scene\/recommend|ws\/shield\/search_business\/process\/middleLayer\/sug|ws\/c3frontend\/af-search\/search|ws\/amc\/server\/conv\/raise_list|ws\/smartui\/near_recommend|ws\/opc\/tools\/list|ws\/shield\/search\/nearbyrec_smart)/ then request.header.del("if-modified-since")
+# 业务数据里夹着广告位的接口，按 JSON 结构删除；结构对不上原样放行。
+# script 地址带 ?v=，否则客户端会一直用缓存里的旧脚本，改了等于没改。
+response if ${url} ~= /^https?:\/\/.*\.amap\.com\/(?:v1\/ai_rec\/home_explore|ws\/valueadded\/alimama\/splash_screen|ws\/faas\/amap-navigation\/(?:main-page|usr-profile-fc\/homeV2)|ws\/shield\/dsp\/profile\/index\/node|ws\/shield\/search\/new_hotword|ws\/promotion-web\/resource|ws\/msgbox\/pull|ws\/message\/notice\/list|ws\/shield\/frogserver\/aocs|ws\/boss\/car\/order\/content_info|ws\/amap\/hitch\/passenger\/content_info|ws\/shield\/scene\/recommend|ws\/shield\/search_business\/process\/middleLayer\/sug|ws\/c3frontend\/af-search\/search|ws\/amc\/server\/conv\/raise_list|ws\/smartui\/near_recommend|ws\/opc\/tools\/list|ws\/shield\/search\/nearbyrec_smart)/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/amap/js/amap_clean.js?v=20261113-10") with requires_body=true, tag="AMap Clean", timeout=20
+
+[MITM]
+hostname = *.amap.com

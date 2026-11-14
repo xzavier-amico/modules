@@ -1,0 +1,32 @@
+#!name=Pluto TV Ad-Free
+#!desc=去广告：boot 的 serverSideAds 改成 false，再按 clip 分组删掉 HLS 点播清单里的广告段。字幕翻译：翻译外挂 WebVTT，默认英文原句在上、中文翻译在下。
+#!category=Pluto TV
+#!author=xzavier-amico
+#!homepage=https://github.com/xzavier-amico/modules
+#!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/pluto.png
+#!tag=Pluto TV
+
+[Argument]
+block_ads = switch,true,type=boolean,tag=去除广告,desc=boot 的 serverSideAds 改成 false，并删掉 HLS 点播清单里的广告分片。
+caption_lang = select,"zh-Hans","zh-Hant","off",type=string,tag=字幕翻译,desc=翻译 Pluto 的外挂英文字幕；off 关闭字幕翻译。
+bilingual = switch,true,type=boolean,tag=双语字幕,desc=英文原句在上、中文翻译在下；关闭后只显示中文。
+translate_key = input,"",type=string,tag=翻译密钥,desc=DeepL Auth Key 或 Google Cloud Translation API Key（AIza 开头）。留空使用免费的 Edge 接口。
+translate_provider = select,"auto","edge","deepl","google",type=string,tag=翻译接口,desc=auto：有密钥时优先 DeepL / Google Cloud，无密钥或密钥接口失败时回退到 Edge。
+
+[Rule]
+# Pluto 美国内容需要美国节点。不在美国，或想指定别的策略组，改这里的 PROXY。
+DOMAIN-SUFFIX,pluto.tv,PROXY
+DOMAIN-SUFFIX,plutotv.net,PROXY
+
+[Script]
+request if ${url} ~= /^https?:\/\/boot\.pluto\.tv\/v4\/start/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/pluto/js/pluto_adfree.js", {${block_ads}}) with requires_body=true, tag="Pluto TV Ad-Free", timeout=10
+# 字幕：主清单里把英文字幕轨改名，外挂 WebVTT 分片翻译成双语。
+response if ${url} ~= /^https?:\/\/[^\/]*(?:pluto\.tv|plutotv\.net)\/[^?]*\/master\.m3u8/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/pluto/js/pluto_manifest.js", {${block_ads}, ${caption_lang}, ${bilingual}, ${translate_key}, ${translate_provider}}) with requires_body=true, tag="Pluto TV Caption", timeout=10
+response if ${url} ~= /^https?:\/\/[^\/]*(?:pluto\.tv|plutotv\.net)\/[^?]*\.vtt(?:\?|$)/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/pluto/js/pluto_subtitle.js", {${block_ads}, ${caption_lang}, ${bilingual}, ${translate_key}, ${translate_provider}}) with requires_body=true, tag="Pluto TV Subtitle", timeout=60
+# 第二道：点播清单里按广告标记删段（直播清单脚本内部会跳过）。
+response if ${url} ~= /^https?:\/\/[^\/]*(?:pluto\.tv|plutotv\.net)\/[^?]*\.m3u8/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/pluto/js/pluto_hls.js", {${block_ads}}) with requires_body=true, tag="Pluto TV HLS", timeout=10
+# 第三道：把会话里的 adBreaks 清空，进度条广告块和左上角 Ad 角标跟着消失（直播跳过）。
+response if ${url} ~= /^https?:\/\/[^\/]*pluto\.tv\/[^?]*session\.json/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/pluto/js/pluto_session.js", {${block_ads}}) with requires_body=true, tag="Pluto TV Session", timeout=10
+
+[MitM]
+hostname = boot.pluto.tv, pluto.tv, *.pluto.tv, *.prd.pluto.tv, *.plutotv.net

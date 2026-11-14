@@ -1,0 +1,47 @@
+#=======================================================================================
+# Emby Unlock — Egern 模块
+#
+# 解锁 Emby 官方 iOS 客户端的完整播放。免费版只能试看一分钟，客户端会拿购买凭据
+# 去 mb3admin.com 校验授权；这里把那几个校验接口的响应改成「已注册」。
+#
+# 命中：
+#   /admin/service/appstore/register      App 内购凭据登记
+#   /admin/service/registration/validate  按 feature 校验（premiere / MBSupporter …）
+#   /admin/service/registration/validateDevice
+#   /admin/service/registration/getStatus
+#
+# 注意：
+#   - 需要开启 MITM 并信任证书。
+#   - 只能解客户端这一档（Full Playback）。服务器端的 Premiere 能力（硬件转码、
+#     离线下载、Live TV、并发数）由服务器自己的授权决定，手机上的代理碰不到。
+#   - 接口按 Emby iOS 1.9.9 的实测结果维护，2026-11 实测接口仍在线、返回结构未变；
+#     但当前 App 版本是否仍走这套校验，只能装上试。
+#=======================================================================================
+
+name: "Emby Unlock"
+description: "解锁 Emby iOS 客户端的完整播放：把 mb3admin.com 的授权校验响应改成已注册。不涉及服务器端的 Premiere 能力。"
+author: "xzavier-amico"
+homepage: "https://github.com/xzavier-amico/modules"
+icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/emby.png"
+
+# ---- 参数（Egern 原生 env_schema：设置页自动生成开关 / 选择器 / 输入框）----
+# options 为 ["true","false"] 时渲染开关，其它 options 渲染选择器，不写 options 渲染输入框。
+env_schema:
+  unlock_playback:
+    name: "解锁完整播放"
+    description: "把 mb3admin.com 的授权校验响应改成已注册。关闭后脚本不做任何修改"
+    default_value: "true"
+    options: ["true", "false"]
+
+scriptings:
+  - http_response:
+      name: "emby.unlock"
+      match: "^https?:\\/\\/(?:www\\.)?mb3admin\\.com\\/"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/emby/js/emby_unlock.js"
+      timeout: 10
+
+mitm:
+  hostnames:
+    includes:
+      - "mb3admin.com"
+      - "www.mb3admin.com"

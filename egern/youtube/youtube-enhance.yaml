@@ -1,0 +1,202 @@
+#=======================================================================================
+# YouTube Enhance — Egern 模块
+#
+# Egern 版 YouTube 增强模块。脚本按请求阶段拆成
+# js/youtube.request.js / youtube.key.js / youtube.response.js：
+#   入口是 Egern 原生的 export default async function (ctx)，参数从 ctx.env 读取
+#   （env_schema 在设置页生成开关 / 选择器 / 输入框）。构建时外层会套一层
+#   src/env 适配层，把 ctx 转成 $request / $response / $done / $persistentStore /
+#   $argument，脚本主体与 Loon / Shadowrocket 共用同一份源码。
+#
+# Surge → Egern 字段对照:
+#   [Script] type=http-request / http-response      → scriptings[].http_request / http_response
+#   pattern=...                                     → match
+#   script-path=...                                 → script_url （本模块已托管在 GitHub，直接用 raw 绝对路径;
+#                                                      若改为纯本地导入/本地路径引用，可换回相对路径 js/xxx.js）
+#   requires-body=1,binary-body-mode=1              → body_required: true + binary_body: true
+#   max-size=-1（不限制）                            → 按脚本内部上限显式给值（常规 8 MiB / UMP 5 MiB。
+#                                                      文档默认 1 MiB; "0 = 不限制"的语义官方未定义，勿依赖）
+#   argument="{"flag":...}"                         → env_schema + ctx.env（脚本内由适配层转成 $argument）
+#   #!arguments / #!arguments-desc                  → env_schema（name / description / default_value / options）
+#   模块设置页 UI                                     → env_schema 自动生成
+#   #!REQUIREMENT "'...' == 'true'"（auto_hd 门控）  → 无按参数条件启用的能力；request 脚本内部
+#                                                      本就按 autoHd 自行判断，脚本常开无副作用
+#   [URL Rewrite] ... - reject                      → url_rewrites[].location "http://reject/"
+#   [MITM] hostname = %APPEND% ...                  → mitm.hostnames.includes
+#
+# 注意:
+#   - 需在 Egern 中安装并信任 CA 证书并开启 MITM（HTTPS 改写必需）。
+#   - 脚本内部共用持久化键 "YouTubeConfig"（client/encrypt）与 "YouTubeQuality"（分辨率缓存），
+#     密钥提取与 UMP 解密有先后依赖，第一次播放后才会生效。
+#=======================================================================================
+
+name: "YouTube Enhance"
+description: "去广告 + 字幕翻译 + YouTube Music 去广告/后台播放 + 默认分辨率 + 首页菜单/Shorts 过滤。\n后台播放与 PiP 常开，不再单独设开关。"
+author: "xzavier-amico"
+homepage: "https://github.com/xzavier-amico/modules"
+manual: "https://github.com/xzavier-amico/modules/blob/master/egern/youtube/README.md"
+# 图标使用 Koolson/Qure 的彩色图标集（外链，不依赖本仓库 icon/ 目录）。
+# 旧图标仍保留在 icon/YouTube.png 作为备份；想换回可改成本仓库 raw URL。
+icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/youtube.png"
+
+# ---- 参数（Egern 原生 env_schema：设置页自动生成开关 / 选择器 / 输入框）----
+# options 为 ["true","false"] 时渲染开关，其它 options 渲染选择器，不写 options 渲染输入框。
+env_schema:
+  block_ads:
+    name: "屏蔽广告"
+    description: "播放器 / 信息流 / Shorts 广告、付费推广、广告追踪、Premium 推广、创作者商店一次关掉"
+    default_value: "true"
+    options: ["true", "false"]
+  block_ai:
+    name: "移除 AI 组件"
+    description: "移除 Ask、AI 摘要及相关控件"
+    default_value: "true"
+    options: ["true", "false"]
+  max_height:
+    name: "默认分辨率"
+    description: "max = 最高可用；off = 不修改画质"
+    default_value: "max"
+    options: ["max", "4320", "2160", "1440", "1080", "720", "480", "off"]
+  caption_lang:
+    name: "字幕翻译"
+    description: "选择默认翻译语言；off 关闭字幕翻译"
+    default_value: "zh-Hans"
+    options: ["zh-Hans", "zh-Hant", "en", "ja", "ko", "es", "fr", "de", "ru", "pt", "it", "vi", "th", "id", "ar", "hi", "tr", "pl", "nl", "off"]
+  home_menu:
+    name: "首页菜单保留项"
+    description: "多选：填写要保留的入口，逗号分隔。留空=仅隐藏上传；all=全部保留；none=全部隐藏；-shorts=保留全部但隐藏 Shorts。支持 upload/shorts/explore/music/history/playlists/downloads/trending/library/later/liked 或 browseId"
+    default_value: ""
+  block_shorts_feed:
+    name: "移除 Shorts 推荐"
+    description: "移除首页、搜索和推荐信息流中的 Shorts 货架"
+    default_value: "false"
+    options: ["true", "false"]
+  youtube_music:
+    name: "YouTube Music 增强"
+    description: "YouTube Music 去广告、后台播放、PiP"
+    default_value: "true"
+    options: ["true", "false"]
+  block_members_only:
+    name: "屏蔽会员专属视频"
+    description: "从首页、频道页等列表中移除需要频道会员的视频"
+    default_value: "false"
+    options: ["true", "false"]
+  home_cleanup:
+    name: "首页内容清理"
+    description: "standard=Playables；all=再加竖屏直播；off=不清理"
+    default_value: "standard"
+    options: ["standard", "all", "off"]
+  jump_ahead:
+    name: "Jump Ahead 按钮"
+    description: "启用播放器中的 Jump Ahead 快进按钮"
+    default_value: "true"
+    options: ["true", "false"]
+  max_speed:
+    name: "最大倍速"
+    description: "可选 4 / 3 / 2 / off；off 表示不修改倍速数值与上限"
+    default_value: "4"
+    options: ["4", "3", "2", "off"]
+
+rules:
+  - and:
+      match:
+        - domain_suffix:
+            match: "googlevideo.com"
+        - protocol:
+            match: quic
+      policy: REJECT
+  - and:
+      match:
+        - domain_suffix:
+            match: "youtube.com"
+        - protocol:
+            match: quic
+      policy: REJECT
+  - and:
+      match:
+        - domain:
+            match: "youtubei.googleapis.com"
+        - protocol:
+            match: quic
+      policy: REJECT
+
+# ---- 脚本（按请求阶段拆分，每条 entry 只加载对应脚本）----
+# 原来 4 个脚本 / 6 条 entry，现在按阶段拆成 5 条 entry：
+#   请求阶段两条（log_event 不读 body；initplayback / videoplayback 读 body）
+#   响应阶段三条（config / log_event 只抓密钥；youtubei 常规接口；initplayback 的 UMP）
+# 参数由 env_schema 统一交给所有 entry（ctx.env），key 脚本不读参数也无副作用。
+#
+# ad_break 不放在脚本里：脚本返回本地响应时，Egern 会把它记成
+# 「request failed ... aborted the request」。改由 url_rewrites 直接回 200 空响应，
+# 空 protobuf 与「这次没有广告」的官方响应完全等价，日志里也不会再报错。
+scriptings:
+  # 请求阶段：log_event 不需要请求体，单独一条避免缓冲 body。
+  - http_request:
+      name: "youtube.request.log"
+      match: "^https://(?:youtubei\\.googleapis\\.com|music\\.youtube\\.com)/youtubei/v1/log_event(?:\\?.*)?$"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.request.js?v=20261114-2"
+      timeout: 10
+
+  # 请求阶段：initplayback / videoplayback 需要请求体。
+  - http_request:
+      name: "youtube.request.playback"
+      match: "^https?://[\\w-]+\\.googlevideo\\.com/(?:initplayback|videoplayback)(?:\\?.*)?$"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.request.js?v=20261114-2"
+      body_required: true
+      binary_body: true
+      max_size: 8388608
+      timeout: 30
+
+  # 响应阶段：config / log_event 只做 UMP 密钥提取。
+  - http_response:
+      name: "youtube.key"
+      match: "^https://(?:youtubei\\.googleapis\\.com|music\\.youtube\\.com)/youtubei/v1/(?:config|log_event)(?:\\?.*)?$"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.key.js?v=20261114-2"
+      body_required: true
+      binary_body: true
+      max_size: 8388608
+      timeout: 10
+
+  # 响应阶段：browse / next / player 等常规接口。
+  - http_response:
+      name: "youtube.response"
+      match: "^https://(?:youtubei\\.googleapis\\.com|music\\.youtube\\.com)/youtubei/v1/(?:navigation/resolve_url|browse|next|player|search|reel/reel_watch_sequence|guide|account/get_setting|get_watch)(?:\\?.*)?$"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.response.js?v=20261114-2"
+      body_required: true
+      binary_body: true
+      max_size: 8388608
+      timeout: 60
+
+  # 响应阶段：initplayback 的 UMP 解密 → 改写 → 重新加密。
+  - http_response:
+      name: "youtube.ump"
+      match: "^https?://[\\w-]+\\.googlevideo\\.com/initplayback(?:\\?.*)?$"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.response.js?v=20261114-2"
+      body_required: true
+      binary_body: true
+      max_size: 5242880
+      timeout: 60
+
+# ---- URL Rewrite ----
+# Egern 用 url_rewrites + location 的特殊值实现 Surge 的 reject：
+#   http://reject/      → 404 空响应
+#   http://reject-200/  → 200 空响应
+# ad_break 的官方「没有广告」响应就是空 protobuf，这里直接回 200 空体，
+# 既不用脚本返回本地响应（会触发 aborted 日志），也不依赖广告参数。
+url_rewrites:
+  - match: "^https://www\\.youtube\\.com/(pagead|pcs)/"
+    location: "http://reject/"
+  - match: "^https://s\\.youtube\\.com/api/stats/ads"
+    location: "http://reject/"
+  - match: "^https://(?:youtubei\\.googleapis\\.com|music\\.youtube\\.com)/youtubei/v1/(?:player|music)/ad_break(?:\\?.*)?$"
+    location: "http://reject-200/"
+
+# ---- MITM（Surge [MITM] hostname %APPEND% 直译）----
+mitm:
+  hostnames:
+    includes:
+      - "*.googlevideo.com"
+      - "youtubei.googleapis.com"
+      - "www.youtube.com"
+      - "music.youtube.com"
+      - "s.youtube.com"

@@ -1,0 +1,22 @@
+#!name=Pluto TV Ad-Free
+#!desc=去广告：boot 的 serverSideAds 改成 false，再按 clip 分组删掉 HLS 点播清单里的广告段。字幕翻译：翻译外挂 WebVTT，默认英文原句在上、中文翻译在下。
+#!author=xzavier-amico
+#!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/pluto.png
+#!arguments=去除广告:true, 字幕翻译:zh-Hans, 双语字幕:true, 翻译密钥:none, 翻译接口:auto
+#!arguments-desc=去除广告：关闭后 boot 参数、HLS 清单与会话 adBreaks 都不再改写。\n字幕翻译：zh-Hans / zh-Hant / off。\n双语字幕：英文原句在上、中文翻译在下；关闭后只显示中文。\n翻译密钥：DeepL Auth Key 或 Google Cloud Translation API Key（AIza 开头）；保持 none 表示使用免费的 Edge 接口。\n翻译接口：auto / edge / deepl / google。auto 有密钥时优先 DeepL / Google Cloud，无密钥或密钥接口失败时回退到 Edge。
+
+# Pluto 美国内容需要美国节点。模块不再自带 [Rule] 段：请在主配置里把
+# pluto.tv / plutotv.net 指向你自己的美国策略组。
+
+[Script]
+pluto.adfree = type=http-request,pattern=^https?:\/\/boot\.pluto\.tv\/v4\/start,requires-body=1,max-size=1048576,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/pluto/js/pluto_adfree.js,argument="{"block_ads":{{{去除广告}}}}"
+# 字幕：主清单里把英文字幕轨改名，外挂 WebVTT 分片翻译成双语。
+pluto.manifest = type=http-response,pattern=^https?:\/\/[^\/]*(?:pluto\.tv|plutotv\.net)\/[^?]*\/master\.m3u8,requires-body=1,max-size=1048576,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/pluto/js/pluto_manifest.js,argument="{"block_ads":{{{去除广告}}},"caption_lang":"{{{字幕翻译}}}","bilingual":{{{双语字幕}}},"translate_key":"{{{翻译密钥}}}","translate_provider":"{{{翻译接口}}}"}"
+pluto.subtitle = type=http-response,pattern=^https?:\/\/[^\/]*(?:pluto\.tv|plutotv\.net)\/[^?]*\.vtt(?:\?|$),requires-body=1,max-size=2097152,timeout=60,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/pluto/js/pluto_subtitle.js,argument="{"block_ads":{{{去除广告}}},"caption_lang":"{{{字幕翻译}}}","bilingual":{{{双语字幕}}},"translate_key":"{{{翻译密钥}}}","translate_provider":"{{{翻译接口}}}"}"
+# 第二道：点播清单里按广告标记删段（直播清单脚本内部会跳过）。
+pluto.hls = type=http-response,pattern=^https?:\/\/[^\/]*(?:pluto\.tv|plutotv\.net)\/[^?]*\.m3u8,requires-body=1,max-size=8388608,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/pluto/js/pluto_hls.js,argument="{"block_ads":{{{去除广告}}}}"
+# 第三道：把会话里的 adBreaks 清空，进度条广告块和左上角 Ad 角标跟着消失（直播跳过）。
+pluto.session = type=http-response,pattern=^https?:\/\/[^\/]*pluto\.tv\/[^?]*session\.json,requires-body=1,max-size=8388608,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/pluto/js/pluto_session.js,argument="{"block_ads":{{{去除广告}}}}"
+
+[MITM]
+hostname = %APPEND% boot.pluto.tv, pluto.tv, *.pluto.tv, *.prd.pluto.tv, *.plutotv.net

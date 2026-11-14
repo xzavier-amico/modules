@@ -1,0 +1,144 @@
+#=======================================================================================
+# BiliBili Clean — Egern 模块
+#
+# 精简版：去广告、去会员推广、去遥测、自动最高画质。
+#
+# 广告 / 会员推广在 JSON 响应里按结构删：
+#   /x/v2/splash/*            开屏
+#   /x/v2/feed/index*         首页推荐
+#   /x/v2/search/square       搜索
+#   /x/web-interface/wbi/...  网页推荐流
+#   /x/vip/ads/materials      大会员广告素材
+#   /pgc/view/v2/app/season   番剧页 payment 块
+#   /pgc/page/*               番剧页广告模块
+#   /xlive/...                直播：首页/推荐只删广告卡，房间页只删 banner 与购物位
+#   /pgc/activity/.../receive 番剧弹窗广告
+#   /x/resource/show/tab*     底部 tab：删「发布」+「会员购」，顶部删「游戏中心」
+#   /x/v2/account/mine        我的页：删「我的服务」、大会员推广块与 VIP 分区
+#
+# 详情页、评论区、播放器状态走 gRPC（protobuf），JSON 脚本碰不到，单独用
+# bilibili_grpc.js 按字段号删：
+#   view.v1.View/View           cms / cm_config / cm_ipad / cm_under_player / 相关推荐广告 / 广告 Tab
+#   viewunite.v1.View/View      cm、详情 Tab 里的推广模块与推荐广告卡
+#   viewunite.v1.View/PlayPause 暂停广告
+#   viewunite.v1.View/ViewEndPage 播放结束页广告
+#   reply.v1.Reply/MainList     评论列表广告、带货置顶、评论区顶部带货卡
+#
+# 遥测：data.bilibili.com、cm.bilibili.com 与两个第三方广告归因域名直接 REJECT，
+# 另外拦掉 api.bilibili.com/x/report/click/*。
+#
+# 画质：REST playurl 的 qn 改成 120（4K）并补 fourk=1；gRPC 的 PlayView 请求体
+# 同样改 qn / fourk。服务端按账号权限返回实际可用的最高档。
+#=======================================================================================
+
+name: "BiliBili Clean"
+description: "去广告、去会员推广、去遥测，播放请求自动要最高画质。JSON 与 gRPC 都改，不碰视频流。"
+author: "xzavier-amico"
+homepage: "https://github.com/xzavier-amico/modules"
+icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/bilibili.png"
+
+# ---- 参数（Egern 原生 env_schema：设置页自动生成开关 / 选择器 / 输入框）----
+# options 为 ["true","false"] 时渲染开关，其它 options 渲染选择器，不写 options 渲染输入框。
+env_schema:
+  block_ads:
+    name: "去广告"
+    description: "删除开屏、首页推荐、搜索、番剧页、直播推荐、番剧弹窗、详情页、评论区和暂停广告"
+    default_value: "true"
+    options: ["true", "false"]
+  hide_vip:
+    name: "去会员推广"
+    description: "删除番剧页 payment 块、大会员广告素材和 VIP 卡片"
+    default_value: "true"
+    options: ["true", "false"]
+  clean_ui:
+    name: "精简界面"
+    description: "删除底部「发布」+「会员购」、顶部「游戏中心」，以及「我的」页的「我的服务」分区"
+    default_value: "true"
+    options: ["true", "false"]
+  auto_quality:
+    name: "自动最高画质"
+    description: "把 playurl 请求的 qn 改成 120（4K），服务端按账号权限返回实际最高档"
+    default_value: "true"
+    options: ["true", "false"]
+
+rules:
+  # 遥测与广告
+  - domain:
+      match: "data.bilibili.com"
+      policy: REJECT
+  - domain:
+      match: "cm.bilibili.com"
+      policy: REJECT
+  - domain:
+      match: "adtrack.qianwen.com"
+      policy: REJECT
+  - domain:
+      match: "tkio-redirect.solar-engine.com"
+      policy: REJECT
+  # 拒绝 QUIC，强制回落 TCP。gRPC / playurl 走 HTTP/3 时脚本拿不到响应。
+  - and:
+      match:
+        - domain_suffix:
+            match: "bilibili.com"
+        - protocol:
+            match: quic
+      policy: REJECT
+  - and:
+      match:
+        - domain_suffix:
+            match: "biliapi.net"
+        - protocol:
+            match: quic
+      policy: REJECT
+
+url_rewrites:
+  # 点击埋点
+  - match: "^https?:\\/\\/api\\.bilibili\\.com\\/x\\/report\\/click\\/"
+    location: "http://reject/"
+
+scriptings:
+  - http_response:
+      name: "bilibili.clean"
+      match: "^https?:\\/\\/(?:app\\.bilibili\\.com|api\\.bilibili\\.com|api\\.live\\.bilibili\\.com)\\/(?:x\\/v2\\/splash\\/|x\\/v2\\/feed\\/index|x\\/v2\\/search\\/square|x\\/web-interface\\/wbi\\/index\\/top\\/feed\\/rcmd|x\\/vip\\/ads\\/materials|pgc\\/view\\/v2\\/app\\/season|pgc\\/page\\/|pgc\\/activity\\/deliver\\/material\\/receive|x\\/resource\\/show\\/tab|x\\/v2\\/account\\/mine|xlive\\/(?:app-interface\\/v2\\/(?:index\\/feed|room\\/recList)|app-room\\/v1\\/index\\/getInfoByRoom))"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_clean.js"
+      body_required: true
+      max_size: 16777216
+      timeout: 20
+
+  - http_request:
+      name: "bilibili.quality"
+      match: "^https?:\\/\\/(?:api|app)\\.bilibili\\.com\\/(?:x|pgc)\\/.*playurl"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_quality.js"
+      timeout: 10
+
+  # gRPC 的播放请求体里也有 qn，改完再放行。
+  - http_request:
+      name: "bilibili.quality.grpc"
+      match: "^https?:\\/\\/(?:app|grpc)\\.bili(?:bili\\.com|api\\.net)\\/bilibili\\.(?:app\\.playurl\\.v1\\.PlayURL|pgc\\.gateway\\.player\\.v2\\.PlayURL|app\\.playerunite\\.v1\\.Player)\\/(?:PlayView|PlayViewUnite)$"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_quality.js"
+      body_required: true
+      binary_body: true
+      max_size: 1048576
+      timeout: 10
+
+  # 详情页 / 评论区 / 播放器走 gRPC（protobuf over HTTP/2），不是 JSON，
+  # 用单独的脚本按字段号删，需要二进制 body。
+  - http_response:
+      name: "bilibili.grpc"
+      match: "^https?:\\/\\/(?:grpc\\.biliapi\\.net|grpc\\.bilibili\\.com|app\\.biliapi\\.net|app\\.bilibili\\.com)\\/bilibili\\.(?:app\\.(?:(?:view|viewunite)\\.v1\\.View|dynamic\\.v2\\.Dynamic)|main\\.community\\.reply\\.v1\\.Reply)\\/"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_grpc.js"
+      body_required: true
+      binary_body: true
+      max_size: 16777216
+      timeout: 20
+
+mitm:
+  hostnames:
+    includes:
+      - "app.bilibili.com"
+      - "api.bilibili.com"
+      - "api.live.bilibili.com"
+      - "app.biliapi.net"
+      - "api.biliapi.net"
+      - "grpc.biliapi.net"
+      - "grpc.bilibili.com"

@@ -1,0 +1,38 @@
+#!name=Tubi Ad-Free
+#!desc=去广告：清空内容元数据里的 cue_points，广告接口返回空广告列表 / 空 VAST。字幕翻译：在内容元数据里加一条中文 SRT 轨并翻译，默认英文原句 + 中文双语显示。不改动视频流，不触发 Tubi 的广告拦截检测。
+#!category=Tubi
+#!author=xzavier-amico
+#!homepage=https://github.com/xzavier-amico/modules
+#!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/tubi.png
+#!tag=Tubi
+
+[Argument]
+block_ads = switch,true,type=boolean,tag=去除广告,desc=清空 cue_points 与 ads 列表，并把 VAST / VMAP 换成空文档。
+caption_lang = select,"zh-Hans","zh-Hant","off",type=string,tag=字幕翻译,desc=在内容元数据里追加一条翻译后的字幕轨；off 关闭字幕翻译。
+bilingual = switch,true,type=boolean,tag=双语字幕,desc=中文轨保留英文原句并在下方显示中文翻译；关闭后只显示中文。
+translate_key = input,"",type=string,tag=翻译密钥,desc=DeepL Auth Key 或 Google Cloud Translation API Key（AIza 开头）。留空使用免费的 Edge 接口。
+translate_provider = select,"auto","edge","deepl","google",type=string,tag=翻译接口,desc=auto：有密钥时优先 DeepL / Google Cloud，无密钥或密钥接口失败时回退到 Edge。
+
+[Rule]
+# Tubi 只在美国可用。这里把它的域名固定走代理，避免被「国内直连」类规则带走，
+# 导致 MITM 看不到流量、模块静默失效。
+# 如果你本身在美国，或想指定某个策略组/节点，把下面六行的 PROXY 改成 DIRECT
+# 或你的策略组名称即可。
+DOMAIN-SUFFIX,tubitv.com,PROXY
+DOMAIN-SUFFIX,tubi.com,PROXY
+DOMAIN-SUFFIX,tubi.tv,PROXY
+DOMAIN-SUFFIX,tubi.video,PROXY
+DOMAIN-SUFFIX,tubi.io,PROXY
+DOMAIN-SUFFIX,adrise.tv,PROXY
+
+[Script]
+# 前半段：广告侧主机；后半段：内容元数据 / API（cue_points 从这里来）。
+response if ${url} ~= /^https?:\/\/(?:(?:[a-z0-9-]+\.)*(?:ads|rainmaker)[a-z0-9.-]*\.(?:tubi\.io|tubitv\.com|tubi\.video|adrise\.tv)\/|(?:[a-z0-9-]+\.)*(?:tubitv\.com|tubi\.io)\/(?:oz|api)\/)/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/tubi/js/tubi_adfree.js", {${block_ads}, ${caption_lang}, ${bilingual}, ${translate_key}, ${translate_provider}}) with requires_body=true, tag="Tubi Ad-Free", timeout=10
+
+# 带 tlang 标记的字幕轨：把 SRT 文本送去翻译，时间轴 / 序号保持原样。
+response if ${url} ~= /^https?:\/\/(?:[a-z0-9-]+\.)*(?:adrise\.tv|tubitv\.com|tubi\.io)\/.*\.srt(?:\?.*)?$/i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/tubi/js/tubi_caption.js", {${block_ads}, ${caption_lang}, ${bilingual}, ${translate_key}, ${translate_provider}}) with requires_body=true, tag="Tubi Caption", timeout=60
+
+[MitM]
+# 通配，别只列已知的五个主机：广告请求换个子域就会从 MITM 里漏掉，
+# 表现就是「前面能去广告，播到一半的 mid-roll 又出来了」。
+hostname = tubitv.com, *.tubitv.com, tubi.io, *.tubi.io, *.adrise.tv

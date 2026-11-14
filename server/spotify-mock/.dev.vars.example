@@ -1,0 +1,36 @@
+# Copy to .dev.vars (wrangler dev / npm start) or .env (npm start).
+# Real environment variables take priority; this file never overrides them.
+
+# 服务端改写开关
+SPOOF_PREMIUM=true
+BLOCK_ADS=true
+# 留空 / 不写：移动端默认 true，桌面端默认 false（避免 Mac 几秒跳歌）。
+# 显式写 true 才会给桌面端也写播放授权字段。
+# UNLOCK_PLAYBACK=true
+# auto：按 User-Agent 自动识别 iPhone / iPad / Mac / Windows。
+# 只有自动识别不对时才强制 true（桌面）或 false（移动端）。
+DESKTOP=auto
+
+# 歌词补全（服务端处理，客户端模块不再加载脚本）
+# 官方没有歌词时用第三方歌词补上；官方有歌词时只清掉免费号的额度限制。
+# LYRICS_ENABLED=true
+# lrclib / musixmatch / netease / qq，或 auto 依次尝试
+# LYRICS_SOURCE=lrclib
+# 一次歌词解析的总超时（毫秒），默认 8000
+# LYRICS_TIMEOUT_MS=8000
+# 命中缓存 / 未命中缓存的有效期（秒），默认 21600 / 600
+# LYRICS_CACHE_TTL=21600
+# LYRICS_NEGATIVE_CACHE_TTL=600
+
+# 可选：给 mock 服务加一段隐蔽路径。设置后模块里的 mock_base 也要同步：
+#   MOCK_PREFIX=/change-me  ->  https://host/change-me/music
+# MOCK_PREFIX=
+
+# 仅本地 Node 服务使用
+HOST=127.0.0.1
+PORT=8787
+# 手机要通过局域网访问时改成 0.0.0.0
+# HOST=0.0.0.0
+# 本地 HTTPS（可选）。反代 / Tunnel 终结 TLS 时不需要。
+# TLS_CERT=./cert.pem
+# TLS_KEY=./key.pem
