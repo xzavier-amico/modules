@@ -51,18 +51,19 @@
     $done({ body: out });
   };
 
-  // 补卡前卡住 scrollsita 等歌词结果：轮询歌词进度，命中即补（内容就绪）、
-  // 读到 miss 不补空卡、超时乐观补卡（内容由 color-lyrics 请求填充）。
-  // 关键是要等歌词响应已经交给客户端（served），只等缓存会让 scroll 先渲染。
-  // 等待上限、步长和宽限在这里调整。
-  const CARD_WAIT_MS = 8000;
-  const CARD_FAST_MS = 2000;
-  const CARD_FAST_POLL_MS = 200;
-  const CARD_SLOW_POLL_MS = 500;
-  // 歌词响应发出后再留给客户端处理的时间；歌词请求比 scroll 晚开始时，
-  // 等待窗口最多再顺延 CARD_EXTEND_MS。
-  const CARD_GRACE_MS = 250;
-  const CARD_EXTEND_MS = 4000;
+  // 补卡前短暂卡住 scrollsita 等歌词结果：轮询歌词进度，命中即补（内容就绪）、
+  // 读到 miss 不补空卡、超预算乐观补卡（内容由 color-lyrics 请求填充）。
+  //
+  // 预算必须短。歌词一旦要走 open.spotify.com 取元数据，实测整条链路 3 秒以上，
+  // 而 Now Playing 的列表是客户端先本地渲染、再合并服务端结果的：响应晚于合并
+  // 就会被丢掉，补进去的卡片照样不显示（用户看到的「列表出来了、没有歌词卡」）。
+  // 所以只在「歌词马上就到」的窗口里等，超时就带卡放行。
+  const CARD_WAIT_MS = 800;
+  const CARD_FAST_MS = 400;
+  const CARD_FAST_POLL_MS = 100;
+  const CARD_SLOW_POLL_MS = 200;
+  // 歌词响应发出后再留给客户端处理的时间。
+  const CARD_GRACE_MS = 200;
   const feedStartedAt = Date.now();
   if (isScroll && wantCard) {
     const card = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsCard : null;
@@ -90,7 +91,6 @@
         fastStep: CARD_FAST_POLL_MS,
         slowStep: CARD_SLOW_POLL_MS,
         grace: CARD_GRACE_MS,
-        extendMax: CARD_EXTEND_MS,
       });
       return;
     }

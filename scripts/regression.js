@@ -691,7 +691,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.equal(Object.keys(missOut).length, 0, platform + " confirmed miss inside the window must not add a card");
     assert.equal(missTicks, 2, platform + " must stop polling on a confirmed miss");
 
-    // 4) 等满 8 秒仍无结果：乐观补卡（前 2s 每 200ms、之后每 500ms，共 22 次）。
+    // 4) 用完补卡预算仍无结果：乐观补卡（前 400ms 每 100ms、之后每 200ms）。
     const slow = storeFor();
     const steps = [];
     const slowOut = run(file, body, scroll, args, {
@@ -701,9 +701,10 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
       clearTimeout: () => {},
     });
     assert.ok(slowOut.body, platform + " timeout must still add the card");
-    assert.equal(steps.length, 22, platform + " must poll 22 times over 8s");
-    assert.deepEqual(steps.slice(0, 10), Array(10).fill(200), platform + " first 2s poll every 200ms");
-    assert.deepEqual(steps.slice(10), Array(12).fill(500), platform + " after 2s poll every 500ms");
+    const waited = steps.reduce((total, delay) => total + delay, 0);
+    assert.ok(waited >= 800 && waited < 1100, platform + " must give the lyrics about 800ms, got " + waited);
+    assert.deepEqual(steps.slice(0, 4), Array(4).fill(100), platform + " first 400ms poll every 100ms");
+    assert.ok(steps.slice(4).every((delay) => delay === 200), platform + " after 400ms poll every 200ms");
 
     // 5) 最近确认没歌词时不再补空卡；标记过期后允许再试。
     const miss = storeFor({ "spotify.lyrics.miss": JSON.stringify({ id: id, at: Date.now() }) });

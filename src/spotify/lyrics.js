@@ -443,24 +443,21 @@
     //   * 缓存 + served  -> 再等 grace 毫秒（让客户端先处理歌词响应）后补卡；
     //   * 只有缓存        -> 歌词还在编码 / 返回路上，继续等 served；
     //   * 确认没歌词      -> 不补卡；
-    //   * 歌词请求在路上  -> 按 pending 的起始时间顺延等待窗口（最多 extendMax）；
-    //   * 等满窗口        -> 乐观补卡（内容由随后到达的 color-lyrics 请求填充）。
-    // 步长分段由 feed 传入：max / fastUntil / fastStep / slowStep / grace / extendMax。
+    //   * 超过预算        -> 乐观补卡（内容由随后到达的 color-lyrics 请求填充）。
+    // 预算是硬上限，不按歌词请求开始时间顺延：响应拖到 3 秒以上时客户端已经
+    // 渲染完列表，晚到的 scroll 会被丢弃，等多久都没用。
+    // 步长分段由 feed 传入：max / fastUntil / fastStep / slowStep / grace。
     globalThis.__spotifyLyricsWait = (id, callback, options) => {
       if (!id || typeof callback !== "function") {
         if (typeof callback === "function") callback(false, true);
         return;
       }
       const conf = options && "object" == typeof options ? options : {};
-      const maxMs = Number(conf.max) > 0 ? Number(conf.max) : 8000;
-      const fastUntil = Number(conf.fastUntil) > 0 ? Number(conf.fastUntil) : 2000;
-      const fastStep = Number(conf.fastStep) > 0 ? Number(conf.fastStep) : 200;
-      const slowStep = Number(conf.slowStep) > 0 ? Number(conf.slowStep) : 500;
+      const maxMs = Number(conf.max) > 0 ? Number(conf.max) : 800;
+      const fastUntil = Number(conf.fastUntil) > 0 ? Number(conf.fastUntil) : 400;
+      const fastStep = Number(conf.fastStep) > 0 ? Number(conf.fastStep) : 100;
+      const slowStep = Number(conf.slowStep) > 0 ? Number(conf.slowStep) : 200;
       const grace = Number(conf.grace) >= 0 ? Number(conf.grace) : 200;
-      const extendMax = Number(conf.extendMax) > 0 ? Number(conf.extendMax) : 4000;
-      // 歌词请求自己的 deadline 与补卡窗口可能刚好对齐，多留一点余量，
-      // 避免在歌词脚本写出缓存 / served 之前就超时。
-      const settle = Number(conf.settle) > 0 ? Number(conf.settle) : 1000;
       const key = lyricsCacheKey(id);
       const hasTimer = typeof setTimeout === "function";
       const startedAt = Date.now();
@@ -484,7 +481,7 @@
         const served = activeMark(SERVED_KEY, id, SERVED_TTL_MS);
         const pending = activeMark(PENDING_KEY, id, PENDING_TTL_MS);
         const miss = activeMark(MISS_KEY, id, MISS_TTL_MS);
-        // 状态只在变化时打一行，避免 8 秒里刷 20 多条日志。
+        // 状态只在变化时打一行，避免整个等待窗口里反复刷日志。
         const state = (pending ? "pending" : "-") + (cached ? "|cache" : "")
           + (served ? "|served" + (served.p ? "(protobuf)" : "(json)") : "") + (miss ? "|miss" : "");
         if (state !== lastState) {
@@ -504,12 +501,8 @@
           done(false, false);
           return;
         }
-        // 歌词请求比 scroll 晚开始：按请求开始时间顺延，别在歌词 deadline
-        // 之前就放弃。顺延量有上限，避免客户端根本不请求歌词时一直卡住。
-        const lead = pending && pending.at > startedAt ? pending.at - startedAt : 0;
-        const limit = maxMs + (pending ? settle : 0) + Math.min(lead, extendMax);
-        if (!hasTimer || elapsed >= limit) {
-          // 等满窗口：确认没歌词就不补，否则乐观补卡。
+        if (!hasTimer || elapsed >= maxMs) {
+          // 预算用完：确认没歌词就不补，否则乐观补卡。
           if (!cached && miss) done(false, false);
           else done(false, true);
           return;
@@ -738,6 +731,7 @@
     let embedStarted = false;
     let embedDone = false;
     let started = false;
+    const metaStartedAt = Date.now();
     const merged = () => {
       const oembed = {
         title: String((meta && meta.title) || ""),
@@ -763,7 +757,10 @@
         return;
       }
       started = true;
-      spotifyLog("lyrics.meta", "track=" + trackId + " title=" + info.title + " artist=" + (info.artist || "-") + " source=oembed");
+      const source = meta && meta.title ? (embed && embed.title ? "oembed+embed" : "oembed")
+        : embed && embed.title ? "embed" : "none";
+      spotifyLog("lyrics.meta", "track=" + trackId + " title=" + info.title + " artist=" + (info.artist || "-")
+        + " source=" + source + " waited=" + (Date.now() - metaStartedAt) + "ms");
       rememberTrackMeta(trackId, info.title, info.artist, info.duration ? info.duration * 1000 : 0, colorOf());
       runSource(sourceOrder(info.title, info.artist), info.title, info.artist,
         (payload) => cb(payload), info.duration, colorOf);
