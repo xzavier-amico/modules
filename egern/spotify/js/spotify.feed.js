@@ -2605,7 +2605,20 @@ export default async function (ctx) {
     let removed = 0;
     let hasLyrics = false;
     const trackRef = trackId ? new TextEncoder().encode("spotify:track:" + trackId) : null;
-    if (debugOn) spotifyLog("feed.sections", "track=" + trackId + " " + describeSections(sections));
+    if (debugOn) {
+      const topNos = [];
+      for (const f of top) topNos.push(f.no);
+      spotifyLog("feed.top", "fields=" + topNos.join("+") + " bytes=" + buffer.length);
+      spotifyLog("feed.sections", "track=" + trackId + " " + describeSections(sections));
+      // 每个 section 的前 120 字节：字段号 + 关键字符串足够看清真实结构，
+      // 比整包 hex 小得多，也不至于把日志刷爆。
+      const dump = Math.min(sections.length, 6);
+      for (let i = 0; i < dump; i += 1) {
+        const section = sections[i];
+        spotifyLog("feed.section", i + " no=" + section.no + " w=" + section.wire + " len=" + section.raw.length
+          + " hex=" + hexOf(section.raw, 120));
+      }
+    }
     for (const section of sections) {
       if (section.no !== 1 || section.wire !== 2) {
         kept.push(section.raw);
@@ -2645,10 +2658,11 @@ export default async function (ctx) {
     const addCard = wantCard && !!trackId && !hasLyrics;
     if (!removed && !addCard) return null;
     if (addCard) {
-      kept.unshift(wireEncodeField(1, 2, lyricsSection(trackId)));
+      const card = lyricsSection(trackId);
+      kept.unshift(wireEncodeField(1, 2, card));
       if (debugOn) {
-        spotifyLog("feed.card", "track=" + trackId + " insert=0 sections=" + sections.length + "->" + kept.length
-          + " hex=" + hexOf(lyricsSection(trackId)));
+        spotifyLog("feed.card", "track=" + trackId + " insert=0 removed=" + removed
+          + " sections=" + sections.length + "->" + kept.length + " hex=" + hexOf(card));
       }
     }
 

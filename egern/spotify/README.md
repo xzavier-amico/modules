@@ -65,7 +65,7 @@ crossfade；这两项保持服务端与 App 自己的设置。AutoMix 仍在远�
 - `lyrics.done`：最终返回的状态 / 字节数；
 - `meta.cache` / `meta.none`：客户端自己的 connect-state / context-resolve / metadata 响应里抄到的曲目元数据；`meta.none` 只在 `metadata/4/track` 里取不到曲名时打印；
 - `feed.scroll`：scroll 请求的曲目、字节数、是否已有官方卡片；
-- `feed.sections`：列表里每个 section 的字段号（最多前 8 个），用来看真实结构；
+- `feed.top` / `feed.sections` / `feed.section`：顶层字段号、每个 section 的字段号（最多前 8 个）、每个 section 前 120 字节的 hex，用来看真实结构；
 - `LYRICS_SECTION_HEX`：官方歌词 section 的原始字节，用来和脚本合成的 section 对比；
 - `feed.card`：插入位置、section 数量变化、插入的 section hex；
 - `feed.meta`：从 scroll 里抄到的曲名 / 歌手（写进元数据缓存，下次同一首不用回源）；
