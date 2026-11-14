@@ -27,6 +27,29 @@
   const res = typeof $response !== "undefined" && $response ? $response : null;
   const url = (res && res.url) || (req && req.url) || "";
 
+  // ---------------------------------------------------------------- debug log
+  //
+  // 排障日志：定位歌词卡「scroll 先于歌词响应」的时序问题。默认关闭，在模块
+  // 参数里打开 debug_log 后输出（Egern 设置页已提供「排障日志」开关），前缀
+  // 统一为 [spotify]，第二个字段是毫秒时间戳，方便把 feed / lyrics 两段脚本
+  // 对齐。日志会包含曲名，排查完记得关掉。
+  const spotifyLog = (event, message) => {
+    if (!DEBUG_LOG) return;
+    try {
+      if (typeof console !== "undefined" && console.log) {
+        console.log("[spotify] " + Date.now() + " " + event + " " + message);
+      }
+    } catch (e) {
+      // 日志失败不影响响应。
+    }
+  };
+  // 曲名 / 歌手来自 spotify.js 写下的元数据缓存；没有就退回曲目 id。
+  const trackLabel = (id) => {
+    const meta = cachedTrackMeta(id);
+    if (!meta || !meta.title) return id || "?";
+    return meta.title + (meta.artist ? " / " + meta.artist : "");
+  };
+
   // Loon 传位置数组，Egern 传 JSON 字符串。
   let opt = {};
   if (PREFETCH) {
@@ -54,6 +77,8 @@
     }
   }
   const flag = (v, d) => (v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0"));
+  // 排障日志开关；默认关闭，避免把曲名写进日常日志。
+  const DEBUG_LOG = flag(opt.debug_log, false);
   // 客户端模式：auto 按 User-Agent 识别，拿不到 UA 时再看 Loon 运行环境。
   const requestUserAgent = () => {
     if (!req || !req.headers || "object" != typeof req.headers) return "";
@@ -192,8 +217,11 @@
 
   // 歌词已经查好、马上要交给客户端（$done 之前最后一步）。feed 看到它再等一个
   // 很短的宽限就放行 scroll，尽量让客户端先拿到歌词再渲染卡片列表。
-  const markServed = () => {
-    if (trackId) writeMark(SERVED_KEY, { id: trackId, at: Date.now() });
+  const markServed = (proto) => {
+    if (!trackId) return;
+    writeMark(SERVED_KEY, { id: trackId, at: Date.now(), p: proto ? 1 : 0 });
+    spotifyLog("lyrics.served", "track=" + trackId + " title=" + trackLabel(trackId)
+      + " format=" + (proto ? "protobuf" : "json"));
   };
 
   function cachedTrackMeta(id) {
@@ -395,11 +423,21 @@
     // 响应已经交给客户端，这次歌词请求不会再产出结果；清掉 pending，
     // 让 feed 不用一直按「还在查」延长等待（超时后晚到的结果仍会写缓存）。
     writeMark(PENDING_KEY, null);
+    if (value && (value.status || value.body)) {
+      const body = value.body;
+      const size = body ? (typeof body === "string" ? body.length : body.length || 0) : 0;
+      spotifyLog("lyrics.done", "track=" + trackId + " status=" + (value.status || 200) + " bytes=" + size);
+    } else {
+      spotifyLog("lyrics.done", "track=" + trackId + " pass");
+    }
     $done(value);
   };
 
   if (PREFETCH) {
     // 辅助模式：feed / 元数据脚本只复用缓存查询与补卡判断，不发起歌词查询。
+    // feed/entry.js 在本 IIFE 之外，日志和曲名标签通过 globalThis 传出去。
+    globalThis.__spotifyLog = spotifyLog;
+    globalThis.__spotifyTrackLabel = trackLabel;
 
     // 轮询歌词进度，直到歌词响应已经交给客户端（served）再放行 scroll。
     //   * 缓存 + served  -> 再等 grace 毫秒（让客户端先处理歌词响应）后补卡；
@@ -427,16 +465,33 @@
       const hasTimer = typeof setTimeout === "function";
       const startedAt = Date.now();
       let elapsed = 0;
+      let lastState = "";
+
+      const done = (ready, timedOut) => {
+        spotifyLog("feed.wait", "track=" + id + " title=" + trackLabel(id)
+          + " done ready=" + ready + " timedOut=" + timedOut
+          + " elapsed=" + elapsed + "ms waited=" + (Date.now() - startedAt) + "ms");
+        callback(ready, timedOut);
+      };
 
       const ready = () => {
-        if (hasTimer && grace > 0) setTimeout(() => callback(true, false), grace);
-        else callback(true, false);
+        if (hasTimer && grace > 0) setTimeout(() => done(true, false), grace);
+        else done(true, false);
       };
 
       const poll = () => {
         const cached = readLyricsCache(key, id);
         const served = activeMark(SERVED_KEY, id, SERVED_TTL_MS);
         const pending = activeMark(PENDING_KEY, id, PENDING_TTL_MS);
+        const miss = activeMark(MISS_KEY, id, MISS_TTL_MS);
+        // 状态只在变化时打一行，避免 8 秒里刷 20 多条日志。
+        const state = (pending ? "pending" : "-") + (cached ? "|cache" : "")
+          + (served ? "|served" + (served.p ? "(protobuf)" : "(json)") : "") + (miss ? "|miss" : "");
+        if (state !== lastState) {
+          lastState = state;
+          spotifyLog("feed.wait", "track=" + id + " title=" + trackLabel(id) + " state=" + state
+            + " elapsed=" + elapsed + "ms" + (served ? " servedAge=" + (Date.now() - Number(served.at)) + "ms" : ""));
+        }
         // 还有歌词请求在路上时继续等：客户端可能先查了歌词页、再查卡片，
         // 只看到上一次的 served 就放行，卡片那次响应仍可能晚于 scroll。
         // 歌词已经返回给客户端（缓存里也有内容）且没有新请求：留宽限后放行。
@@ -445,8 +500,8 @@
           return;
         }
         // 歌词请求还在路上时，旧的 miss 标记不作数：这次请求可能就查到了。
-        if (!cached && !pending && activeMark(MISS_KEY, id, MISS_TTL_MS)) {
-          callback(false, false);
+        if (!cached && !pending && miss) {
+          done(false, false);
           return;
         }
         // 歌词请求比 scroll 晚开始：按请求开始时间顺延，别在歌词 deadline
@@ -455,8 +510,8 @@
         const limit = maxMs + (pending ? settle : 0) + Math.min(lead, extendMax);
         if (!hasTimer || elapsed >= limit) {
           // 等满窗口：确认没歌词就不补，否则乐观补卡。
-          if (!cached && activeMark(MISS_KEY, id, MISS_TTL_MS)) callback(false, false);
-          else callback(false, true);
+          if (!cached && miss) done(false, false);
+          else done(false, true);
           return;
         }
         const step = elapsed < fastUntil ? fastStep : slowStep;
@@ -483,15 +538,18 @@
     if (!PREFETCH && trackId && flag(opt.enable_lyrics, true)) {
       cacheKey = lyricsCacheKey(trackId);
       const cached = readLyricsCache(cacheKey, trackId);
+      const proto = requestedProtoMode();
+      spotifyLog("lyrics.req", "track=" + trackId + " title=" + trackLabel(trackId)
+        + " want=" + (proto ? "protobuf" : "json") + " cache=" + (cached ? "hit" : "miss"));
       if (cached) {
         writeMark(MISS_KEY, null);
         writeMark(PENDING_KEY, null);
-        if (requestedProtoMode()) {
+        if (proto) {
           const bytes = encodeProto(cached.payload.lyrics.lines, cached.payload.lyrics.syncType,
             cached.payload.lyrics.provider, cached.payload.lyrics.providerLyricsId,
             cached.payload.lyrics.language, cached.payload.colors);
           // 缓存命中时请求阶段直接返回歌词，同样要告诉 feed「歌词已经交给客户端」。
-          markServed();
+          markServed(true);
           finish({
             status: 200,
             headers: { "Content-Type": "application/vnd.google.protobuf" },
@@ -499,7 +557,7 @@
           });
         } else {
           const body = JSON.stringify(cached.payload);
-          markServed();
+          markServed(false);
           finish({
             status: 200,
             headers: { "Content-Type": "application/json; charset=utf-8" },
@@ -511,6 +569,7 @@
     }
     // 未命中：官方请求还要飞一会儿，先标 pending，feed 据此延长补卡等待。
     markPending();
+    spotifyLog("lyrics.req", "track=" + trackId + " title=" + trackLabel(trackId) + " pending=1 pass-through");
     finish({});
     return;
   }
@@ -556,6 +615,10 @@
   const protoMode = status === 200 && hasBody
     ? trimmed.charAt(0) !== "{"
     : requestedProtoMode();
+  spotifyLog("lyrics.res", "track=" + trackId + " title=" + trackLabel(trackId)
+    + " status=" + status + " format=" + (protoMode ? "protobuf" : "json")
+    + " bytes=" + rawLength + " body=" + (hasBody ? 1 : 0)
+    + " ct=" + (headerValue(res && res.headers, "content-type") || "-") + " url=" + url);
 
   // 不把登录、限流或服务端错误伪装成有歌词。
   if (status !== 200 && status !== 404) {
@@ -570,6 +633,7 @@
   if (status === 200 && !hasBody) {
     const declared = Number(headerValue(res && res.headers, "content-length"));
     if (Number.isFinite(declared) && declared > 0) {
+      spotifyLog("lyrics.res", "track=" + trackId + " official=body-missing content-length=" + declared + " -> pass");
       finish({});
       return;
     }
@@ -578,16 +642,17 @@
       // 解析不了（拿不到原始字节）时返回 -1，宁可放行也不要顶掉官方歌词。
       const inspected = rawBytes.length ? inspectProto(rawBytes) : null;
       const count = inspected ? inspected.count : -1;
+      spotifyLog("lyrics.res", "track=" + trackId + " official=proto count=" + count);
       if (count !== 0) {
         // 免费号的歌词有每月额度，用完服务端会在 restriction（字段 14）里回
         // monthlyLimitReached，客户端就只显示「额度已用完」。归一成 showLyrics 再放行。
         const cleaned = count > 0 ? normalizeRestrictionProto(inspected) : null;
         if (cleaned) {
-          markServed();
+          markServed(protoMode);
           finish({ status: 200, headers: { "Content-Type": "application/x-protobuf" }, body: cleaned });
         } else {
           // 原样放行，但 count > 0 说明官方歌词确实有内容。
-          if (count > 0) markServed();
+          if (count > 0) markServed(protoMode);
           finish({});
         }
         return;
@@ -595,10 +660,10 @@
     } else if (hasLyrics(trimmed)) {
       const cleaned = stripRestrictionJson(trimmed);
       if (cleaned) {
-        markServed();
+        markServed(protoMode);
         finish({ status: 200, headers: { "Content-Type": "application/json; charset=utf-8" }, body: cleaned });
       } else {
-        markServed();
+        markServed(protoMode);
         finish({});
       }
       return;
@@ -610,6 +675,7 @@
   cacheKey = lyricsCacheKey(trackId);
   const cachedLyrics = readLyricsCache(cacheKey, trackId);
   if (cachedLyrics) {
+    spotifyLog("lyrics.res", "track=" + trackId + " thirdparty=cache-hit lines=" + cachedLyrics.payload.lyrics.lines.length);
     writeMark(MISS_KEY, null);
     emit(cachedLyrics.payload);
     return;
@@ -620,6 +686,7 @@
   // 的歌词会写进缓存供轮询命中。只有所有第三方源都确认没歌词时才写 miss。
   if (typeof setTimeout === "function") deadline = setTimeout(() => {
     if (settled) return;
+    spotifyLog("lyrics.res", "track=" + trackId + " deadline=" + LYRICS_DEADLINE_MS + "ms plain=" + (plainFallback ? 1 : 0));
     if (plainFallback) {
       writeLyricsCache(cacheKey, plainFallback);
       writeMark(MISS_KEY, null);
@@ -632,15 +699,19 @@
     if (settled) {
       // deadline 超时放行后，所有源都确认没歌词时补写 miss 标记，
       // feed 轮询读到 miss 就不再乐观补空卡。拿到了歌词则由 runSource 写缓存。
+      spotifyLog("lyrics.res", "track=" + trackId + " late=" + (payload ? "hit" : "miss"));
       if (!payload) writeMark(MISS_KEY, { id: trackId, at: Date.now() });
       return;
     }
     writeLyricsCache(cacheKey, payload);
     if (!payload) {
+      spotifyLog("lyrics.res", "track=" + trackId + " thirdparty=miss");
       writeMark(MISS_KEY, { id: trackId, at: Date.now() });
       finish({});
       return;
     }
+    spotifyLog("lyrics.res", "track=" + trackId + " thirdparty=hit lines=" + payload.lyrics.lines.length
+      + " provider=" + payload.lyrics.provider);
     writeMark(MISS_KEY, null);
     emit(payload);
   });
@@ -655,6 +726,7 @@
     // 歌词页背景用默认底色（不再为封面配色抓 embed 页面）。
     const cached = cachedTrackMeta(trackId);
     if (cached) {
+      spotifyLog("lyrics.meta", "track=" + trackId + " title=" + cached.title + " artist=" + (cached.artist || "-") + " source=cache");
       runSource(sourceOrder(cached.title, cached.artist), cached.title, cached.artist, cb, cached.duration, () => cached.color || null);
       return;
     }
@@ -685,11 +757,13 @@
       if (started) return;
       const info = merged();
       if (!info.title) {
+        spotifyLog("lyrics.meta", "track=" + trackId + " title=- source=empty");
         started = true;
         cb(null);
         return;
       }
       started = true;
+      spotifyLog("lyrics.meta", "track=" + trackId + " title=" + info.title + " artist=" + (info.artist || "-") + " source=oembed");
       rememberTrackMeta(trackId, info.title, info.artist, info.duration ? info.duration * 1000 : 0, colorOf());
       runSource(sourceOrder(info.title, info.artist), info.title, info.artist,
         (payload) => cb(payload), info.duration, colorOf);
@@ -759,6 +833,7 @@
       done(null);
       return;
     }
+    spotifyLog("lyrics.source", "track=" + trackId + " order=" + order.join(",") + " title=" + title);
     let remaining = order.length;
     let finished = false;
     const checkAllDone = () => {
@@ -770,6 +845,8 @@
     for (const name of order) {
       if (settled || finished) return;
       lookup(name, title, artist, duration, (record) => {
+        spotifyLog("lyrics.source", "track=" + trackId + " source=" + name + " result=" + (record ? "hit" : "miss")
+          + (settled ? " late=1" : finished ? " ignored=1" : ""));
         if (settled) {
           // deadline 超时放行：歌词晚到时写缓存供 feed 轮询命中。
           if (record && colorOf) record.albumColor = colorOf();
@@ -783,6 +860,8 @@
         if (record && colorOf) record.albumColor = colorOf();
         const payload = buildPayload(record);
         if (payload && (payload.lyrics.syncType === "LINE_SYNCED" || order.length === 1)) {
+          spotifyLog("lyrics.source", "track=" + trackId + " winner=" + name + " sync=" + payload.lyrics.syncType
+            + " lines=" + payload.lyrics.lines.length);
           finished = true;
           done(payload);
           return;
@@ -1261,14 +1340,14 @@
         payload.lyrics.providerLyricsId, payload.lyrics.language, payload.colors);
       // 编码完成、马上 $done 时才标 served：feed 看到它说明歌词响应即将交给
       // 客户端，再等一个宽限就可以放行 scroll。
-      markServed();
+      markServed(protoMode);
       // 与官方响应头保持一致。
       finish({ status: 200, headers: { "Content-Type": "application/vnd.google.protobuf" }, body: bytes });
       return;
     }
 
     const body = JSON.stringify(payload);
-    markServed();
+    markServed(protoMode);
     finish({
       status: 200,
       headers: { "Content-Type": "application/json; charset=utf-8" },

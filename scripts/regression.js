@@ -552,6 +552,28 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.ok(missCalls > afterMiss, platform + " must retry on the next request");
   });
 
+  check(platform + " Spotify debug log records timing, format and track name when enabled", () => {
+    const logs = [];
+    const map = {};
+    const store = { read: (key) => (key in map ? map[key] : null), write: (value, key) => { map[key] = value; return true; } };
+    const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/id?format=json";
+    const http = {
+      get: (request, callback) => {
+        callback(null, { status: 200 }, JSON.stringify(
+          request.url.includes("oembed")
+            ? { title: "Private Song Title", author_name: "Private Artist" }
+            : { trackName: "Private Song Title", artistName: "Private Artist", syncedLyrics: "[00:01.00]Private lyric text" },
+        ));
+      },
+    };
+    run(platform + "/spotify/js/spotify_lyrics.js", "", url,
+      { lyrics_source: "lrclib", enable_lyrics: true, debug_log: true },
+      { $response: { status: 404, body: "" }, $persistentStore: store, $httpClient: http, console: { log: (line) => logs.push(line) } });
+    assert.ok(logs.some((line) => line.includes("lyrics.served") && line.includes("title=Private Song Title")), platform + " must log the track name");
+    assert.ok(logs.some((line) => line.includes("lyrics.served") && line.includes("format=json")), platform + " must log the served format");
+    assert.ok(logs.some((line) => line.includes("lyrics.done") && line.includes("status=200")), platform + " must log the final response");
+  });
+
   check(platform + " Spotify browse drops named ad sections", () => {
     const file = platform + "/spotify/js/spotify.feed.js";
     const section = (name) => serialize([s(1, "spotify:section:" + name), b(2, Uint8Array.from([1]))]);
@@ -691,6 +713,18 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     const stale = storeFor({ "spotify.lyrics.miss": JSON.stringify({ id: id, at: Date.now() - 10 * 60 * 1000 }) });
     const staleOut = run(file, body, scroll, args, { $persistentStore: stale.store, $httpClient: noHttp, ...immediate });
     assert.ok(staleOut.body, platform + " expired miss must allow the card again");
+
+    // 6) debug_log 打开时输出曲名、served 格式和补卡决定。
+    const dbg = storeFor({ "spotify.lyrics.cache": readyJson(), "spotify.lyrics.served": servedJson });
+    const dbgLogs = [];
+    const dbgOut = run(file, body, scroll, Object.assign({}, args, { debug_log: true }), {
+      $persistentStore: dbg.store, $httpClient: noHttp, ...immediate,
+      console: { log: (line) => dbgLogs.push(line) },
+    });
+    assert.ok(dbgOut.body, platform);
+    assert.ok(dbgLogs.some((line) => line.includes("feed.scroll") && line.includes("title=Song / Artist")), platform + " must log the track name");
+    assert.ok(dbgLogs.some((line) => line.includes("feed.wait") && line.includes("served(json)")), platform + " must log the served format");
+    assert.ok(dbgLogs.some((line) => line.includes("feed.scroll") && line.includes("card=add")), platform + " must log the card decision");
   });
 }
 

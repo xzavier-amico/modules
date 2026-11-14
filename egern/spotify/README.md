@@ -21,6 +21,7 @@
 | `enable_lyrics` | true | 补全歌词；关闭后不补元数据、歌词与歌词卡 |
 | `lyrics_source` | auto | 歌词源；`auto` 并发查询网易云 / QQ / LRCLIB，不自动查 Musixmatch |
 | `desktop` | auto | 设备类型；`auto` 按 UA 识别 iPhone / iPad 与 Mac，识别不准时手动指定 |
+| `debug_log` | false | 输出歌词卡与 color-lyrics 的时序日志（含曲名），排查完关闭 |
 
 ## 歌词
 
@@ -52,6 +53,21 @@
 crossfade；这两项保持服务端与 App 自己的设置。AutoMix 仍在远程配置里强制关闭
 （`automix_enabled=0`），避免下一首按节拍提前混进来。修改后需要重启 App（或切换
 网络）让客户端重新拉取 bootstrap / 远程配置，旧缓存里的开关才会被覆盖。
+
+### 歌词卡时序排障（debug_log）
+
+在模块设置里打开「排障日志」后，脚本会输出 `[spotify]` 前缀的日志；第二个字段是毫秒时间戳，用来对齐 feed 与 lyrics 两段脚本：
+
+- `lyrics.req`：color-lyrics 请求阶段，`want=` 是客户端请求的格式，`cache=hit/miss`；
+- `lyrics.res`：官方响应状态、实际格式、字节数；`official=` 是官方歌词的命中情况；
+- `lyrics.meta` / `lyrics.source`：曲名 / 歌手来自缓存还是 oEmbed，以及各歌词源的命中结果；
+- `lyrics.served`：歌词响应已经交给客户端（格式 + 曲名）；
+- `lyrics.done`：最终返回的状态 / 字节数；
+- `feed.scroll`：scroll 请求的曲目、字节数、是否已有官方卡片；
+- `feed.wait`：等待状态（pending / cache / served / miss）只在变化时打印，`done` 行给出最终等待时长；
+- `feed.card`：是否补卡、是否乐观补卡、响应是否被改写、总耗时。
+
+判断方法：`feed.scroll` 的 `total` 应该晚于 `lyrics.served` 的时间戳。如果 scroll 早于 `lyrics.served`，说明还在抢跑；如果已经晚于但卡片仍然缺失，问题就不在时序。日志包含曲名，排查完请关闭。
 
 ### 没有歌词时的排查
 

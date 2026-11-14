@@ -55,6 +55,11 @@ env_schema:
     description: "auto 按 User-Agent 识别 iPhone / iPad 与 Mac；识别不准时手动指定。桌面端默认不写播放授权"
     default_value: "auto"
     options: ["auto", "ios", "macos"]
+  debug_log:
+    name: "排障日志"
+    description: "输出歌词卡与 color-lyrics 的时序日志（含曲名），排查完请关闭"
+    default_value: "false"
+    options: ["true", "false"]
 
 rules:
   # 广告域名兜底：脚本关闭服务端广告开关，这里拦截广告素材与曝光回传。
@@ -158,7 +163,7 @@ scriptings:
   - http_response:
       name: "spotify.feed"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:casita\\/v\\d+\\/home|browsita\\/v\\d+\\/browse|scrollsita\\/v\\d+\\/scroll)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.feed.js?v=20261114-17"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.feed.js?v=20261114-18"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -168,7 +173,7 @@ scriptings:
   - http_request:
       name: "spotify.lyrics.req"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261114-17"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261114-18"
       binary_body: true
       max_size: 2097152
       timeout: 10
@@ -181,7 +186,7 @@ scriptings:
   - http_response:
       name: "spotify.lyrics"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261114-17"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261114-18"
       body_required: true
       binary_body: true
       max_size: 2097152

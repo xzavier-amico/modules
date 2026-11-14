@@ -1,5 +1,8 @@
   // 入口：首页 / 搜索 / 滚动页的赞助内容过滤，滚动页额外补歌词卡对应的 section。
   const res = (typeof $response !== "undefined" && $response) || null;
+  // 日志与曲名标签由 lyrics.js 的辅助模式通过 globalThis 暴露；没有时静默降级。
+  const spotifyLog = (typeof globalThis !== "undefined" && globalThis.__spotifyLog) || (() => {});
+  const trackLabel = (typeof globalThis !== "undefined" && globalThis.__spotifyTrackLabel) || ((id) => id || "?");
   if (!res) {
     $done({});
     return;
@@ -60,18 +63,27 @@
   // 等待窗口最多再顺延 CARD_EXTEND_MS。
   const CARD_GRACE_MS = 250;
   const CARD_EXTEND_MS = 4000;
+  const feedStartedAt = Date.now();
   if (isScroll && wantCard) {
     const card = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsCard : null;
     const hasCard = typeof hasLyricsCard === "function" && hasLyricsCard(body);
     const allowed = !!trackId && !hasCard && (typeof card === "function" ? card(trackId) : true);
+    spotifyLog("feed.scroll", "track=" + trackId + " title=" + trackLabel(trackId)
+      + " bytes=" + body.length + " hasCard=" + hasCard + " allowed=" + allowed);
     if (!allowed) {
+      spotifyLog("feed.scroll", "track=" + trackId + " card=skip reason=" + (!trackId ? "no-track" : hasCard ? "official-card" : "miss-mark"));
       finish(patchScroll(body, trackId, wantAds, false));
       return;
     }
     const wait = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsWait : null;
     if (typeof wait === "function") {
       wait(trackId, (ready, timedOut) => {
-        finish(patchScroll(body, trackId, wantAds, !!ready || !!timedOut));
+        const addCard = !!ready || !!timedOut;
+        const out = patchScroll(body, trackId, wantAds, addCard);
+        spotifyLog("feed.scroll", "track=" + trackId + " title=" + trackLabel(trackId)
+          + " card=" + (addCard ? "add" : "skip") + " optimistic=" + (!ready && timedOut)
+          + " patched=" + (out ? 1 : 0) + " total=" + (Date.now() - feedStartedAt) + "ms");
+        finish(out);
       }, {
         max: CARD_WAIT_MS,
         fastUntil: CARD_FAST_MS,
@@ -82,6 +94,7 @@
       });
       return;
     }
+    spotifyLog("feed.scroll", "track=" + trackId + " card=add reason=no-wait-fn");
     finish(patchScroll(body, trackId, wantAds, true));
     return;
   }
