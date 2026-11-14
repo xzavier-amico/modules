@@ -168,7 +168,10 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
         if (wantCard) {
           const sections = sectionList(plain);
           assert.equal(sections.length, parse(originalList).filter((f) => f.no === 1).length + 1);
-          const added = parse(sections[0].p);
+          // 卡片插在头部 section 之后，不能排到列表最前面。
+          const cardIndex = sections.findIndex((section) => parse(section.p).some((f) => f.no === 5));
+          assert.equal(cardIndex, 1, "the card must follow the header section");
+          const added = parse(sections[cardIndex].p);
           assert.equal(text(first(parse(first(added, 5).p), 1)), track);
           assert.ok(first(parse(first(added, 23).p), 1), "a synthesized section needs its section id");
         }

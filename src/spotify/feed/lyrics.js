@@ -220,10 +220,14 @@
     const addCard = wantCard && !!trackId && !hasLyrics;
     if (!removed && !addCard) return null;
     if (addCard) {
-      const card = lyricsSection(trackId);
-      kept.unshift(wireEncodeField(1, 2, card));
+      const card = wireEncodeField(1, 2, lyricsSection(trackId));
+      // 插在头部 section 之后，而不是列表最前面：Now Playing 的第一个 section
+      // 是固定的头部（曲目 + 封面），歌词卡排到它前面会落在头部上面看不见。
+      // 没有头部（空列表 / 结构变了）时才退回到第 0 位。
+      const at = kept.length ? 1 : 0;
+      kept.splice(at, 0, card);
       if (debugOn) {
-        spotifyLog("feed.card", "track=" + trackId + " insert=0 removed=" + removed
+        spotifyLog("feed.card", "track=" + trackId + " insert=" + at + " removed=" + removed
           + " sections=" + sections.length + "->" + kept.length + " hex=" + hexOf(card));
       }
     }

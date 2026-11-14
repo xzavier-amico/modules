@@ -1653,7 +1653,8 @@ function buildPatcher($argument) {
 
     const addCard = wantCard && !!trackId && !hasLyrics;
     if (!removed && !addCard) return null;
-    if (addCard) kept.unshift(wireEncodeField(1, 2, lyricsSection(trackId)));
+    // 和 feed 脚本保持一致：卡片插在头部 section 之后，不排到列表最前面。
+    if (addCard) kept.splice(kept.length ? 1 : 0, 0, wireEncodeField(1, 2, lyricsSection(trackId)));
 
     const rebuilt = wireEncodeField(1, 2, wireConcat(kept));
     const parts = [];
