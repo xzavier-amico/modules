@@ -545,7 +545,7 @@
   }
 
   // 总时限；超时后用纯文本兜底，没有就放行。超时不写 miss 标记：第三方歌词
-  // 可能还在路上，feed 脚本的 8s 轮询窗口比这里的 5s deadline 长，后续到达
+  // 可能还在路上，feed 脚本的 8s 轮询窗口与这里的 8s deadline 对齐，后续到达
   // 的歌词会写进缓存供轮询命中。只有所有第三方源都确认没歌词时才写 miss。
   if (typeof setTimeout === "function") deadline = setTimeout(() => {
     if (settled) return;

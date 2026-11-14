@@ -1166,7 +1166,7 @@ export default async function (ctx) {
   }
 
   // 总时限；超时后用纯文本兜底，没有就放行。超时不写 miss 标记：第三方歌词
-  // 可能还在路上，feed 脚本的 8s 轮询窗口比这里的 5s deadline 长，后续到达
+  // 可能还在路上，feed 脚本的 8s 轮询窗口与这里的 8s deadline 对齐，后续到达
   // 的歌词会写进缓存供轮询命中。只有所有第三方源都确认没歌词时才写 miss。
   if (typeof setTimeout === "function") deadline = setTimeout(() => {
     if (settled) return;
@@ -2275,12 +2275,9 @@ export default async function (ctx) {
     return match ? match[1] : "";
   }
 
-  // 补卡前先做一次廉价的字节扫描：列表里已经有歌词 section 时不用去查歌词，
-  // 避免每首官方有歌词的歌都白等一次第三方查询。完整的 section 结构仍由
-  // patchScroll 在重编码时确认。
-  function hasLyricsCard(buffer) {
-    if (!buffer || !buffer.length || buffer.length < LYRICS_SECTION_ID_BYTES.length) return false;
-    const needle = LYRICS_SECTION_ID_BYTES;
+  // 在 Uint8Array 里搜索 needle；命中返回 true。hasLyricsCard 和 patchScroll 共用。
+  function containsBytes(buffer, needle) {
+    if (!buffer || !buffer.length || buffer.length < needle.length) return false;
     const last = buffer.length - needle.length;
     for (let i = 0; i <= last; i += 1) {
       if (buffer[i] !== needle[0]) continue;
@@ -2289,6 +2286,13 @@ export default async function (ctx) {
       if (j === needle.length) return true;
     }
     return false;
+  }
+
+  // 补卡前先做一次廉价的字节扫描：列表里已经有歌词 section 时不用去查歌词，
+  // 避免每首官方有歌词的歌都白等一次第三方查询。patchScroll 内部也用同样的
+  // 检测判断是否已有歌词 section，保持入口与补卡逻辑一致。
+  function hasLyricsCard(buffer) {
+    return containsBytes(buffer, LYRICS_SECTION_ID_BYTES);
   }
 
   function lyricsSection(trackId) {
@@ -2331,13 +2335,16 @@ export default async function (ctx) {
         continue;
       }
       let ad = false;
-      let card = false;
+      let hasTrack = false;
+      let hasSectionId = false;
       try {
-        // 只扫字段号：看到 30（广告内容）或 5（曲目）就够判断了。
+        // 歌词卡同时有字段 5（曲目引用）和字段 23（section id）。
+        // 只看字段 5 会把相关推荐、下一首等卡片也误判为歌词卡，导致不补卡。
         wireScanFields(section.data, (no) => {
           if (no === 30) ad = true;
-          else if (no === 5) card = true;
-          return ad && card;
+          else if (no === 5) hasTrack = true;
+          else if (no === 23) hasSectionId = true;
+          return ad && hasTrack && hasSectionId;
         });
       } catch (e) {
         return null;
@@ -2346,7 +2353,7 @@ export default async function (ctx) {
         removed++;
         continue;
       }
-      if (card) hasLyrics = true;
+      if (hasTrack && hasSectionId) hasLyrics = true;
       kept.push(section.raw);
     }
 
