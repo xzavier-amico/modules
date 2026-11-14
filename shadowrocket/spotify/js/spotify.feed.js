@@ -2325,36 +2325,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   const trackId = isScroll ? scrollTrackId(url) : "";
-  const PREFETCH_NEXT_MS = 1500;
-  // 下一首：connect-state 存下的队列顺序。只用于预取歌词，取不到就跳过。
-  const nextTrackId = (() => {
-    if (!prefetchOn || !isScroll || !trackId) return "";
-    const store = typeof $persistentStore !== "undefined" && $persistentStore ? $persistentStore : null;
-    if (!store) return "";
-    try {
-      const raw = store.read("spotify.queue");
-      const queue = raw ? JSON.parse(raw) : null;
-      if (!queue) return "";
-      const at = Number(queue.at) || 0;
-      if (at && Date.now() - at > 30 * 60 * 1000) return "";
-      // 新结构是 current + next[]；旧安装里可能还是 ids[]，按当前曲目位置兜底。
-      let next = "";
-      if (Array.isArray(queue.next)) {
-        if (queue.current && queue.current !== trackId) return "";
-        next = queue.next[0] || "";
-      } else if (Array.isArray(queue.ids)) {
-        const index = queue.ids.indexOf(trackId);
-        next = index >= 0 ? queue.ids[index + 1] || "" : "";
-      }
-      if (!next || next === trackId) return "";
-      // 没有曲名 / 歌手时预取要先请求 oEmbed，反而拖慢补卡；等元数据到了再说。
-      const metaRaw = store.read("spotify.track.meta");
-      const meta = metaRaw ? JSON.parse(metaRaw) : null;
-      return meta && meta[next] ? next : "";
-    } catch (e) {
-      return "";
-    }
-  })();
   const finish = (out) => {
     if (!out || same(out, body)) {
       $done({});
@@ -2369,28 +2339,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   const prefetch = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsPrefetch : null;
   if (isScroll && wantCard && trackId && typeof prefetch === "function" &&
       !(typeof hasLyricsCard === "function" && hasLyricsCard(body))) {
-    const finishCard = (payload) => finish(patchScroll(body, trackId, wantAds, !!payload));
-    prefetch(trackId, (payload, meta) => {
-      // 当前曲目超时、或还有来源没回来时，不再接着预取下一首：下一轮需要重置
-      // 歌词脚本状态，上一轮晚到的结果会写进下一首的缓存。
-      const canPrefetchNext = prefetchOn && !!nextTrackId && !(meta && meta.incomplete) &&
-        typeof setTimeout === "function";
-      if (!canPrefetchNext) {
-        finishCard(payload);
-        return;
-      }
-      let settledNext = false;
-      let timer = null;
-      const afterNext = () => {
-        if (settledNext) return;
-        settledNext = true;
-        if (timer !== null && typeof clearTimeout === "function") clearTimeout(timer);
-        finishCard(payload);
-      };
-      // 下一首只为写缓存，最多等 1.5 秒，避免没有歌词的歌把滚动页拖住。
-      timer = setTimeout(afterNext, PREFETCH_NEXT_MS);
-      prefetch(nextTrackId, afterNext);
-    });
+    prefetch(trackId, (payload) => finish(patchScroll(body, trackId, wantAds, !!payload)));
     return;
   }
 

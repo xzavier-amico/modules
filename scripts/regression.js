@@ -281,7 +281,7 @@ check("Spotify client plugins route scrollsita to the updated ad filter", () => 
   for (const file of ["loon/spotify/spotify-premium.plugin", "loon/spotify/spotify-premium-mac.plugin", "egern/spotify/spotify-premium.yaml", "shadowrocket/spotify/spotify-premium.sgmodule"]) {
     const rules = read(file).split("\n").filter((line) => !line.trim().startsWith("#"));
     assert.ok(rules.some((line) => line.includes("scrollsita")), file + " must match scrollsita");
-    assert.ok(rules.some((line) => line.includes("spotify.feed.js?v=20261114-6")));
+    assert.ok(rules.some((line) => line.includes("spotify.feed.js?v=20261114-7")));
   }
 });
 
@@ -525,56 +525,6 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
 }
 
 for (const platform of ["loon", "egern", "shadowrocket"]) {
-  check(platform + " Spotify prefetches the queued next track", () => {
-    const file = platform + "/spotify/js/spotify.feed.js";
-    const current = "0VjIjW4GlUZAMYd2vXMi3b";
-    const next = "4uLU6hMCjMI75M1A2tKUQC";
-    const body = serialize([b(1, serialize([b(1, serialize([s(2, "normal-card")]))]))]);
-    const args = { block_ads: false, enable_lyrics: true, lyrics_source: "lrclib", prefetch: true };
-    const makeStore = (queue) => {
-      const map = {
-        "spotify.track.meta": JSON.stringify({
-          [current]: ["Song", "Artist", 210000, Date.now()],
-          [next]: ["Next", "Artist", 220000, Date.now()],
-        }),
-        "spotify.queue": JSON.stringify({ current: current, next: [next], at: Date.now() }),
-      };
-      return { map, store: {
-        read: (key) => (key in map ? map[key] : null),
-        write: (value, key) => { map[key] = value; return true; },
-      } };
-    };
-    const http = {
-      get: (request, callback) => {
-        if (request.url.includes("lrclib.net/api/get")) {
-          const isNext = request.url.indexOf("track_name=Next") >= 0;
-          callback(null, { status: 200 }, JSON.stringify({
-            trackName: isNext ? "Next" : "Song",
-            artistName: "Artist",
-            duration: isNext ? 220000 : 210000,
-            syncedLyrics: "[00:01.00]" + (isNext ? "Next" : "Song"),
-          }));
-          return;
-        }
-        callback(null, { status: 200 }, JSON.stringify([]));
-      },
-    };
-    const extra = { $httpClient: http, setTimeout: () => 1, clearTimeout: () => {} };
-
-    const on = makeStore([current, next]);
-    const out = run(file, body, scroll, args, { $persistentStore: on.store, ...extra });
-    assert.ok(out.body, platform + " must still add the card");
-    const cache = JSON.parse(on.map["spotify.lyrics.cache"] || "{}");
-    assert.ok(cache["lrclib|" + current], platform);
-    assert.ok(cache["lrclib|" + next], platform + " must prefetch the queued next track");
-
-    const off = makeStore([current, next]);
-    run(file, body, scroll, { ...args, prefetch: false }, { $persistentStore: off.store, ...extra });
-    const offCache = JSON.parse(off.map["spotify.lyrics.cache"] || "{}");
-    assert.ok(offCache["lrclib|" + current], platform);
-    assert.equal(offCache["lrclib|" + next], undefined, platform + " prefetch=false must skip the next track");
-  });
-
   check(platform + " Spotify stores the connect-state queue for prefetching", () => {
     const current = "0VjIjW4GlUZAMYd2vXMi3b";
     const next = "4uLU6hMCjMI75M1A2tKUQC";
@@ -600,12 +550,71 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.deepEqual(queue.next, [next], platform + " must not mistake prev_tracks for next");
   });
 
-  check(platform + " Spotify prefetches the current track on connect-state", () => {
+  check(platform + " Spotify prefetches the current track then next across connect-state polls", () => {
     const current = "0VjIjW4GlUZAMYd2vXMi3b";
+    const next = "4uLU6hMCjMI75M1A2tKUQC";
     const provided = (id) => serialize([s(1, "spotify:track:" + id)]);
-    const body = serialize([b(3, serialize([b(7, provided(current)), b(20, provided("4uLU6hMCjMI75M1A2tKUQC"))]))]);
+    const body = serialize([b(3, serialize([b(7, provided(current)), b(20, provided(next))]))]);
     const map = {
-      "spotify.track.meta": JSON.stringify({ [current]: ["Song", "Artist", 210000, Date.now()] }),
+      "spotify.track.meta": JSON.stringify({
+        [current]: ["Song", "Artist", 210000, Date.now()],
+        [next]: ["Next", "Artist", 220000, Date.now()],
+      }),
+      "spotify.queue": JSON.stringify({ current: current, next: [next], at: Date.now() }),
+    };
+    const store = {
+      read: (key) => (key in map ? map[key] : null),
+      write: (value, key) => { map[key] = value; return true; },
+    };
+    let calls = 0;
+    const http = {
+      get: (request, callback) => {
+        calls += 1;
+        if (request.url.includes("lrclib.net/api/get")) {
+          const isNext = request.url.indexOf("track_name=Next") >= 0;
+          callback(null, { status: 200 }, JSON.stringify({
+            trackName: isNext ? "Next" : "Song",
+            artistName: "Artist",
+            duration: isNext ? 220000 : 210000,
+            syncedLyrics: "[00:01.00]" + (isNext ? "Next" : "Song"),
+          }));
+          return;
+        }
+        callback(null, { status: 200 }, JSON.stringify([]));
+      },
+    };
+    const extra = { $persistentStore: store, $httpClient: http, setTimeout: () => 1, clearTimeout: () => {} };
+    const args = { enable_lyrics: true, lyrics_source: "lrclib", prefetch: true };
+
+    // 第一次轮询：当前曲目；第二次轮询：next_tracks。
+    run(platform + "/spotify/js/spotify.js", body,
+      "https://spclient.wg.spotify.com/connect-state/v1/player", args, extra);
+    let cache = JSON.parse(map["spotify.lyrics.cache"] || "{}");
+    assert.ok(cache["lrclib|" + current], platform + " must prefetch the current track first");
+    assert.equal(cache["lrclib|" + next], undefined, platform + " must not do both in one response");
+    run(platform + "/spotify/js/spotify.js", body,
+      "https://spclient.wg.spotify.com/connect-state/v1/player", args, extra);
+    cache = JSON.parse(map["spotify.lyrics.cache"] || "{}");
+    assert.ok(cache["lrclib|" + next], platform + " must prefetch next on the following poll");
+
+    // 第三次轮询：两者都预取过，不再发请求。
+    const before = calls;
+    run(platform + "/spotify/js/spotify.js", body,
+      "https://spclient.wg.spotify.com/connect-state/v1/player", args, extra);
+    assert.equal(calls, before, platform + " must not repeat the same prefetch");
+  });
+
+  check(platform + " Spotify rapid track switch prefetches the new current", () => {
+    const first = "0VjIjW4GlUZAMYd2vXMi3b";
+    const second = "4uLU6hMCjMI75M1A2tKUQC";
+    const provided = (id) => serialize([s(1, "spotify:track:" + id)]);
+    const body = (id) => serialize([b(3, serialize([b(7, provided(id))]))]);
+    const map = {
+      "spotify.track.meta": JSON.stringify({
+        [first]: ["Song", "Artist", 210000, Date.now()],
+        [second]: ["Second", "Artist", 220000, Date.now()],
+      }),
+      "spotify.queue": JSON.stringify({ current: first, next: [], at: Date.now() }),
     };
     const store = {
       read: (key) => (key in map ? map[key] : null),
@@ -614,20 +623,30 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     const http = {
       get: (request, callback) => {
         if (request.url.includes("lrclib.net/api/get")) {
+          const isSecond = request.url.indexOf("track_name=Second") >= 0;
           callback(null, { status: 200 }, JSON.stringify({
-            trackName: "Song", artistName: "Artist", duration: 210000, syncedLyrics: "[00:01.00]Ready",
+            trackName: isSecond ? "Second" : "Song",
+            artistName: "Artist",
+            duration: isSecond ? 220000 : 210000,
+            syncedLyrics: "[00:01.00]" + (isSecond ? "Second" : "Song"),
           }));
           return;
         }
         callback(null, { status: 200 }, JSON.stringify([]));
       },
     };
-    run(platform + "/spotify/js/spotify.js", body,
-      "https://spclient.wg.spotify.com/connect-state/v1/player",
-      { enable_lyrics: true, lyrics_source: "lrclib", prefetch: true },
-      { $persistentStore: store, $httpClient: http, setTimeout: () => 1, clearTimeout: () => {} });
+    const extra = { $persistentStore: store, $httpClient: http, setTimeout: () => 1, clearTimeout: () => {} };
+    const args = { enable_lyrics: true, lyrics_source: "lrclib", prefetch: true };
+
+    run(platform + "/spotify/js/spotify.js", body(first),
+      "https://spclient.wg.spotify.com/connect-state/v1/player", args, extra);
+    map["spotify.queue"] = JSON.stringify({ current: second, next: [], at: Date.now() });
+    // 模拟两秒后切歌，越过快速切歌的冷却窗口。
+    map["spotify.prefetch.last"] = JSON.stringify({ id: first, at: Date.now() - 5000 });
+    run(platform + "/spotify/js/spotify.js", body(second),
+      "https://spclient.wg.spotify.com/connect-state/v1/player", args, extra);
     const cache = JSON.parse(map["spotify.lyrics.cache"] || "{}");
-    assert.ok(cache["lrclib|" + current], platform + " must warm the cache before the lyrics page opens");
+    assert.ok(cache["lrclib|" + second], platform + " must prefetch the newly playing track");
   });
 }
 
@@ -1460,7 +1479,7 @@ check("Loon uses normal arguments and retains legacy mode compatibility", () => 
   const scriptRules = plugin.split("\n").filter((line) => line.includes('then script("'));
   assert.equal(scriptRules.length, 6);
   for (const line of scriptRules) {
-    const version = line.includes('tag="spotify.lyrics"') ? "20261114-6" : line.includes("spotify.feed") ? "20261114-6" : "20261114-6";
+    const version = line.includes('tag="spotify.lyrics"') ? "20261114-6" : line.includes("spotify.feed") ? "20261114-7" : "20261114-7";
     assert.ok(line.includes("?v=" + version));
     const tuple = /then script\("[^"]+", (\{.*\})\) with/.exec(line)[1];
     assert.match(tuple, /^\{\$\{\w+\}(?:, \$\{\w+\})*\}$/, "Loon tuple must contain only declared argument references");

@@ -3172,21 +3172,44 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   const res = (typeof $response !== "undefined" && $response) || null;
   const url = (res && res.url) || req.url || "";
 
-  // connect-state 里刚存下的当前曲目；同一首 10 分钟内只预取一次。
-  function queuedCurrentTrack() {
+  // 当前曲目 / 下一首的预取目标。connect-state 每次轮询都会走到这里：
+  // 换歌后的第一次先补当前曲目，之后的下一次轮询再补 next_tracks，避免在同一次
+  // 响应里连续等两次。快速切歌时 id 变了就会重新选目标，旧结果只会写进旧曲目的
+  // 缓存，不会污染当前曲目。
+  function prefetchTarget() {
     const store = typeof $persistentStore !== "undefined" && $persistentStore ? $persistentStore : null;
-    if (!store) return "";
+    if (!store) return null;
+    const marker = (key, ttl) => {
+      const raw = store.read(key);
+      const value = raw ? JSON.parse(raw) : null;
+      return value && Number(value.at) && Date.now() - Number(value.at) < ttl ? value : null;
+    };
     try {
       const queue = JSON.parse(store.read("spotify.queue") || "null");
-      const current = queue && queue.current;
-      if (!current) return "";
-      const markerRaw = store.read("spotify.prefetch.current");
-      const marker = markerRaw ? JSON.parse(markerRaw) : null;
-      if (marker && marker.id === current && Number(marker.at) && Date.now() - Number(marker.at) < 10 * 60 * 1000) return "";
-      store.write(JSON.stringify({ id: current, at: Date.now() }), "spotify.prefetch.current");
-      return current;
+      if (!queue || !queue.current) return null;
+      const current = queue.current;
+      const next = Array.isArray(queue.next) ? queue.next[0] || "" : "";
+      const lastRaw = store.read("spotify.prefetch.last");
+      const last = lastRaw ? JSON.parse(lastRaw) : null;
+      const recent = last && Number(last.at) && Date.now() - Number(last.at) < 1500;
+      const currentMark = marker("spotify.prefetch.current", 3 * 60 * 1000);
+      if (!currentMark || currentMark.id !== current) {
+        // 连续快速切歌时先让播放状态返回，别每一首都在 connect-state 里等 1.5 秒。
+        if (currentMark && recent) return null;
+        store.write(JSON.stringify({ id: current, at: Date.now() }), "spotify.prefetch.current");
+        store.write(JSON.stringify({ id: current, at: Date.now() }), "spotify.prefetch.last");
+        return { id: current, wait: 1500 };
+      }
+      if (next && next !== current) {
+        const nextMark = marker("spotify.prefetch.next", 10 * 60 * 1000);
+        if (!nextMark || nextMark.id !== next) {
+          store.write(JSON.stringify({ id: next, at: Date.now() }), "spotify.prefetch.next");
+          return { id: next, wait: 1000 };
+        }
+      }
+      return null;
     } catch (e) {
-      return "";
+      return null;
     }
   }
 
@@ -3262,12 +3285,12 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     $done({ body: out });
   };
 
-  // connect-state 换歌时先把当前曲目的歌词查好写进缓存。歌词页和滚动页补卡随后
-  // 直接命中缓存，不会再等第三方源；同一首只预取一次，避免轮询把响应拖慢。
+  // connect-state 换歌时预取当前曲目的歌词；当前曲目已经预取过时，在下一次轮询
+  // 预取 next_tracks。歌词页和滚动页补卡随后直接命中缓存，不会等第三方源。
   const prefetch = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsPrefetch : null;
   if (isMeta && /\/connect-state\//.test(url) && prefetchOn && typeof prefetch === "function") {
-    const current = queuedCurrentTrack();
-    if (current) {
+    const target = prefetchTarget();
+    if (target) {
       let settled = false;
       let timer = null;
       const done = () => {
@@ -3276,8 +3299,8 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         if (timer !== null && typeof clearTimeout === "function") clearTimeout(timer);
         finish();
       };
-      if (typeof setTimeout === "function") timer = setTimeout(done, 1500);
-      prefetch(current, done);
+      if (typeof setTimeout === "function") timer = setTimeout(done, target.wait);
+      prefetch(target.id, done);
       return;
     }
   }
