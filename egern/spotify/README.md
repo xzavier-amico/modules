@@ -20,6 +20,7 @@
 | `unlock_playback` | true | 移除试听时长、队列上限、强制随机等限制 |
 | `enable_lyrics` | true | 补全歌词；关闭后不补元数据、歌词与歌词卡 |
 | `lyrics_source` | auto | 歌词源；`auto` 并发查询网易云 / QQ / LRCLIB，不自动查 Musixmatch |
+| `prefetch` | true | 补歌词卡时预取队列里下一首的歌词写进缓存；关闭后只在打开歌词页时查询 |
 | `desktop` | auto | 设备类型；`auto` 按 UA 识别 iPhone / iPad 与 Mac，识别不准时手动指定 |
 
 ## 歌词
@@ -39,6 +40,7 @@
 - protobuf 补齐官方字段（含歌词卡使用的 `previewLines`），并将歌词额度限制归一为可显示状态。
 - 配色：未激活行黑字，当前 / 已唱行白字；命中元数据缓存时不再请求 embed，用缓存里的封面色，没有缓存时用默认中灰底。
 - scrollsita 列表缺少歌词 section 时先查歌词并写入 `spotify.lyrics.cache`，只有查到才补一格；官方已有则不重复补，查不到也不补空卡。
+- 预取下一首（`prefetch`，默认开）：`connect-state` 的播放队列会存到 `spotify.queue`，补卡时若下一首的曲名 / 歌手已在 `spotify.track.meta` 里，就顺手把它的歌词也查好写进缓存，最多等 1.5 秒。切到下一首后再打开歌词页直接命中缓存；查不到不影响当前响应，也不会补一张空卡。
 
 歌词源：`lrclib`、`musixmatch`、`netease`、`qq`、`auto`（默认）。
 - LRCLIB 先按完整曲名查，再用去掉 `feat.` / `remaster` 等后缀的曲名重试（对应 EeveeSpotify 的 `strippedTrackTitle`），返回结果仍会重新校验歌手 / Live / 时长。

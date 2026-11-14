@@ -45,7 +45,7 @@ function runEgern(file, body, url, argument, extra) {
 
   const state = { done: false, value: undefined, error: null };
   const sandbox = { TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, console: extra.console || console, state };
-  for (const key of ["$loon", "$utils"]) if (key in extra) sandbox[key] = extra[key];
+  for (const key of ["$loon", "$utils", "setTimeout", "clearTimeout"]) if (key in extra) sandbox[key] = extra[key];
   const context = vm.createContext(sandbox, { microtaskMode: "afterEvaluate" });
 
   // 测试是同步的：用 vm 自己的 Promise，microtaskMode 才能在 runInContext 返回前排空。
@@ -281,8 +281,16 @@ check("Spotify client plugins route scrollsita to the updated ad filter", () => 
   for (const file of ["loon/spotify/spotify-premium.plugin", "loon/spotify/spotify-premium-mac.plugin", "egern/spotify/spotify-premium.yaml", "shadowrocket/spotify/spotify-premium.sgmodule"]) {
     const rules = read(file).split("\n").filter((line) => !line.trim().startsWith("#"));
     assert.ok(rules.some((line) => line.includes("scrollsita")), file + " must match scrollsita");
-    assert.ok(rules.some((line) => line.includes("spotify.feed.js?v=20261114-4")));
+    assert.ok(rules.some((line) => line.includes("spotify.feed.js?v=20261114-5")));
   }
+});
+
+check("Shadowrocket Spotify feed argument JSON exposes prefetch", () => {
+  const line = read("shadowrocket/spotify/spotify-premium.sgmodule").split("\n")
+    .find((item) => item.startsWith("spotify.feed ="));
+  assert.ok(line, "spotify.feed entry");
+  const raw = /argument="(.*)"$/.exec(line)[1].replace(/\{\{\{[^}]*\}\}\}/g, "true");
+  assert.equal(JSON.parse(raw).prefetch, true);
 });
 
 check("Egern lyrics script declares body_required", () => {
@@ -513,6 +521,76 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.equal(Object.keys(miss).length, 0, platform + " must not add an empty lyrics card");
     const missCache = JSON.parse(emptyMap["spotify.lyrics.cache"] || "{}");
     assert.equal(missCache["lrclib|" + id] && missCache["lrclib|" + id].m, 1, platform + " must cache the miss");
+  });
+}
+
+for (const platform of ["loon", "egern", "shadowrocket"]) {
+  check(platform + " Spotify prefetches the queued next track", () => {
+    const file = platform + "/spotify/js/spotify.feed.js";
+    const current = "0VjIjW4GlUZAMYd2vXMi3b";
+    const next = "4uLU6hMCjMI75M1A2tKUQC";
+    const body = serialize([b(1, serialize([b(1, serialize([s(2, "normal-card")]))]))]);
+    const args = { block_ads: false, enable_lyrics: true, lyrics_source: "lrclib", prefetch: true };
+    const makeStore = (queue) => {
+      const map = {
+        "spotify.track.meta": JSON.stringify({
+          [current]: ["Song", "Artist", 210000, Date.now()],
+          [next]: ["Next", "Artist", 220000, Date.now()],
+        }),
+        "spotify.queue": JSON.stringify({ ids: queue, at: Date.now() }),
+      };
+      return { map, store: {
+        read: (key) => (key in map ? map[key] : null),
+        write: (value, key) => { map[key] = value; return true; },
+      } };
+    };
+    const http = {
+      get: (request, callback) => {
+        if (request.url.includes("lrclib.net/api/get")) {
+          const isNext = request.url.indexOf("track_name=Next") >= 0;
+          callback(null, { status: 200 }, JSON.stringify({
+            trackName: isNext ? "Next" : "Song",
+            artistName: "Artist",
+            duration: isNext ? 220000 : 210000,
+            syncedLyrics: "[00:01.00]" + (isNext ? "Next" : "Song"),
+          }));
+          return;
+        }
+        callback(null, { status: 200 }, JSON.stringify([]));
+      },
+    };
+    const extra = { $httpClient: http, setTimeout: () => 1, clearTimeout: () => {} };
+
+    const on = makeStore([current, next]);
+    const out = run(file, body, scroll, args, { $persistentStore: on.store, ...extra });
+    assert.ok(out.body, platform + " must still add the card");
+    const cache = JSON.parse(on.map["spotify.lyrics.cache"] || "{}");
+    assert.ok(cache["lrclib|" + current], platform);
+    assert.ok(cache["lrclib|" + next], platform + " must prefetch the queued next track");
+
+    const off = makeStore([current, next]);
+    run(file, body, scroll, { ...args, prefetch: false }, { $persistentStore: off.store, ...extra });
+    const offCache = JSON.parse(off.map["spotify.lyrics.cache"] || "{}");
+    assert.ok(offCache["lrclib|" + current], platform);
+    assert.equal(offCache["lrclib|" + next], undefined, platform + " prefetch=false must skip the next track");
+  });
+
+  check(platform + " Spotify stores the connect-state queue for prefetching", () => {
+    const current = "0VjIjW4GlUZAMYd2vXMi3b";
+    const next = "4uLU6hMCjMI75M1A2tKUQC";
+    const body = serialize([
+      b(1, serialize([s(1, "spotify:track:" + current)])),
+      b(1, serialize([s(1, "spotify:track:" + next)])),
+    ]);
+    const map = {};
+    const store = {
+      read: (key) => (key in map ? map[key] : null),
+      write: (value, key) => { map[key] = value; return true; },
+    };
+    run(platform + "/spotify/js/spotify.js", body,
+      "https://spclient.wg.spotify.com/connect-state/v1/player",
+      { enable_lyrics: true }, { $persistentStore: store });
+    assert.deepEqual(JSON.parse(map["spotify.queue"]).ids, [current, next], platform);
   });
 }
 
@@ -1277,7 +1355,7 @@ check("Loon uses normal arguments and retains legacy mode compatibility", () => 
   const scriptRules = plugin.split("\n").filter((line) => line.includes('then script("'));
   assert.equal(scriptRules.length, 6);
   for (const line of scriptRules) {
-    const version = line.includes('tag="spotify.lyrics"') ? "20261114-4" : line.includes("spotify.feed") ? "20261114-4" : "20261114-5";
+    const version = line.includes('tag="spotify.lyrics"') ? "20261114-4" : line.includes("spotify.feed") ? "20261114-5" : "20261114-5";
     assert.ok(line.includes("?v=" + version));
     const tuple = /then script\("[^"]+", (\{.*\})\) with/.exec(line)[1];
     assert.match(tuple, /^\{\$\{\w+\}(?:, \$\{\w+\})*\}$/, "Loon tuple must contain only declared argument references");
@@ -1286,7 +1364,7 @@ check("Loon uses normal arguments and retains legacy mode compatibility", () => 
     if (line.includes('tag="spotify.lyrics"')) {
       assert.deepEqual(names, ["lyrics_source", "enable_lyrics", "desktop"]);
     } else if (line.includes("spotify.feed")) {
-      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source"]);
+      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source", "prefetch"]);
     } else {
       assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop"]);
     }

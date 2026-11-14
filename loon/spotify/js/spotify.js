@@ -193,7 +193,7 @@
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
     if (Array.isArray(raw)) {
       const modeInFifth = ["full", "no_card", "metadata_only", "response_only", "card_only"].indexOf(raw[4]) >= 0;
-      opt = { spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2], enable_lyrics: raw[3], desktop: modeInFifth ? false : raw[4], lyrics_mode: modeInFifth ? raw[4] : raw[5] };
+      opt = { spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2], enable_lyrics: raw[3], desktop: modeInFifth ? false : raw[4], lyrics_mode: modeInFifth ? raw[4] : raw[5], prefetch: raw[6] };
     } else if (typeof raw === "string") {
       opt = JSON.parse(raw || "{}") || {};
     } else if (raw && "object" == typeof raw) {
@@ -247,6 +247,8 @@
   const lyricsMetaOn = lyricsOn && (lyricsMode === "full" || lyricsMode === "no_card" || lyricsMode === "metadata_only");
   // 歌词卡片：full / card_only 时向 scrollsita 列表补一个真实的歌词 section。
   const lyricsCardOn = lyricsOn && (lyricsMode === "full" || lyricsMode === "card_only");
+  // 预取下一首：滚动页补卡时顺手把队列里下一首的歌词也查好写进缓存。
+  const prefetchOn = flag(opt.prefetch, true);
 
   // 响应体上限：超过上限直接放行，避免异常响应占满内存。
   const MAX_META_BYTES = 12 * 1024 * 1024; // extended-metadata / context-resolve / connect-state / metadata
@@ -1273,6 +1275,8 @@
   // 存储值：{ "<track id>": [title, artist, durationMs, savedAt] }，最多 24 首。
   const TRACK_CACHE_KEY = "spotify.track.meta";
   const TRACK_CACHE_MAX = 24;
+  const QUEUE_KEY = "spotify.queue";
+  const QUEUE_MAX = 8;
   const TITLE_KEYS = ["track_title", "title", "track_name"];
   const ARTIST_KEYS = ["artist_name", "artist"];
 
@@ -1362,6 +1366,44 @@
     }
   }
 
+  // 只收集 URI 顺序，不要求同一层带 metadata；connect-state 的 TrackRef 未必带曲名，
+  // 但队列顺序仍然有效。
+  function collectTrackIds(fields, out, depth) {
+    if (depth > 8) return;
+    for (const f of fields) {
+      if (f.w !== 2) continue;
+      if (f.p.length === 36) {
+        const value = text(f);
+        if (value && /^spotify:track:[A-Za-z0-9]{22}$/.test(value)) {
+          const id = value.slice(14);
+          if (out.indexOf(id) < 0) out.push(id);
+          continue;
+        }
+      }
+      const sub = parse(f.p);
+      if (sub) collectTrackIds(sub, out, depth + 1);
+    }
+  }
+
+  // connect-state 的 track / next_tracks 按出现顺序给出播放队列。这里只记前几首，
+  // feed 脚本补歌词卡时用它预取下一首的歌词，换歌后再打开歌词页就能直接命中缓存。
+  function rememberQueue(ids) {
+    const store = cacheStore();
+    const trimmed = ids.slice(0, QUEUE_MAX);
+    if (!store || !trimmed.length) return;
+    try {
+      const raw = store.read(QUEUE_KEY);
+      const old = raw ? JSON.parse(raw) : null;
+      const sameIds = old && Array.isArray(old.ids) &&
+        old.ids.length === trimmed.length && old.ids.every((id, i) => id === trimmed[i]);
+      // 队列没变时不重复写，避免 connect-state 轮询一直写存储。
+      if (sameIds && Number(old.at) && Date.now() - Number(old.at) < 5 * 60 * 1000) return;
+      store.write(JSON.stringify({ ids: trimmed, at: Date.now() }), QUEUE_KEY);
+    } catch (e) {
+      // 存储写失败不影响响应改写。
+    }
+  }
+
   function cacheTrackMeta(target, fields) {
     if (!cacheStore()) return;
     const trackUrl = /\/metadata\/4\/track\/([A-Za-z0-9]{22})/.exec(target);
@@ -1377,6 +1419,11 @@
     const found = Object.create(null);
     collectTracks(fields, found, 0);
     rememberTracks(found);
+    if (target.indexOf("/connect-state/") >= 0) {
+      const ids = [];
+      collectTrackIds(fields, ids, 0);
+      rememberQueue(ids);
+    }
   }
 
   function patchMeta(buffer, target) {

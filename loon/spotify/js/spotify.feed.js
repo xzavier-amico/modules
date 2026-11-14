@@ -193,7 +193,7 @@
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
     if (Array.isArray(raw)) {
       const modeInFifth = ["full", "no_card", "metadata_only", "response_only", "card_only"].indexOf(raw[4]) >= 0;
-      opt = { spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2], enable_lyrics: raw[3], desktop: modeInFifth ? false : raw[4], lyrics_mode: modeInFifth ? raw[4] : raw[5] };
+      opt = { spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2], enable_lyrics: raw[3], desktop: modeInFifth ? false : raw[4], lyrics_mode: modeInFifth ? raw[4] : raw[5], prefetch: raw[6] };
     } else if (typeof raw === "string") {
       opt = JSON.parse(raw || "{}") || {};
     } else if (raw && "object" == typeof raw) {
@@ -247,6 +247,8 @@
   const lyricsMetaOn = lyricsOn && (lyricsMode === "full" || lyricsMode === "no_card" || lyricsMode === "metadata_only");
   // 歌词卡片：full / card_only 时向 scrollsita 列表补一个真实的歌词 section。
   const lyricsCardOn = lyricsOn && (lyricsMode === "full" || lyricsMode === "card_only");
+  // 预取下一首：滚动页补卡时顺手把队列里下一首的歌词也查好写进缓存。
+  const prefetchOn = flag(opt.prefetch, true);
 
   // 响应体上限：超过上限直接放行，避免异常响应占满内存。
   const MAX_META_BYTES = 12 * 1024 * 1024; // extended-metadata / context-resolve / connect-state / metadata
@@ -832,6 +834,9 @@
   let prefetchTimer;
   let prefetchCallback = null;
   let prefetchSettle = null;
+  // 本轮预取是否还有没回来的来源（超时 / 先发纯文本）。feed 用它在结束后决定
+  // 能不能紧接着预取下一首：还有请求在飞时重置状态会让旧结果写进新曲目的缓存。
+  let prefetchIncomplete = false;
   const finish = (value) => {
     if (settled) return;
     settled = true;
@@ -850,19 +855,30 @@
       if (prefetchTimer !== undefined && typeof clearTimeout === "function") clearTimeout(prefetchTimer);
       const callback = prefetchCallback;
       prefetchCallback = null;
-      if (callback) callback(payload);
+      if (callback) callback(payload, { incomplete: prefetchIncomplete });
     };
     globalThis.__spotifyLyricsPrefetch = (id, callback) => {
       if (!id || typeof callback !== "function") return;
-      if (settled || !flag(opt.enable_lyrics, true)) {
-        callback(null);
+      if (!flag(opt.enable_lyrics, true)) {
+        callback(null, { incomplete: false });
         return;
       }
+      // 同一脚本实例会连续预取当前曲目和下一首：每轮重置状态与定时器。
+      // 只有上一轮没有遗留请求时才会走到这里（feed 用 incomplete 拦截）。
+      if (prefetchTimer !== undefined && typeof clearTimeout === "function") clearTimeout(prefetchTimer);
+      if (plainTimer !== undefined && typeof clearTimeout === "function") clearTimeout(plainTimer);
+      settled = false;
+      networkFailed = false;
+      plainFallback = null;
+      prefetchIncomplete = false;
+      prefetchTimer = undefined;
+      plainTimer = undefined;
       trackId = id;
       cacheKey = lyricsCacheKey(id);
       const cached = readLyricsCache(cacheKey);
       if (cached) {
-        callback(cached.miss ? null : cached.payload);
+        prefetchCallback = null;
+        callback(cached.miss ? null : cached.payload, { incomplete: false });
         return;
       }
       prefetchCallback = callback;
@@ -871,6 +887,7 @@
           if (settled) return;
           // 超时不算「确认没有歌词」，不写 miss，下次歌词页还能重试。
           networkFailed = true;
+          prefetchIncomplete = true;
           prefetchSettle(null);
         }, PREFETCH_DEADLINE_MS);
       }
@@ -1125,6 +1142,7 @@
           // 5 秒内还没有同步版本就先把纯文本发出去，后续结果不再覆盖。
           if (typeof setTimeout === "function") plainTimer = setTimeout(() => {
             if (settled || !plainFallback) return;
+            if (PREFETCH) prefetchIncomplete = true;
             writeLyricsCache(cacheKey, plainFallback);
             emit(plainFallback);
           }, PLAIN_FALLBACK_MS);
@@ -2149,6 +2167,29 @@
   }
 
   const trackId = isScroll ? scrollTrackId(url) : "";
+  const PREFETCH_NEXT_MS = 1500;
+  // 下一首：connect-state 存下的队列顺序。只用于预取歌词，取不到就跳过。
+  const nextTrackId = (() => {
+    if (!prefetchOn || !isScroll || !trackId) return "";
+    const store = typeof $persistentStore !== "undefined" && $persistentStore ? $persistentStore : null;
+    if (!store) return "";
+    try {
+      const raw = store.read("spotify.queue");
+      const queue = raw ? JSON.parse(raw) : null;
+      if (!queue || !Array.isArray(queue.ids)) return "";
+      const at = Number(queue.at) || 0;
+      if (at && Date.now() - at > 30 * 60 * 1000) return "";
+      const index = queue.ids.indexOf(trackId);
+      const next = index >= 0 ? queue.ids[index + 1] || "" : "";
+      if (!next || next === trackId) return "";
+      // 没有曲名 / 歌手时预取要先请求 oEmbed，反而拖慢补卡；等元数据到了再说。
+      const metaRaw = store.read("spotify.track.meta");
+      const meta = metaRaw ? JSON.parse(metaRaw) : null;
+      return meta && meta[next] ? next : "";
+    } catch (e) {
+      return "";
+    }
+  })();
   const finish = (out) => {
     if (!out || same(out, body)) {
       $done({});
@@ -2163,8 +2204,27 @@
   const prefetch = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsPrefetch : null;
   if (isScroll && wantCard && trackId && typeof prefetch === "function" &&
       !(typeof hasLyricsCard === "function" && hasLyricsCard(body))) {
-    prefetch(trackId, (payload) => {
-      finish(patchScroll(body, trackId, wantAds, !!payload));
+    const finishCard = (payload) => finish(patchScroll(body, trackId, wantAds, !!payload));
+    prefetch(trackId, (payload, meta) => {
+      // 当前曲目超时、或还有来源没回来时，不再接着预取下一首：下一轮需要重置
+      // 歌词脚本状态，上一轮晚到的结果会写进下一首的缓存。
+      const canPrefetchNext = prefetchOn && !!nextTrackId && !(meta && meta.incomplete) &&
+        typeof setTimeout === "function";
+      if (!canPrefetchNext) {
+        finishCard(payload);
+        return;
+      }
+      let settledNext = false;
+      let timer = null;
+      const afterNext = () => {
+        if (settledNext) return;
+        settledNext = true;
+        if (timer !== null && typeof clearTimeout === "function") clearTimeout(timer);
+        finishCard(payload);
+      };
+      // 下一首只为写缓存，最多等 1.5 秒，避免没有歌词的歌把滚动页拖住。
+      timer = setTimeout(afterNext, PREFETCH_NEXT_MS);
+      prefetch(nextTrackId, afterNext);
     });
     return;
   }

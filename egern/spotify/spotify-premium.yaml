@@ -55,6 +55,11 @@ env_schema:
     description: "auto 按 User-Agent 识别 iPhone / iPad 与 Mac；识别不准时手动指定。桌面端默认不写播放授权"
     default_value: "auto"
     options: ["auto", "ios", "macos"]
+  prefetch:
+    name: "预取下一首歌词"
+    description: "补歌词卡时顺便把队列里下一首的歌词查好写进缓存；关闭后只在打开歌词页时查询"
+    default_value: "true"
+    options: ["true", "false"]
 
 rules:
   # 广告域名兜底：脚本关闭服务端广告开关，这里拦截广告素材与曝光回传。
@@ -151,7 +156,7 @@ scriptings:
   - http_response:
       name: "spotify.feed"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:casita\\/v\\d+\\/home|browsita\\/v\\d+\\/browse|scrollsita\\/v\\d+\\/scroll)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.feed.js?v=20261114-4"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.feed.js?v=20261114-5"
       body_required: true
       binary_body: true
       max_size: 12582912

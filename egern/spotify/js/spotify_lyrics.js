@@ -461,6 +461,9 @@ export default async function (ctx) {
   let prefetchTimer;
   let prefetchCallback = null;
   let prefetchSettle = null;
+  // 本轮预取是否还有没回来的来源（超时 / 先发纯文本）。feed 用它在结束后决定
+  // 能不能紧接着预取下一首：还有请求在飞时重置状态会让旧结果写进新曲目的缓存。
+  let prefetchIncomplete = false;
   const finish = (value) => {
     if (settled) return;
     settled = true;
@@ -479,19 +482,30 @@ export default async function (ctx) {
       if (prefetchTimer !== undefined && typeof clearTimeout === "function") clearTimeout(prefetchTimer);
       const callback = prefetchCallback;
       prefetchCallback = null;
-      if (callback) callback(payload);
+      if (callback) callback(payload, { incomplete: prefetchIncomplete });
     };
     globalThis.__spotifyLyricsPrefetch = (id, callback) => {
       if (!id || typeof callback !== "function") return;
-      if (settled || !flag(opt.enable_lyrics, true)) {
-        callback(null);
+      if (!flag(opt.enable_lyrics, true)) {
+        callback(null, { incomplete: false });
         return;
       }
+      // 同一脚本实例会连续预取当前曲目和下一首：每轮重置状态与定时器。
+      // 只有上一轮没有遗留请求时才会走到这里（feed 用 incomplete 拦截）。
+      if (prefetchTimer !== undefined && typeof clearTimeout === "function") clearTimeout(prefetchTimer);
+      if (plainTimer !== undefined && typeof clearTimeout === "function") clearTimeout(plainTimer);
+      settled = false;
+      networkFailed = false;
+      plainFallback = null;
+      prefetchIncomplete = false;
+      prefetchTimer = undefined;
+      plainTimer = undefined;
       trackId = id;
       cacheKey = lyricsCacheKey(id);
       const cached = readLyricsCache(cacheKey);
       if (cached) {
-        callback(cached.miss ? null : cached.payload);
+        prefetchCallback = null;
+        callback(cached.miss ? null : cached.payload, { incomplete: false });
         return;
       }
       prefetchCallback = callback;
@@ -500,6 +514,7 @@ export default async function (ctx) {
           if (settled) return;
           // 超时不算「确认没有歌词」，不写 miss，下次歌词页还能重试。
           networkFailed = true;
+          prefetchIncomplete = true;
           prefetchSettle(null);
         }, PREFETCH_DEADLINE_MS);
       }
@@ -754,6 +769,7 @@ export default async function (ctx) {
           // 5 秒内还没有同步版本就先把纯文本发出去，后续结果不再覆盖。
           if (typeof setTimeout === "function") plainTimer = setTimeout(() => {
             if (settled || !plainFallback) return;
+            if (PREFETCH) prefetchIncomplete = true;
             writeLyricsCache(cacheKey, plainFallback);
             emit(plainFallback);
           }, PLAIN_FALLBACK_MS);

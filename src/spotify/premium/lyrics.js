@@ -263,6 +263,8 @@
   // 存储值：{ "<track id>": [title, artist, durationMs, savedAt] }，最多 24 首。
   const TRACK_CACHE_KEY = "spotify.track.meta";
   const TRACK_CACHE_MAX = 24;
+  const QUEUE_KEY = "spotify.queue";
+  const QUEUE_MAX = 8;
   const TITLE_KEYS = ["track_title", "title", "track_name"];
   const ARTIST_KEYS = ["artist_name", "artist"];
 
@@ -352,6 +354,44 @@
     }
   }
 
+  // 只收集 URI 顺序，不要求同一层带 metadata；connect-state 的 TrackRef 未必带曲名，
+  // 但队列顺序仍然有效。
+  function collectTrackIds(fields, out, depth) {
+    if (depth > 8) return;
+    for (const f of fields) {
+      if (f.w !== 2) continue;
+      if (f.p.length === 36) {
+        const value = text(f);
+        if (value && /^spotify:track:[A-Za-z0-9]{22}$/.test(value)) {
+          const id = value.slice(14);
+          if (out.indexOf(id) < 0) out.push(id);
+          continue;
+        }
+      }
+      const sub = parse(f.p);
+      if (sub) collectTrackIds(sub, out, depth + 1);
+    }
+  }
+
+  // connect-state 的 track / next_tracks 按出现顺序给出播放队列。这里只记前几首，
+  // feed 脚本补歌词卡时用它预取下一首的歌词，换歌后再打开歌词页就能直接命中缓存。
+  function rememberQueue(ids) {
+    const store = cacheStore();
+    const trimmed = ids.slice(0, QUEUE_MAX);
+    if (!store || !trimmed.length) return;
+    try {
+      const raw = store.read(QUEUE_KEY);
+      const old = raw ? JSON.parse(raw) : null;
+      const sameIds = old && Array.isArray(old.ids) &&
+        old.ids.length === trimmed.length && old.ids.every((id, i) => id === trimmed[i]);
+      // 队列没变时不重复写，避免 connect-state 轮询一直写存储。
+      if (sameIds && Number(old.at) && Date.now() - Number(old.at) < 5 * 60 * 1000) return;
+      store.write(JSON.stringify({ ids: trimmed, at: Date.now() }), QUEUE_KEY);
+    } catch (e) {
+      // 存储写失败不影响响应改写。
+    }
+  }
+
   function cacheTrackMeta(target, fields) {
     if (!cacheStore()) return;
     const trackUrl = /\/metadata\/4\/track\/([A-Za-z0-9]{22})/.exec(target);
@@ -367,6 +407,11 @@
     const found = Object.create(null);
     collectTracks(fields, found, 0);
     rememberTracks(found);
+    if (target.indexOf("/connect-state/") >= 0) {
+      const ids = [];
+      collectTrackIds(fields, ids, 0);
+      rememberQueue(ids);
+    }
   }
 
   function patchMeta(buffer, target) {
