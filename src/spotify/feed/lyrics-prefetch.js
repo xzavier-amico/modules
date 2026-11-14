@@ -1,6 +1,5 @@
-  // feed 脚本复用 lyrics.js 的查询 / 缓存逻辑，但只加载 prefetch 入口。
-  // 这里在 lyrics.js 之前执行：告诉它不要处理 color-lyrics 响应，并把 feed
-  // 自己的参数位置翻译成歌词脚本认识的选项。
+  // feed 脚本在 lyrics.js 之前执行：开启辅助模式（只暴露缓存查询与补卡判断），
+  // 并把 feed 的参数位置翻译成歌词脚本认识的选项。
   const SPOTIFY_LYRICS_PREFETCH = true;
   const SPOTIFY_PREFETCH_OPTIONS = (() => {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;

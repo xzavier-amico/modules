@@ -49,6 +49,7 @@ IP-CIDR,115.236.121.195/32,REJECT,no-resolve
 DOMAIN,httpdns.ocloud.oppomobile.com,REJECT
 DOMAIN,httpdns.push.oppomobile.com,REJECT
 DOMAIN-SUFFIX,httpdns.pro,REJECT
+DOMAIN-KEYWORD, httpdns, REJECT
 IP-CIDR,119.29.29.98/32,REJECT,no-resolve
 IP-CIDR,119.29.29.99/32,REJECT,no-resolve
 DOMAIN,httpdns.volcengineapi.com,REJECT

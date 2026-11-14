@@ -2237,6 +2237,9 @@ mitm:
     - 'amdc.alipay.com'
     - 'amdc-sibling.alipay.com.cn'
 rules:
+- domain_keyword:
+    match: httpdns
+    policy: REJECT
 - domain:
     match: httpdns.alicdn.com
     policy: REJECT

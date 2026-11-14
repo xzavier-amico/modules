@@ -20,8 +20,7 @@
 (() => {
   "use strict";
 
-  // feed 脚本会在同一份源码上以 prefetch 模式加载：只暴露歌词查询 / 缓存，
-  // 不处理 color-lyrics 响应。独立歌词脚本仍按原来的入口执行。
+  // feed / 元数据脚本以辅助模式加载：只暴露缓存查询与补卡判断，不处理响应。
   const PREFETCH = typeof SPOTIFY_LYRICS_PREFETCH !== "undefined" && SPOTIFY_LYRICS_PREFETCH;
 
   const req = typeof $request !== "undefined" && $request ? $request : null;
@@ -115,21 +114,9 @@
   const LYRICS_CACHE_MAX_BYTES = 400 * 1024;
   const LYRICS_DEADLINE_MS = 5000;
   const PLAIN_FALLBACK_MS = 4000;
-  // feed 脚本在返回 scrollsita 之前等歌词；和歌词页共用 5 秒预算，避免 Now Playing
-  // 卡片列表等太久。超时就不补卡，歌词页之后仍可正常重试。
-  const PREFETCH_DEADLINE_MS = 4000;
 
-  // 请求阶段脚本调用 $done 后运行时会释放资源（Loon Script API 明确要求 $done
-  // 之前结束所有异步任务），所以第三方查询不能挂在这个脚本里后台跑。这里改为
-  // 「接力并行」：请求阶段登记待预取曲目，官方 color-lyrics 请求飞行的同时，随后
-  // 到达的 connect-state / scrollsita 脚本并行查第三方歌词并写缓存；官方 404
-  // 响应到达时直接命中缓存，不必再等一次完整查询。总耗时接近两者中较慢的那个。
-  const PENDING_KEY = "spotify.lyrics.pending";
-  const INFLIGHT_KEY = "spotify.lyrics.inflight";
+  // 确认没有歌词的曲目，短期内不再补空卡。
   const MISS_KEY = "spotify.lyrics.miss";
-  const PENDING_TTL_MS = 10000;
-  const INFLIGHT_TTL_MS = 8000;
-  // 刚确认过「官方和第三方都没有歌词」的曲目，短时间内不再补空卡。
   const MISS_TTL_MS = 5 * 60 * 1000;
 
   const storeBackend = () =>
@@ -371,9 +358,6 @@
   let plainTimer;
   let plainFallback = null;
   let cacheKey = "";
-  let prefetchTimer;
-  let prefetchCallback = null;
-  let prefetchSettle = null;
   const finish = (value) => {
     if (settled) return;
     settled = true;
@@ -389,81 +373,25 @@
   };
 
   if (PREFETCH) {
-    // 只暴露一个「先查歌词、写完缓存再回调」的入口。feed 脚本在补歌词卡之前
-    // 调用它：歌词已经准备好才组装卡片，客户端随后请求 color-lyrics 时直接命中
-    // 缓存，不会出现「卡片先出来、歌词过一会儿才到」的空卡。
-    // timedOut 区分「查过了，确实没有歌词」和「窗口内没查完」：前者不补空卡，
-    // 后者仍然乐观补卡，歌词内容交给随后到达的 color-lyrics 请求。
-    prefetchSettle = (payload, timedOut) => {
-      if (settled) return;
-      settled = true;
-      if (prefetchTimer !== undefined && typeof clearTimeout === "function") clearTimeout(prefetchTimer);
-      if (activeMark(INFLIGHT_KEY, trackId, INFLIGHT_TTL_MS)) writeMark(INFLIGHT_KEY, null);
-      const callback = prefetchCallback;
-      prefetchCallback = null;
-      if (callback) callback(payload, !!timedOut);
-    };
-    globalThis.__spotifyLyricsPrefetch = (id, callback, budgetMs) => {
-      if (!id || typeof callback !== "function") return;
-      if (!flag(opt.enable_lyrics, true)) {
-        callback(null);
-        return;
-      }
-      // 同一脚本实例会连续预取当前曲目和下一首：每轮重置状态与定时器。
-      if (prefetchTimer !== undefined && typeof clearTimeout === "function") clearTimeout(prefetchTimer);
-      if (plainTimer !== undefined && typeof clearTimeout === "function") clearTimeout(plainTimer);
-      settled = false;
-      plainFallback = null;
-      prefetchTimer = undefined;
-      plainTimer = undefined;
-      trackId = id;
-      cacheKey = lyricsCacheKey(id);
-      const waitMs = Number.isFinite(Number(budgetMs)) && Number(budgetMs) > 0
-        ? Number(budgetMs) : PREFETCH_DEADLINE_MS;
-      const cached = readLyricsCache(cacheKey, id);
-      if (cached) {
-        if (activeMark(INFLIGHT_KEY, id, INFLIGHT_TTL_MS)) writeMark(INFLIGHT_KEY, null);
-        prefetchCallback = null;
-        callback(cached.payload, false);
-        return;
-      }
-      prefetchCallback = callback;
-      // 标记「正在查这首歌」：connect-state 轮询看到后不会为同一首歌重复起查询。
-      writeMark(INFLIGHT_KEY, { id: id, at: Date.now() });
-      if (typeof setTimeout === "function") {
-        prefetchTimer = setTimeout(() => {
-          if (settled) return;
-          // 窗口内没查完：不写缓存（结果还没回来），由调用方决定要不要乐观补卡。
-          prefetchSettle(null, true);
-        }, waitMs);
-      }
-      resolvePublicLyrics((payload) => {
-        if (settled) return;
-        writeLyricsCache(cacheKey, payload);
-        // 明确查不到时也不写缓存，下次打开还能重试。
-        prefetchSettle(payload);
-      });
-    };
+    // 辅助模式：feed / 元数据脚本只复用缓存查询与补卡判断，不发起歌词查询。
 
-    // scrollsita 补卡等待：不自己再查一次第三方源，而是轮询「歌词结果」标志位。
-    // 标志位就是 spotify.lyrics.cache —— color-lyrics 响应阶段、connect-state
-    // 预取拿到歌词都会写；spotify.lyrics.miss 表示已经确认没有歌词。
-    // 读到歌词 -> 补卡且内容已就绪；读到 miss -> 不补空卡；超时 -> 乐观补卡，
-    // 内容随后由 color-lyrics 请求填充（也避免「客户端等 scrollsita 才发
-    // color-lyrics」时互相等待）。超时按轮询次数算，不依赖 Date.now 精度。
-    globalThis.__spotifyLyricsWait = (id, callback, maxMs, pollMs) => {
+    // 轮询 spotify.lyrics.cache 等歌词结果：命中即返回、读到 miss 不补卡、
+    // 超时乐观补卡（内容由随后到达的 color-lyrics 请求填充）。
+    // 步长分段由 feed 传入：max / fastUntil / fastStep / slowStep。
+    globalThis.__spotifyLyricsWait = (id, callback, options) => {
       if (!id || typeof callback !== "function") {
         if (typeof callback === "function") callback(false, true);
         return;
       }
+      const conf = options && "object" == typeof options ? options : {};
+      const maxMs = Number(conf.max) > 0 ? Number(conf.max) : 8000;
+      const fastUntil = Number(conf.fastUntil) > 0 ? Number(conf.fastUntil) : 2000;
+      const fastStep = Number(conf.fastStep) > 0 ? Number(conf.fastStep) : 200;
+      const slowStep = Number(conf.slowStep) > 0 ? Number(conf.slowStep) : 500;
       const key = lyricsCacheKey(id);
-      const step = Number(pollMs) > 0 ? Number(pollMs) : 200;
-      const limit = Math.max(1, Math.ceil((Number(maxMs) > 0 ? Number(maxMs) : 4500) / step));
       const hasTimer = typeof setTimeout === "function";
-      let ticks = 0;
+      let elapsed = 0;
       const poll = () => {
-        // 歌词缓存里出现该曲目就是「就绪」标志；缓存大时第一次读就返回，
-        // 空缓存时每 200ms 解析的只是一个小 JSON，不需要额外的轻量标志位。
         if (readLyricsCache(key, id)) {
           callback(true, false);
           return;
@@ -472,39 +400,32 @@
           callback(false, false);
           return;
         }
-        if (!hasTimer || ticks >= limit) {
+        if (!hasTimer || elapsed >= maxMs) {
           callback(false, true);
           return;
         }
-        ticks += 1;
+        const step = elapsed < fastUntil ? fastStep : slowStep;
+        elapsed += step;
         setTimeout(poll, step);
       };
       poll();
     };
 
-    // scrollsita 补卡入口：只有最近明确确认过「官方和第三方都没有歌词」的曲目
-    // 才跳过，避免空卡常驻；其余登记待预取，让官方请求飞行期间的伴随请求并行查。
+    // 最近确认没有歌词的曲目不再补空卡。
     globalThis.__spotifyLyricsCard = (id) => {
       if (!id || !flag(opt.enable_lyrics, true)) return false;
       if (activeMark(MISS_KEY, id, MISS_TTL_MS)) return false;
-      // 歌词还没就绪时登记待预取，让官方请求飞行期间的伴随请求并行查第三方源。
-      if (!readLyricsCache(lyricsCacheKey(id), id) && !activeMark(INFLIGHT_KEY, id, INFLIGHT_TTL_MS)) {
-        writeMark(PENDING_KEY, { id: id, at: Date.now() });
-      }
       return true;
     };
     return;
   }
 
-  // 请求阶段：缓存里已经有这首歌的第三方歌词时，直接返回，完全跳过官方请求。
-  // 官方歌词接口本身可能很慢；既然之前已经确认官方没有歌词，就不必再等它。
-  // 未命中时登记一次待预取，让官方请求飞行期间的伴随请求并行查第三方源。
+  // 请求阶段：缓存命中直接返回合成歌词，跳过官方请求；未命中立即放行。
   if (!res) {
     if (!PREFETCH && trackId && flag(opt.enable_lyrics, true)) {
       cacheKey = lyricsCacheKey(trackId);
       const cached = readLyricsCache(cacheKey, trackId);
       if (cached) {
-        writeMark(PENDING_KEY, null);
         writeMark(MISS_KEY, null);
         if (requestedProtoMode()) {
           finish({
@@ -522,12 +443,6 @@
           });
         }
         return;
-      }
-      // 官方 color-lyrics 请求马上就要发出。运行时不允许 $done 之后继续跑异步
-      // 任务，所以这里只留下曲目 id：紧随其后的 connect-state 轮询会立刻并行
-      // 查第三方歌词，404 响应回来时缓存可能已经写好。
-      if (!activeMark(INFLIGHT_KEY, trackId, INFLIGHT_TTL_MS)) {
-        writeMark(PENDING_KEY, { id: trackId, at: Date.now() });
       }
     }
     finish({});
@@ -1245,10 +1160,6 @@
   }
 
   function emit(payload) {
-    if (PREFETCH) {
-      if (prefetchSettle) prefetchSettle(payload);
-      return;
-    }
     if (protoMode) {
       const bytes = encodeProto(payload.lyrics.lines, payload.lyrics.syncType, payload.lyrics.provider,
         payload.lyrics.providerLyricsId, payload.lyrics.language, payload.colors);

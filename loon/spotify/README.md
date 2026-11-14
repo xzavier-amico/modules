@@ -22,7 +22,6 @@
 | `unlock_playback` | auto | `auto` 移动端开启、桌面端关闭；强制 `true` / `false` 覆盖。桌面端写播放授权容易跳歌 |
 | `enable_lyrics` | true | 补全歌词；关闭后不加载歌词脚本 |
 | `lyrics_source` | auto | 歌词源；`auto` 并发查询网易云 / QQ / LRCLIB，不自动查 Musixmatch |
-| `prefetch` | true | 换歌时预取当前曲目，下一次状态轮询再预取下一首；快速连续切歌会跳过。关闭后只在打开歌词页时查询 |
 | `desktop` | auto | `auto` 按 User-Agent 识别 iPhone / iPad 与 Loon for Mac；识别不准时手动指定 `ios` / `macos` |
 
 ## 歌词
@@ -39,12 +38,10 @@
 - 曲名里带 `()` / `（）` 的装饰信息（影视剧名、节目名、歌手名等）会先去掉再查一次；括号里含 `Live`、`Remix`、`Acoustic`、`伴奏`、`版` 等版本词时保留，避免把现场版查成录音室版。返回结果仍按完整曲名或去掉装饰后的曲名校验。
 - LRCLIB 并行候选都没命中时，会再用歌名搜一次；仍按歌手 / 版本 / Live / 时长校验，不会拿别人的同名歌。
 - 第三方请求超时、429、5xx 或所有源都没结果时都不写缓存，下次打开会立即重试。
-- 歌词页总时限 5 秒，单个外部请求 4 秒；scrollsita 补卡只等 4 秒，超时就不补卡。
+- 歌词页总时限 5 秒，单个外部请求 4 秒；scrollsita 补卡最多等 8 秒（前 2 秒每 200ms、之后每 500ms），超时乐观补卡。
 - protobuf 补齐官方字段（含歌词卡使用的 `previewLines`），并将歌词额度限制归一为可显示状态。
 - 配色：未激活行黑字，当前 / 已唱行白字；命中元数据缓存时不再请求 embed，用缓存里的封面色，没有缓存时用默认中灰底。
-- scrollsita 列表缺少歌词 section 时先查歌词并写入 `spotify.lyrics.cache`，只有查到才补一格；官方已有则不重复补，查不到也不补空卡。
-- 预取歌词（`prefetch`，默认开）：`connect-state` 换歌后的第一次响应先查当前曲目，下一次轮询再按 `PlayerState.next_tracks` 查下一首（`spotify.queue` 按字段号 7 / 19 / 20 区分 current / prev / next，不会把上一首当成下一首）。当前曲目最多等 1.5 秒、下一首最多等 1 秒；1.5 秒内连续切歌会跳过预取，避免拖慢播放状态。歌词页和滚动页补卡通常直接命中缓存。
-- Loon / Egern 的脚本在 `$done` 之后会释放执行资源，不能真正后台跑网络请求；所以下一首的预取放在下一次 `connect-state` 轮询里，并限制等待时间，而不是在补卡响应里硬等。
+- scrollsita 列表缺少歌词 section 时轮询 `spotify.lyrics.cache`：命中就补一格（内容就绪），读到 `spotify.lyrics.miss` 不补，超时乐观补卡；官方已有则不重复补。
 
 歌词源：`lrclib`、`musixmatch`、`netease`、`qq`、`auto`（默认）。
 - LRCLIB 先按完整曲名查，再用去掉 `feat.` / `remaster` 等后缀的曲名重试（对应 EeveeSpotify 的 `strippedTrackTitle`），返回结果仍会重新校验歌手 / Live / 时长。

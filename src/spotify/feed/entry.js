@@ -48,20 +48,13 @@
     $done({ body: out });
   };
 
-  // 滚动页的歌词卡：客户端渲染完 Now Playing 列表后，不会因为 color-lyrics
-  // 拿到了歌词就回头补一格；第一次响应里少了这一格，往往要最小化 / 最大化
-  // 重新渲染才出现。所以这里「卡住」scrollsita 等歌词结果，但轮询的是
-  // color-lyrics / connect-state 已经写好的标志位（spotify.lyrics.cache），
-  // 不再自己另起一次第三方查询和 color-lyrics 抢时间：
-  //   * 标志位已有歌词   -> 立即补卡，内容就绪（最常见，实际零等待）；
-  //   * 确认没歌词       -> 不补卡，不会出现空卡；
-  //   * 等满窗口还没结果 -> 乐观补卡，内容随后由 color-lyrics 请求填充。
-  // 4.5 秒只是上限：歌词已就绪时第一次读就返回，pending 标记还会让官方请求
-  // 飞行期间的 connect-state 轮询并行去查，通常远不到上限就结束等待。
-  // 仍要留超时兜底，避免「客户端看到歌词卡才请求 color-lyrics」时互相等死。
-  // Eevee 里没有可抄的官方超时，按真机补卡成功率调整这两个常量即可。
-  const CARD_WAIT_MS = 4500;
-  const CARD_POLL_MS = 200;
+  // 补卡前卡住 scrollsita 等歌词结果：轮询歌词缓存，命中即补（内容就绪）、
+  // 读到 miss 不补空卡、超时乐观补卡（内容由 color-lyrics 请求填充）。
+  // 等待上限与步长在这里调整。
+  const CARD_WAIT_MS = 8000;
+  const CARD_FAST_MS = 2000;
+  const CARD_FAST_POLL_MS = 200;
+  const CARD_SLOW_POLL_MS = 500;
   if (isScroll && wantCard) {
     const card = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsCard : null;
     const hasCard = typeof hasLyricsCard === "function" && hasLyricsCard(body);
@@ -74,7 +67,7 @@
     if (typeof wait === "function") {
       wait(trackId, (ready, timedOut) => {
         finish(patchScroll(body, trackId, wantAds, !!ready || !!timedOut));
-      }, CARD_WAIT_MS, CARD_POLL_MS);
+      }, { max: CARD_WAIT_MS, fastUntil: CARD_FAST_MS, fastStep: CARD_FAST_POLL_MS, slowStep: CARD_SLOW_POLL_MS });
       return;
     }
     finish(patchScroll(body, trackId, wantAds, true));

@@ -23,10 +23,8 @@
 // third-party lyrics are synthesized when Spotify has none. The client modules
 // therefore contain no response scripts.
 //
-// The official request and the third-party lookup are started at the same time:
-// an official 200 with lyrics wins, while a 404 can use a result that is often
-// already ready. Total latency approaches the slower of the two, not their sum.
-// Set LYRICS_PARALLEL=false to restore the old serial flow.
+// The official request and the third-party lookup run in parallel; a 404 reuses
+// the lookup result. LYRICS_PARALLEL=false restores the serial flow.
 
 import { createPatcher } from "./patcher.js";
 import {
@@ -48,10 +46,8 @@ const SERVICE = "spotify-mock";
 const VERSION = "1.1.3";
 const UPSTREAM = "https://spclient.wg.spotify.com";
 const MUSIC_PREFIX = "/music";
-// scrollsita 补卡前的等待：窗口内查到歌词就补（内容就绪），明确查不到就不补
-// （不留空卡），超时才乐观补卡。Eevee 没有可抄的官方超时；按真机补卡成功率
-// 调整这一个常量即可，与客户端模块保持同一量级。
-const SCROLL_CARD_WAIT_MS = 4500;
+// 滚动页补卡前等待歌词查询的窗口：查到就补，确认没有就不补，超时乐观补卡。
+const SCROLL_CARD_WAIT_MS = 8000;
 
 const ROUTES = [
   // Spotify versions the bootstrap endpoint (/bootstrap/v1/bootstrap,
@@ -500,19 +496,15 @@ async function handle(request, env = {}) {
     }
   } else if (upstream.status >= 200 && upstream.status < 300) {
     const contentType = (upstream.headers.get("content-type") || "").toLowerCase();
-    // The scroll list needs its lyrics section in the very first response: the
-    // client renders the card list once and will not insert a new card later,
-    // even if color-lyrics succeeds. Add the section optimistically; the parallel
-    // color-lyrics lookup fills its contents. A recently confirmed miss skips it.
+    // The scroll list needs its lyrics section in the first response; the client
+    // will not insert a card later. A recently confirmed miss skips it.
     let scrollCard = null;
     if (route.kind === "scroll" && original.length) {
       const trackId = scrollTrackId(targetPath);
       const lyrics = lyricsOptions(env);
       if (trackId && lyrics.enabled && !patcher.hasLyricsCard(original) && !lyricsMiss(trackId)) {
-        // 客户端渲染完列表后不会因为 color-lyrics 拿到歌词就回头补一格。先给
-        // 并行查询 SCROLL_CARD_WAIT_MS 一个「明确有 / 明确没有」的机会：
-        // 查到就补、确认查不到就不补（零空卡）、超时才乐观补卡。查询本身不取消，
-        // 超时后仍会写缓存，随后到达的 color-lyrics 请求可以直接复用。
+        // 第一次渲染就要有这一格：先等查询给出结论，超时再乐观补卡。
+        // 查询不取消，超时后仍会写缓存供 color-lyrics 复用。
         const lookup = findLyrics(trackId, lyrics).catch((error) => {
           console.warn(`${SERVICE}: scroll lyrics lookup failed:`, error && (error.message || error));
           return { lyrics: null };

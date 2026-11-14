@@ -71,8 +71,7 @@ export function lyricsOptions(env = {}) {
     sources: sources.list,
     timeoutMs: numberIn(env.LYRICS_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1000, 30000),
     cacheTtlMs: numberIn(env.LYRICS_CACHE_TTL, DEFAULT_CACHE_TTL, 0, 604800) * 1000,
-    // 官方 color-lyrics 请求与第三方查询同时发出：官方 404 时第三方结果通常
-    // 已经就绪，不必再等一整轮查询。关掉后退回「先等官方、404 再查」的串行流程。
+    // 官方请求与第三方查询并行；关掉退回「先等官方、404 再查」。
     parallel: flag(env.LYRICS_PARALLEL, true),
   };
 }

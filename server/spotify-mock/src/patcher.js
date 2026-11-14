@@ -193,7 +193,7 @@ function buildPatcher($argument) {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
     if (Array.isArray(raw)) {
       const modeInFifth = ["full", "no_card", "metadata_only", "response_only", "card_only"].indexOf(raw[4]) >= 0;
-      opt = { spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2], enable_lyrics: raw[3], desktop: modeInFifth ? false : raw[4], lyrics_mode: modeInFifth ? raw[4] : raw[5], prefetch: raw[6] };
+      opt = { spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2], enable_lyrics: raw[3], desktop: modeInFifth ? false : raw[4], lyrics_mode: modeInFifth ? raw[4] : raw[5] };
     } else if (typeof raw === "string") {
       opt = JSON.parse(raw || "{}") || {};
     } else if (raw && "object" == typeof raw) {
@@ -247,9 +247,6 @@ function buildPatcher($argument) {
   const lyricsMetaOn = lyricsOn && (lyricsMode === "full" || lyricsMode === "no_card" || lyricsMode === "metadata_only");
   // 歌词卡片：full / card_only 时向 scrollsita 列表补一个真实的歌词 section。
   const lyricsCardOn = lyricsOn && (lyricsMode === "full" || lyricsMode === "card_only");
-  // 预取下一首：滚动页补卡时顺手把队列里下一首的歌词也查好写进缓存。
-  const prefetchOn = flag(opt.prefetch, true);
-
   // 响应体上限：超过上限直接放行，避免异常响应占满内存。
   const MAX_META_BYTES = 12 * 1024 * 1024; // extended-metadata / context-resolve / connect-state / metadata
   const MAX_FEED_BYTES = 12 * 1024 * 1024; // home / browse / scroll / remote-config / nebula
@@ -1279,8 +1276,6 @@ function buildPatcher($argument) {
   // 存储值：{ "<track id>": [title, artist, durationMs, savedAt] }，最多 24 首。
   const TRACK_CACHE_KEY = "spotify.track.meta";
   const TRACK_CACHE_MAX = 24;
-  const QUEUE_KEY = "spotify.queue";
-  const QUEUE_MAX = 8;
   const TITLE_KEYS = ["track_title", "title", "track_name"];
   const ARTIST_KEYS = ["artist_name", "artist"];
 
@@ -1370,64 +1365,6 @@ function buildPatcher($argument) {
     }
   }
 
-  // connect-state 的 PlayerState 字段号：track = 7，prev_tracks = 19，next_tracks = 20。
-  // 不能简单取“当前曲目后面第一首”：连接状态里 prev_tracks 也排在后面，按遍历顺序
-  // 取会把上一首当成下一首。这里按字段号把 current / next 分开。
-  function trackUriOf(fields) {
-    for (const f of fields) {
-      if (f.no !== 1 || f.w !== 2 || f.p.length !== 36) continue;
-      const value = text(f);
-      if (value && /^spotify:track:[A-Za-z0-9]{22}$/.test(value)) return value.slice(14);
-    }
-    return "";
-  }
-
-  function scanPlayerState(fields, out, depth) {
-    if (depth > 8 || out.current) return;
-    const currentField = first(fields, 7);
-    const nextFields = fields.filter((f) => f.no === 20 && f.w === 2);
-    const prevFields = fields.filter((f) => f.no === 19 && f.w === 2);
-    if (currentField && currentField.w === 2 && (nextFields.length || prevFields.length)) {
-      const current = parse(currentField.p);
-      const id = current ? trackUriOf(current) : "";
-      if (id) {
-        out.current = id;
-        out.next = nextFields
-          .map((f) => {
-            const sub = parse(f.p);
-            return sub ? trackUriOf(sub) : "";
-          })
-          .filter(Boolean)
-          .slice(0, QUEUE_MAX);
-        return;
-      }
-    }
-    for (const f of fields) {
-      if (f.w !== 2) continue;
-      const sub = parse(f.p);
-      if (sub) scanPlayerState(sub, out, depth + 1);
-    }
-  }
-
-  // feed 脚本补歌词卡时用这里存下的 next 预取下一首；换歌后再打开歌词页直接命中缓存。
-  function rememberQueue(queue) {
-    const store = cacheStore();
-    if (!store || !queue || !queue.current) return;
-    const next = (queue.next || []).slice(0, QUEUE_MAX);
-    try {
-      const raw = store.read(QUEUE_KEY);
-      const old = raw ? JSON.parse(raw) : null;
-      const same = old && old.current === queue.current &&
-        Array.isArray(old.next) && old.next.length === next.length &&
-        old.next.every((id, i) => id === next[i]);
-      // 队列没变时不重复写，避免 connect-state 轮询一直写存储。
-      if (same && Number(old.at) && Date.now() - Number(old.at) < 5 * 60 * 1000) return;
-      store.write(JSON.stringify({ current: queue.current, next: next, at: Date.now() }), QUEUE_KEY);
-    } catch (e) {
-      // 存储写失败不影响响应改写。
-    }
-  }
-
   function cacheTrackMeta(target, fields) {
     if (!cacheStore()) return;
     const trackUrl = /\/metadata\/4\/track\/([A-Za-z0-9]{22})/.exec(target);
@@ -1443,11 +1380,6 @@ function buildPatcher($argument) {
     const found = Object.create(null);
     collectTracks(fields, found, 0);
     rememberTracks(found);
-    if (target.indexOf("/connect-state/") >= 0) {
-      const queue = { current: "", next: [] };
-      scanPlayerState(fields, queue, 0);
-      rememberQueue(queue);
-    }
   }
 
   function patchMeta(buffer, target) {

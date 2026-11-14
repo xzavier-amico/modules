@@ -96,8 +96,6 @@ const TARGETS = [
       "premium/config.js",
       "premium/response.js",
       "premium/lyrics.js",
-      "premium/lyrics-prefetch.js",
-      "lyrics.js",
       "premium/entry.js",
     ],
   },

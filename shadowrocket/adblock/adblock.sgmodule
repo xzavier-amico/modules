@@ -5,6 +5,7 @@
 # HTTPDNS / DoH 主机由下面的域名与 IP 规则直接拒绝，不需要强制 HTTP 引擎。
 
 [Rule]
+DOMAIN-KEYWORD,httpdns,REJECT
 DOMAIN,httpdns.alicdn.com,REJECT
 DOMAIN,httpdns-api.aliyuncs.com,REJECT
 DOMAIN,httpdns-sc.aliyuncs.com,REJECT
