@@ -255,15 +255,23 @@ test("LYRICS_ENABLED=false passes the official 404 through", async () => {
   assert.equal(calls.some((url) => url.indexOf("lrclib") >= 0), false);
 });
 
-test("no third-party match keeps the official 404", async () => {
-  stubNetwork([
+test("no third-party match keeps the official 404 and is not cached", async () => {
+  const calls = stubNetwork([
     ["spclient.wg.spotify.com", () => upstreamResponse(new Uint8Array(0), 404, "application/x-protobuf")],
     ["open.spotify.com/oembed", () => upstreamResponse(JSON.stringify({ title: "Hello", author_name: "Adele" }), 200, "application/json")],
   ]);
+  const lookups = () => calls.filter((url) => url.includes("open.spotify.com/oembed")).length;
 
-  const response = await handle(lyricsRequest(), {});
-  assert.equal(response.status, 404);
-  assert.equal(response.headers.get("x-spotify-mock"), "passthrough");
+  const first = await handle(lyricsRequest(), {});
+  assert.equal(first.status, 404);
+  assert.equal(first.headers.get("x-spotify-mock"), "passthrough");
+  const afterFirst = lookups();
+  assert.equal(afterFirst, 1);
+
+  const second = await handle(lyricsRequest(), {});
+  assert.equal(second.status, 404);
+  assert.equal(second.headers.get("x-spotify-mock"), "passthrough");
+  assert.equal(lookups(), afterFirst + 1, "a miss must be retried on the next request");
 });
 
 test("scroll adds the lyrics card only when lyrics are ready, then reuses the cache", async () => {

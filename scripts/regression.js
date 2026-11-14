@@ -281,7 +281,7 @@ check("Spotify client plugins route scrollsita to the updated ad filter", () => 
   for (const file of ["loon/spotify/spotify-premium.plugin", "loon/spotify/spotify-premium-mac.plugin", "egern/spotify/spotify-premium.yaml", "shadowrocket/spotify/spotify-premium.sgmodule"]) {
     const rules = read(file).split("\n").filter((line) => !line.trim().startsWith("#"));
     assert.ok(rules.some((line) => line.includes("scrollsita")), file + " must match scrollsita");
-    assert.ok(rules.some((line) => line.includes("spotify.feed.js?v=20261114-7")));
+    assert.ok(rules.some((line) => line.includes("spotify.feed.js?v=20261114-8")));
   }
 });
 
@@ -395,7 +395,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
 }
 
 for (const platform of ["loon", "egern", "shadowrocket"]) {
-  check(platform + " Spotify caches resolved lyrics and honours the miss TTL", () => {
+  check(platform + " Spotify caches resolved lyrics and does not cache misses", () => {
     const file = platform + "/spotify/js/spotify_lyrics.js";
     const map = {};
     const store = { read: (key) => (key in map ? map[key] : null), write: (value, key) => { map[key] = value; return true; } };
@@ -426,20 +426,40 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.equal(JSON.parse(second.body).lyrics.lines[0].words, "Cached lyric", platform);
     assert.equal(calls, afterFirst, platform + " must not make extra requests on a cache hit");
 
-    // 查不到时写一条短 TTL 的 miss；紧接着的下一次请求不再查源。
+    // 换歌词源（auto ↔ lrclib）后缓存 key 的前缀会变；仍按曲目 id 复用，避免重查。
+    const crossSource = run(file, "", url, ["auto", true], {
+      $response: { status: 404, body: "" },
+      $persistentStore: store,
+      $httpClient: { get: () => assert.fail("a cached track must be reused across lyrics sources") },
+    });
+    assert.equal(JSON.parse(crossSource.body).lyrics.lines[0].words, "Cached lyric", platform);
+
+    // 查不到时不写缓存；下一次打开会重新查询。
     const missUrl = url.replace("/track/id", "/track/missing");
+    let missCalls = 0;
+    const missHttp = {
+      get: (request, callback) => {
+        missCalls += 1;
+        callback(null, { status: 200 }, JSON.stringify({}));
+      },
+    };
     const miss = run(file, "", missUrl, ["lrclib", true], {
       $response: { status: 404, body: "" },
       $persistentStore: store,
-      $httpClient: { get: (request, callback) => callback(null, { status: 200 }, JSON.stringify(request.url.includes("oembed") ? {} : {})) },
+      $httpClient: missHttp,
     });
     assert.equal(Object.keys(miss).length, 0, platform);
+    const afterMiss = missCalls;
+    assert.ok(afterMiss > 0, platform);
+    const missCache = JSON.parse(map["spotify.lyrics.cache"] || "{}");
+    assert.equal(missCache["lrclib|missing"], undefined, platform + " must not cache a miss");
     const repeated = run(file, "", missUrl, ["lrclib", true], {
       $response: { status: 404, body: "" },
       $persistentStore: store,
-      $httpClient: { get: () => assert.fail("a cached miss must not call any provider") },
+      $httpClient: missHttp,
     });
     assert.equal(Object.keys(repeated).length, 0, platform);
+    assert.ok(missCalls > afterMiss, platform + " must retry on the next request");
   });
 
   check(platform + " Spotify browse drops named ad sections", () => {
@@ -520,7 +540,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     });
     assert.equal(Object.keys(miss).length, 0, platform + " must not add an empty lyrics card");
     const missCache = JSON.parse(emptyMap["spotify.lyrics.cache"] || "{}");
-    assert.equal(missCache["lrclib|" + id] && missCache["lrclib|" + id].m, 1, platform + " must cache the miss");
+    assert.equal(missCache["lrclib|" + id], undefined, platform + " must not cache a miss");
   });
 }
 
@@ -1479,7 +1499,7 @@ check("Loon uses normal arguments and retains legacy mode compatibility", () => 
   const scriptRules = plugin.split("\n").filter((line) => line.includes('then script("'));
   assert.equal(scriptRules.length, 6);
   for (const line of scriptRules) {
-    const version = line.includes('tag="spotify.lyrics"') ? "20261114-6" : line.includes("spotify.feed") ? "20261114-7" : "20261114-7";
+    const version = line.includes('tag="spotify.lyrics"') ? "20261114-9" : line.includes("spotify.feed") ? "20261114-8" : "20261114-8";
     assert.ok(line.includes("?v=" + version));
     const tuple = /then script\("[^"]+", (\{.*\})\) with/.exec(line)[1];
     assert.match(tuple, /^\{\$\{\w+\}(?:, \$\{\w+\})*\}$/, "Loon tuple must contain only declared argument references");

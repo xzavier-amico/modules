@@ -243,11 +243,10 @@ export default async function (ctx) {
 
   // 歌词结果缓存：同一首歌的播放器、歌词页与歌词卡会重复请求 color-lyrics，
   // 命中后直接回缓存，不再打第三方源。命中的歌词基本不会变，存久一点；
-  // 查不到时只记 10 分钟，避免一次网络抖动把这首歌永久判成「无歌词」。
+  // 查不到 / 超时都不写缓存，避免一次网络抖动把这首歌判成「无歌词」。
   const LYRICS_CACHE_KEY = "spotify.lyrics.cache";
-  const LYRICS_CACHE_MAX = 8;
+  const LYRICS_CACHE_MAX = 24;
   const LYRICS_CACHE_HIT_TTL = 24 * 60 * 60 * 1000;
-  const LYRICS_CACHE_MISS_TTL = 10 * 60 * 1000;
   const LYRICS_CACHE_MAX_LINES = 400;
   const LYRICS_CACHE_MAX_BYTES = 400 * 1024;
   const LYRICS_DEADLINE_MS = 15000;
@@ -327,13 +326,25 @@ export default async function (ctx) {
 
   const lyricsCacheKey = (id) => lyricsSourceKey() + "|" + id;
 
-  function readLyricsCache(key) {
+  function readLyricsCache(key, id) {
     const map = readJsonMap(LYRICS_CACHE_KEY);
-    const entry = map && map[key];
-    if (!entry || "object" != typeof entry) return null;
-    const ttl = entry.m ? LYRICS_CACHE_MISS_TTL : LYRICS_CACHE_HIT_TTL;
-    if (!(Date.now() - Number(entry.t || 0) < ttl)) return null;
-    if (entry.m) return { miss: true };
+    const valid = (value) => !!value && "object" == typeof value && !value.m &&
+      Date.now() - Number(value.t || 0) < LYRICS_CACHE_HIT_TTL;
+    let entry = map && map[key];
+    // 配置换过歌词源（auto ↔ lrclib）时旧缓存 key 会不同；按曲目 id 再找一次，
+    // 避免同一首歌已经缓存过却因为前缀不同重新查源。
+    if (!valid(entry) && id) {
+      const suffix = "|" + id;
+      for (const name of Object.keys(map || {})) {
+        if (name.slice(-suffix.length) !== suffix) continue;
+        const candidate = map[name];
+        if (valid(candidate)) {
+          entry = candidate;
+          break;
+        }
+      }
+    }
+    if (!valid(entry)) return null;
     const lines = Array.isArray(entry.a) ? entry.a : [];
     if (!lines.length) return null;
     const signed = (value) => (value > 0x7fffffff ? value - 0x100000000 : value);
@@ -369,36 +380,34 @@ export default async function (ctx) {
   }
 
   function writeLyricsCache(key, payload) {
+    // 只缓存真正拿到的歌词；查不到 / 超时都不写，下一次打开可以立刻重试。
+    if (!payload) return;
     const map = readJsonMap(LYRICS_CACHE_KEY) || {};
     const now = Date.now();
-    if (!payload) {
-      map[key] = { t: now, m: 1 };
-    } else {
-      const lyrics = payload.lyrics || {};
-      const colors = payload.colors || {};
-      const lines = [];
-      const raw = Array.isArray(lyrics.lines) ? lyrics.lines : [];
-      for (let i = 0; i < raw.length && i < LYRICS_CACHE_MAX_LINES; i += 1) {
-        const line = raw[i];
-        if (!line || typeof line.words !== "string" || !line.words.trim()) continue;
-        lines.push([Number(line.startTimeMs) || 0, line.words.slice(0, 200)]);
-      }
-      if (!lines.length) return;
-      map[key] = {
-        t: now,
-        m: 0,
-        s: lyrics.syncType === "UNSYNCED" ? "UNSYNCED" : "LINE_SYNCED",
-        p: String(lyrics.provider || "LRCLIB"),
-        i: lyrics.providerLyricsId === undefined || lyrics.providerLyricsId === null ? "" : String(lyrics.providerLyricsId),
-        l: String(lyrics.language || "en"),
-        c: [Number(colors.background) || 0xff808080, Number(colors.text) || 0xff000000, Number(colors.highlightText) || 0xffffffff],
-        a: lines,
-      };
+    const lyrics = payload.lyrics || {};
+    const colors = payload.colors || {};
+    const lines = [];
+    const raw = Array.isArray(lyrics.lines) ? lyrics.lines : [];
+    for (let i = 0; i < raw.length && i < LYRICS_CACHE_MAX_LINES; i += 1) {
+      const line = raw[i];
+      if (!line || typeof line.words !== "string" || !line.words.trim()) continue;
+      lines.push([Number(line.startTimeMs) || 0, line.words.slice(0, 200)]);
     }
+    if (!lines.length) return;
+    map[key] = {
+      t: now,
+      m: 0,
+      s: lyrics.syncType === "UNSYNCED" ? "UNSYNCED" : "LINE_SYNCED",
+      p: String(lyrics.provider || "LRCLIB"),
+      i: lyrics.providerLyricsId === undefined || lyrics.providerLyricsId === null ? "" : String(lyrics.providerLyricsId),
+      l: String(lyrics.language || "en"),
+      c: [Number(colors.background) || 0xff808080, Number(colors.text) || 0xff000000, Number(colors.highlightText) || 0xffffffff],
+      a: lines,
+    };
     for (const id of Object.keys(map)) {
       const entry = map[id];
-      const ttl = entry && entry.m ? LYRICS_CACHE_MISS_TTL : LYRICS_CACHE_HIT_TTL;
-      if (!entry || !(now - Number(entry.t || 0) < ttl)) delete map[id];
+      // 清掉旧版本留下的 miss 记录和过期条目。
+      if (!entry || entry.m || !(now - Number(entry.t || 0) < LYRICS_CACHE_HIT_TTL)) delete map[id];
     }
     const byAge = () => Object.keys(map).sort((a, b) => Number(map[b].t || 0) - Number(map[a].t || 0));
     for (const id of byAge().slice(LYRICS_CACHE_MAX)) delete map[id];
@@ -455,15 +464,10 @@ export default async function (ctx) {
   let deadline;
   let plainTimer;
   let plainFallback = null;
-  // 第三方请求是否出现过网络错误 / 5xx / 429；这类失败不应写成「无歌词」短缓存。
-  let networkFailed = false;
   let cacheKey = "";
   let prefetchTimer;
   let prefetchCallback = null;
   let prefetchSettle = null;
-  // 本轮预取是否还有没回来的来源（超时 / 先发纯文本）。feed 用它在结束后决定
-  // 能不能紧接着预取下一首：还有请求在飞时重置状态会让旧结果写进新曲目的缓存。
-  let prefetchIncomplete = false;
   const finish = (value) => {
     if (settled) return;
     settled = true;
@@ -482,45 +486,40 @@ export default async function (ctx) {
       if (prefetchTimer !== undefined && typeof clearTimeout === "function") clearTimeout(prefetchTimer);
       const callback = prefetchCallback;
       prefetchCallback = null;
-      if (callback) callback(payload, { incomplete: prefetchIncomplete });
+      if (callback) callback(payload);
     };
     globalThis.__spotifyLyricsPrefetch = (id, callback) => {
       if (!id || typeof callback !== "function") return;
       if (!flag(opt.enable_lyrics, true)) {
-        callback(null, { incomplete: false });
+        callback(null);
         return;
       }
       // 同一脚本实例会连续预取当前曲目和下一首：每轮重置状态与定时器。
-      // 只有上一轮没有遗留请求时才会走到这里（feed 用 incomplete 拦截）。
       if (prefetchTimer !== undefined && typeof clearTimeout === "function") clearTimeout(prefetchTimer);
       if (plainTimer !== undefined && typeof clearTimeout === "function") clearTimeout(plainTimer);
       settled = false;
-      networkFailed = false;
       plainFallback = null;
-      prefetchIncomplete = false;
       prefetchTimer = undefined;
       plainTimer = undefined;
       trackId = id;
       cacheKey = lyricsCacheKey(id);
-      const cached = readLyricsCache(cacheKey);
+      const cached = readLyricsCache(cacheKey, id);
       if (cached) {
         prefetchCallback = null;
-        callback(cached.miss ? null : cached.payload, { incomplete: false });
+        callback(cached.payload);
         return;
       }
       prefetchCallback = callback;
       if (typeof setTimeout === "function") {
         prefetchTimer = setTimeout(() => {
           if (settled) return;
-          // 超时不算「确认没有歌词」，不写 miss，下次歌词页还能重试。
-          networkFailed = true;
-          prefetchIncomplete = true;
+          // 查不到 / 超时都不写缓存，下次打开还能重试。
           prefetchSettle(null);
         }, PREFETCH_DEADLINE_MS);
       }
       resolvePublicLyrics((payload) => {
         if (settled) return;
-        if (payload || !networkFailed) writeLyricsCache(cacheKey, payload);
+        writeLyricsCache(cacheKey, payload);
         prefetchSettle(payload);
       });
     };
@@ -606,12 +605,8 @@ export default async function (ctx) {
   // 歌词结果缓存：同一首歌在播放器 / 歌词页 / 歌词卡之间的重复请求不再重复查源。
   // 只缓存「官方没有歌词」的分支，官方歌词不会走到这里。
   cacheKey = lyricsCacheKey(trackId);
-  const cachedLyrics = readLyricsCache(cacheKey);
+  const cachedLyrics = readLyricsCache(cacheKey, trackId);
   if (cachedLyrics) {
-    if (cachedLyrics.miss) {
-      finish({});
-      return;
-    }
     emit(cachedLyrics.payload);
     return;
   }
@@ -619,8 +614,6 @@ export default async function (ctx) {
   // 总时限；超时后用纯文本兜底，没有就按「没有歌词」放行。
   if (typeof setTimeout === "function") deadline = setTimeout(() => {
     if (settled) return;
-    // 超时说明至少有一个源没按时回来，不能当作「确认无歌词」写短缓存。
-    networkFailed = true;
     if (plainFallback) {
       writeLyricsCache(cacheKey, plainFallback);
       emit(plainFallback);
@@ -630,8 +623,8 @@ export default async function (ctx) {
   }, LYRICS_DEADLINE_MS);
   resolveLyrics((payload) => {
     if (settled) return;
-    // 纯网络失败不写 miss，下一次打开还能重试；只有所有源都明确没结果才记 10 分钟。
-    if (payload || !networkFailed) writeLyricsCache(cacheKey, payload);
+    // 只有真正拿到歌词才写缓存；查不到 / 超时 / 网络失败都留给下次重试。
+    writeLyricsCache(cacheKey, payload);
     if (!payload) {
       finish({});
       return;
@@ -769,7 +762,6 @@ export default async function (ctx) {
           // 5 秒内还没有同步版本就先把纯文本发出去，后续结果不再覆盖。
           if (typeof setTimeout === "function") plainTimer = setTimeout(() => {
             if (settled || !plainFallback) return;
-            if (PREFETCH) prefetchIncomplete = true;
             writeLyricsCache(cacheKey, plainFallback);
             emit(plainFallback);
           }, PLAIN_FALLBACK_MS);
@@ -1177,12 +1169,9 @@ export default async function (ctx) {
         if (done || settled) return;
         const statusCode = Number(response && response.status);
         if (error || !response) {
-          networkFailed = true;
           reply(null);
           return;
         }
-        // 429 / 5xx 是临时故障，标记后不写「无歌词」短缓存，下次还能重试。
-        if (statusCode === 429 || statusCode >= 500) networkFailed = true;
         if (statusCode >= 400 || !data) {
           reply(null);
           return;
@@ -1217,7 +1206,6 @@ export default async function (ctx) {
       }
       onReply(new Error("no http client"), null, null);
     } catch (e) {
-      networkFailed = true;
       reply(null);
     }
   }

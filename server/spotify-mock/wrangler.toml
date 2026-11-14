@@ -17,7 +17,6 @@ workers_dev = true
 # LYRICS_SOURCE = "lrclib"
 # LYRICS_TIMEOUT_MS = "8000"
 # LYRICS_CACHE_TTL = "21600"
-# LYRICS_NEGATIVE_CACHE_TTL = "600"
 # MOCK_PREFIX = ""
 
 # 建议打开日志，方便确认补丁有没有命中。日志里不会打印请求体或 Authorization。

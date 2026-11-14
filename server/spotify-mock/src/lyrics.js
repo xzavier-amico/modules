@@ -19,7 +19,6 @@ const AUTO_SOURCES = ["lrclib", "musixmatch", "netease", "qq"];
 
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_CACHE_TTL = 21600;
-const DEFAULT_NEGATIVE_CACHE_TTL = 600;
 const MAX_CACHE_ENTRIES = 500;
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 4000;
@@ -68,8 +67,6 @@ export function lyricsOptions(env = {}) {
     sources: sources.list,
     timeoutMs: numberIn(env.LYRICS_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1000, 30000),
     cacheTtlMs: numberIn(env.LYRICS_CACHE_TTL, DEFAULT_CACHE_TTL, 0, 604800) * 1000,
-    negativeCacheTtlMs:
-      numberIn(env.LYRICS_NEGATIVE_CACHE_TTL, DEFAULT_NEGATIVE_CACHE_TTL, 0, 86400) * 1000,
   };
 }
 
@@ -80,7 +77,6 @@ export function lyricsInfo(env = {}) {
     source: options.source,
     timeoutMs: options.timeoutMs,
     cacheTtl: Math.round(options.cacheTtlMs / 1000),
-    negativeCacheTtl: Math.round(options.negativeCacheTtlMs / 1000),
   };
 }
 
@@ -455,13 +451,13 @@ function cacheGet(key) {
 }
 
 function cacheSet(key, value, options) {
-  const ttl = value ? options.cacheTtlMs : options.negativeCacheTtlMs;
-  if (!ttl) return;
+  // 只缓存真正拿到的歌词；查不到 / 超时都不写，下一次请求立刻重试。
+  if (!value || !options.cacheTtlMs) return;
   if (cache.size >= MAX_CACHE_ENTRIES) {
     const oldest = cache.keys().next().value;
     if (oldest !== undefined) cache.delete(oldest);
   }
-  cache.set(key, { value, expires: Date.now() + ttl });
+  cache.set(key, { value, expires: Date.now() + options.cacheTtlMs });
 }
 
 async function resolveLyrics(trackId, options) {

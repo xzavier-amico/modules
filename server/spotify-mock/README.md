@@ -155,8 +155,7 @@ docker run --rm -p 8787:8787 \
 | `LYRICS_ENABLED` | true | 官方没有歌词时是否用第三方歌词补全；关闭后只清额度限制 |
 | `LYRICS_SOURCE` | lrclib | `lrclib` / `musixmatch` / `netease` / `qq`；`auto` 依次尝试，也可用逗号组合，如 `lrclib,netease` |
 | `LYRICS_TIMEOUT_MS` | 8000 | 一次歌词解析（元数据 + 所有歌词源）的总超时 |
-| `LYRICS_CACHE_TTL` | 21600 | 命中歌词的缓存秒数 |
-| `LYRICS_NEGATIVE_CACHE_TTL` | 600 | 未命中歌词的缓存秒数，避免反复打第三方接口 |
+| `LYRICS_CACHE_TTL` | 21600 | 命中歌词的缓存秒数；查不到 / 超时不缓存，下次请求会重试 |
 | `MOCK_PREFIX` | 空 | 可选路径前缀，如 `/change-me`；设置后模块地址要带上 |
 | `HOST` | 127.0.0.1 | 仅本机 Node 服务 |
 | `PORT` | 8787 | 仅本机 Node 服务 |

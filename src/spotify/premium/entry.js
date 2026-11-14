@@ -20,19 +20,33 @@
       if (!queue || !queue.current) return null;
       const current = queue.current;
       const next = Array.isArray(queue.next) ? queue.next[0] || "" : "";
+      const lyrics = JSON.parse(store.read("spotify.lyrics.cache") || "{}");
+      const now = Date.now();
+      const cached = (id) => {
+        const suffix = "|" + id;
+        for (const key of Object.keys(lyrics || {})) {
+          if (key.slice(-suffix.length) !== suffix) continue;
+          const entry = lyrics[key];
+          // 与歌词脚本一致：命中缓存保留 24 小时；过期条目不能阻止重新预取。
+          if (entry && !entry.m && now - Number(entry.t || 0) < 24 * 60 * 60 * 1000) return true;
+        }
+        return false;
+      };
       const lastRaw = store.read("spotify.prefetch.last");
       const last = lastRaw ? JSON.parse(lastRaw) : null;
-      const recent = last && Number(last.at) && Date.now() - Number(last.at) < 1500;
-      const currentMark = marker("spotify.prefetch.current", 3 * 60 * 1000);
-      if (!currentMark || currentMark.id !== current) {
-        // 连续快速切歌时先让播放状态返回，别每一首都在 connect-state 里等 1.5 秒。
-        if (currentMark && recent) return null;
-        store.write(JSON.stringify({ id: current, at: Date.now() }), "spotify.prefetch.current");
-        store.write(JSON.stringify({ id: current, at: Date.now() }), "spotify.prefetch.last");
-        return { id: current, wait: 1500 };
+      const recent = last && Number(last.at) && now - Number(last.at) < 1500;
+      if (!cached(current)) {
+        const currentMark = marker("spotify.prefetch.current", 15 * 1000);
+        if (!currentMark || currentMark.id !== current) {
+          // 连续快速切歌时先让播放状态返回，别每一首都在 connect-state 里等 1.5 秒。
+          if (currentMark && recent) return null;
+          store.write(JSON.stringify({ id: current, at: Date.now() }), "spotify.prefetch.current");
+          store.write(JSON.stringify({ id: current, at: Date.now() }), "spotify.prefetch.last");
+          return { id: current, wait: 1500 };
+        }
       }
-      if (next && next !== current) {
-        const nextMark = marker("spotify.prefetch.next", 10 * 60 * 1000);
+      if (next && next !== current && !cached(next)) {
+        const nextMark = marker("spotify.prefetch.next", 45 * 1000);
         if (!nextMark || nextMark.id !== next) {
           store.write(JSON.stringify({ id: next, at: Date.now() }), "spotify.prefetch.next");
           return { id: next, wait: 1000 };
