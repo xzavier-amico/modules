@@ -1851,6 +1851,19 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return;
   }
 
+  try {
+    console.log("[spotify-diag]", JSON.stringify({
+      v: 20261115,
+      url: String(url).slice(0, 70),
+      enabled: enabled, spoof: spoof, adsOn: adsOn,
+      desktop: desktop, playOn: playOn,
+      bodyType: Object.prototype.toString.call(res.body),
+      isView: ArrayBuffer.isView(res.body),
+      len: res.body && res.body.length,
+      arg: opt,
+    }));
+  } catch (e) {}
+
   let body = res.body;
   if (body instanceof ArrayBuffer) body = new Uint8Array(body);
   // JSON 响应（桌面端 nebula 属性 / 远程配置）有些客户端直接把字符串交过来，
