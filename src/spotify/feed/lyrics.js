@@ -46,7 +46,7 @@
   // ---- 曲目元数据回填 ---------------------------------------------------
   //
   // 歌词脚本取曲名 / 歌手要先读 spotify.track.meta；没命中就只能回源
-  // open.spotify.com（oEmbed / embed，实测 2.6s），整条歌词链路跟着变慢。
+  // open.spotify.com（oEmbed / embed），整条歌词链路跟着变慢。
   // scrollsita 的当前曲目 section 里本来就带着 track_title / artist_name
   // 的 metadata map，顺手抄一份写进同一个缓存：下次同一首再进 Now Playing
   // 就是零请求。

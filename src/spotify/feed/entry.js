@@ -7,7 +7,6 @@
 
   const url = res.url || (typeof $request !== "undefined" && $request && $request.url) || "";
   const status = Number(res.status || res.statusCode);
-  const startedAt = Date.now();
 
   if (status >= 300) {
     $done({});
@@ -50,23 +49,12 @@
   };
 
   // 补卡不等歌词：Now Playing 打开时客户端先渲染列表，之后才合并 scrollsita 的
-  // 响应；响应晚到只更新模型、不重绘列表，卡片要收起再展开才出现（实测）。
-  // 所以立刻补卡，内容由随后的 color-lyrics 响应填充——歌词已经在缓存里时，
-  // 客户端拿到卡片就会直接取到内容。
+  // 响应；晚到的响应只更新模型、不重绘列表，卡片要收起再展开才出现。
+  // 所以立刻补卡，内容由随后的 color-lyrics 响应填充。
   if (isScroll && wantCard) {
     const card = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsCard : null;
     const hasCard = typeof hasLyricsCard === "function" && hasLyricsCard(body);
     const allowed = !!trackId && !hasCard && (typeof card === "function" ? card(trackId) : true);
-    // 慢请求诊断：补卡决策只在耗时超过 500ms 或跳过时打一行，平时不输出。
-    const elapsed = Date.now() - startedAt;
-    if ((elapsed >= 500 || !allowed) && typeof console !== "undefined" && console.log) {
-      try {
-        console.log("[spotify.feed.slow] id=" + trackId + " elapsed=" + elapsed + "ms card=" +
-          (allowed ? "add" : "skip") + " existing=" + (hasCard ? 1 : 0));
-      } catch (e) {
-        // 日志失败不影响响应。
-      }
-    }
     if (!allowed) {
       finish(patchScroll(body, trackId, wantAds, false));
       return;

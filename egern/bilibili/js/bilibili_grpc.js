@@ -1011,7 +1011,7 @@ export default async function (ctx) {
   RULES[VIEW + "TFInfo"] = (m) => rewrite(m, [2, 3]);
 
   // 新版详情页：顶层 cm(7) + 详情 Tab(5) 里的推广模块与推荐广告卡。
-  // 删除与改写一次扫描完成，不再先扫描再完整解析。
+  // 删除与改写一次扫描完成。
   RULES[UNITE + "View"] = (m) => rewrite(m, [7], null, { 5: cleanTab });
   // 异步补充的详情页：cm(1) + tab(2) 里的模块（AIRelateTab.modules = 1）
   RULES[UNITE + "AIRelateAsync"] = (m) => rewrite(m, [1], null, { 2: (tab) => cleanModules(tab, 1) });

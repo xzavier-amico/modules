@@ -135,7 +135,7 @@ export default async function (ctx) {
 // 只处理请求阶段：按账号地区改写 URL 里的 timezone（识别不到时用
 // Asia/Hong_Kong），避免设备时区与账号地区不一致。
 //
-// 不再改 Accept-Language：Spotify 的歌词语言由账号 / 客户端配置决定，
+// 不改 Accept-Language：Spotify 的歌词语言由账号 / 客户端配置决定，
 // 改请求头只会影响接口的本地化文案，改不了歌词文本本身。
 //
 // 账号地区由 spotify.js 从 bootstrap / UCS 的账号属性里抄到

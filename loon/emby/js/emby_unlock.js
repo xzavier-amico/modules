@@ -18,7 +18,7 @@
 //   /admin/service/registration/validateDevice
 //   /admin/service/registration/getStatus   订阅状态
 //
-// 接口按 Emby iOS 1.9.9 的实测结果维护。2026-11 实测这几个接口仍然在线：
+// 接口按 Emby iOS 1.9.9 维护。2026-11 验证这几个接口仍然在线：
 // validate 返回的仍是
 // {"featId":"…","registered":false,"expDate":"1900-01-01","key":""} 这个结构，
 // appstore/register 对无效凭据返回 402。

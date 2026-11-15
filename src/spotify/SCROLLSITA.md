@@ -6,7 +6,7 @@
 
 客户端渲染完列表后不会再插入新的歌词卡，所以第一次响应就要把 section 补上。
 **补卡不等歌词**：打开 Now Playing 时客户端先渲染列表，之后才合并 scrollsita 的响应；
-响应晚到只更新模型、不重绘列表，卡片要收起再展开才出现（实测）。所以收到 scroll
+响应晚到只更新模型、不重绘列表，卡片要收起再展开才出现。所以收到 scroll
 就立刻补卡，内容由随后的 `color-lyrics` 响应填充。
 
 ```text
@@ -22,16 +22,15 @@ section {
   标记不作数，这次可能就查到了。feed 只读这个标记做判断，不再轮询等待。
 - `spotify.lyrics.cache.v2`：`color-lyrics` 响应阶段拿到歌词就会写它；卡片渲染时
   客户端自己来取，所以补卡时缓存是否就绪不影响是否补卡。
-- 曾经的「等 `spotify.lyrics.served` 再放行」已经去掉：等 200ms 也是等，
-  响应照样晚于客户端第一次渲染。
-- 官方已有歌词 section 时不重复补；`section_id` 复用真实歌词 section 的值，合成字节与官方完全一致（85 字节，只有曲目 id 不同）。
-- 补卡位置是列表最前面（第 0 位）：客户端按顺序渲染，第 0 位与第 1 位都能显示；有 Event 卡时会被挤走，这是接受的代价。
+- 补卡不等待歌词：等待只会让 scroll 响应晚于客户端首次渲染，等多久都没用。
+- 官方已有歌词 section 时不重复补；`section_id` 复用真实歌词 section 的值，合成结构与官方一致。
+- 补卡位置是列表最前面（第 0 位）；有 Event 卡时会被挤走，这是接受的代价。
 - 只处理当前曲目的列表；无法逐字节重建响应时原样放行。
 
 ## 曲目元数据回填
 
 歌词脚本取曲名 / 歌手要先读 `spotify.track.meta.v2`；没命中就只能回源 `open.spotify.com`
-（oEmbed 与 embed 并行，实测各 2.6 秒）。首次进 Now Playing 时 feed 可能刚写好这份缓存：
+（oEmbed 与 embed 并行发出）。首次进 Now Playing 时 feed 可能刚写好这份缓存：
 歌词脚本会每 100ms 看一次、最多 2 秒，命中就直接开始查歌词，不必等 oEmbed。滚动页的当前曲目 section 里本来就带着
 `track_title` / `artist_name` 的 metadata map，feed 顺手抄一份写进同一个缓存，
 下次同一首再进 Now Playing 就是零请求。

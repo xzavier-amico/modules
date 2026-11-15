@@ -76,7 +76,7 @@
     return changed ? wireConcat(parts) : null;
   }
 
-  // 兼容旧入口：首页与浏览页共用同一套 section 过滤。
+  // 首页与浏览页共用同一套 section 过滤。
   function stripHomeAds(buffer) {
     return stripSectionAds(buffer);
   }
@@ -133,7 +133,7 @@
   // 一项，避免留下「有 id、没有内容」的空卡片。实际拼接在 feed/lyrics.js 的
   // patchScroll 里和补歌词 section 一起做，只遍历一次。
   // 服务端在歌词查询完成后传入 trackId / wantCard；客户端则由 feed/entry.js 在
-  // 预热歌词缓存后传入。默认只删广告，保持旧调用方的行为。
+  // 预热歌词缓存后传入。默认只删广告。
   function hideScrollAds(buffer, trackId, wantCard) {
     return patchScroll(buffer, trackId || "", true, !!wantCard);
   }

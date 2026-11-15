@@ -253,7 +253,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   let changed = false;
 
   // 清空一个广告位，保持原来的容器类型：数组→[]、对象→{}、字符串→""。
-  // 把对象位改成 [] 会让客户端解码失败并弹「网络不畅」，这是之前首页报错的来源。
+  // 把对象位改成 [] 会让客户端解码失败并弹「网络不畅」。
   // 已经是空值的不重复写，避免没有命中时也返回一个新 body。
   const clear = (holder, key) => {
     if (!holder || "object" != typeof holder) return;

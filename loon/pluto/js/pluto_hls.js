@@ -6,7 +6,7 @@
 
 // Pluto TV Clean — HLS 点播清单过滤。
 //
-// 实测一份带广告的清单（美国直播流，广告时段）长这样：
+// 一份带广告的清单（美国直播流，广告时段）示例：
 //
 //   #EXT-X-DISCONTINUITY
 //   #EXT-X-PROGRAM-DATE-TIME:2026-11-07T03:23:47.667Z
@@ -129,7 +129,7 @@
   }
 
   // 切块：每块 = 若干标签 + 一行分片地址。
-  // 实测点播清单在 range 边界会出现只有 #EXTINF、没有分片地址的空块；这种块不能
+  // 点播清单在 range 边界可能出现只有 #EXTINF、没有分片地址的空块；这种块不能
   // 直接写回去，但它的 KEY / DISCONTINUITY / ENDLIST 标签要留给下一块或清单尾。
   const blocks = [];
   let cur = null;
@@ -308,7 +308,7 @@
 
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i];
-    // 清单里偶尔有只有 #EXTINF、没有分片地址的空块（实测点播 range 边界会出现），
+    // 清单里偶尔有只有 #EXTINF、没有分片地址的空块（点播 range 边界），
     // 这种块写回去也是非法行，直接丢掉；没有广告时 dropped 仍为 0，整份清单放行。
     if (!b.uri) continue;
 

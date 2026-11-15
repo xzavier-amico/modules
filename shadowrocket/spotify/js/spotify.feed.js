@@ -536,7 +536,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return changed ? wireConcat(parts) : null;
   }
 
-  // 兼容旧入口：首页与浏览页共用同一套 section 过滤。
+  // 首页与浏览页共用同一套 section 过滤。
   function stripHomeAds(buffer) {
     return stripSectionAds(buffer);
   }
@@ -593,7 +593,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // 一项，避免留下「有 id、没有内容」的空卡片。实际拼接在 feed/lyrics.js 的
   // patchScroll 里和补歌词 section 一起做，只遍历一次。
   // 服务端在歌词查询完成后传入 trackId / wantCard；客户端则由 feed/entry.js 在
-  // 预热歌词缓存后传入。默认只删广告，保持旧调用方的行为。
+  // 预热歌词缓存后传入。默认只删广告。
   function hideScrollAds(buffer, trackId, wantCard) {
     return patchScroll(buffer, trackId || "", true, !!wantCard);
   }
@@ -649,8 +649,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   const req = typeof $request !== "undefined" && $request ? $request : null;
   const res = typeof $response !== "undefined" && $response ? $response : null;
   const url = (res && res.url) || (req && req.url) || "";
-  // 慢请求诊断用的起点：只在响应超过 2.5s 时往脚本日志打一行。
-  const startedAt = Date.now();
 
   // Loon 传位置数组，Egern 传 JSON 字符串。
   let opt = {};
@@ -768,8 +766,8 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   const META_TIMEOUT_MS = 2500;
   // feed 在 scrollsita 里顺手回填曲名 / 歌手；首次进 Now Playing 时它可能比
   // 歌词脚本晚一点点。100ms 看一次缓存，最多 2s；命中后立刻开始查歌词，
-  // 不用等 open.spotify.com 的 oEmbed（实测慢的时候 2.6 秒）。定时器只是优化：
-  // 没命中时仍按原来的 oEmbed / embed 流程走，不会多等。
+  // 不用等 open.spotify.com 的 oEmbed。定时器只是优化：没命中时仍按原来的
+  // oEmbed / embed 流程走，不会多等。
   const META_WAIT_MS = 2000;
   const META_POLL_MS = 100;
 
@@ -972,7 +970,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     };
     for (const id of Object.keys(map)) {
       const entry = map[id];
-      // 清掉旧版本留下的 miss 记录和过期条目。
+      // 清掉过期条目和 miss 记录。
       if (!entry || entry.m || !(now - Number(entry.t || 0) < LYRICS_CACHE_HIT_TTL)) delete map[id];
     }
     const byAge = () => Object.keys(map).sort((a, b) => Number(map[b].t || 0) - Number(map[a].t || 0));
@@ -1036,35 +1034,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   let plainTimer;
   let plainFallback = null;
   let cacheKey = "";
-  // 慢请求诊断：记录元数据来源、各源首个结果，响应超过 2.5s 时打一行日志。
-  // 平时不输出，也不影响任何分支。
-  const SLOW_LOG_MS = 2500;
-  const traceMeta = { text: "" };
-  const traceSource = Object.create(null);
-  let officialStatus = 0;
-  let protoHint = 0;
   const finish = (value) => {
     if (settled) return;
     settled = true;
     if (deadline !== undefined && typeof clearTimeout === "function") clearTimeout(deadline);
     if (plainTimer !== undefined && typeof clearTimeout === "function") clearTimeout(plainTimer);
-    if (res && typeof console !== "undefined" && console.log) {
-      const lookup = Date.now() - startedAt;
-      const mark = readMark(PENDING_KEY);
-      const wait = mark && Number(mark.at) ? Date.now() - Number(mark.at) : 0;
-      if (wait >= SLOW_LOG_MS || lookup >= SLOW_LOG_MS) {
-        const sources = [];
-        for (const name in traceSource) sources.push(name + traceSource[name]);
-        try {
-          console.log("[spotify.lyrics.slow] id=" + trackId + " wait=" + wait + "ms lookup=" + lookup +
-            "ms official=" + officialStatus + " proto=" + protoHint +
-            " meta=" + (traceMeta.text || "none") + " src=" + (sources.join(",") || "none") +
-            " result=" + (value && value.status ? value.status : "pass"));
-        } catch (e) {
-          // 日志失败不影响响应。
-        }
-      }
-    }
     // 请求阶段没有 $response：Loon / Egern / Shadowrocket 用 { response } 直接
     // 返回合成结果，跳过官方 color-lyrics 请求。
     if (!res) {
@@ -1170,8 +1144,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   const protoMode = status === 200 && hasBody
     ? trimmed.charAt(0) !== "{"
     : requestedProtoMode();
-  officialStatus = status;
-  protoHint = protoMode ? 1 : 0;
 
   // 不把登录、限流或服务端错误伪装成有歌词。
   if (status !== 200 && status !== 404) {
@@ -1270,7 +1242,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     };
     const cached = cachedTrackMeta(trackId);
     if (cached) {
-      traceMeta.text = "cache@" + (Date.now() - startedAt);
       startWith(cached, () => cached.color || null);
       return;
     }
@@ -1307,7 +1278,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       }
       started = true;
       rememberTrackMeta(trackId, info.title, info.artist, info.duration ? info.duration * 1000 : 0, colorOf());
-      if (!traceMeta.text) traceMeta.text = "public@" + (Date.now() - startedAt);
       startWith({ title: info.title, artist: info.artist, duration: info.duration }, colorOf);
     };
     // embed 提供封面主色与兜底元数据；与 oEmbed 并行发出，谁先到用谁。
@@ -1348,7 +1318,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       start();
     };
     // 两个来源并行：oEmbed 有曲名 / 歌手，embed 有封面色和更规范的写法。
-    // 串行时 open.spotify.com 慢一次就白等两轮（实测各 2.6s），并行至少拿到先到的那个。
     beginEmbed();
     httpGetJson(oembedUrl, (data) => {
       meta = data;
@@ -1365,7 +1334,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
           const hit = cachedTrackMeta(trackId);
           if (hit) {
             started = true;
-            traceMeta.text = "feed@" + (Date.now() - startedAt);
             startWith(hit, () => (embed && embed.color) || hit.color || null);
             return;
           }
@@ -1407,9 +1375,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     };
     for (const name of order) {
       if (settled || finished) return;
-      traceSource[name] = "0";
       lookup(name, title, artist, duration, (record) => {
-        traceSource[name] = (record ? "+" : "-") + (Date.now() - startedAt);
         if (settled) {
           // deadline 超时放行：歌词晚到时写缓存，下次请求阶段直接命中。
           if (record && colorOf) record.albumColor = colorOf();
@@ -1493,7 +1459,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       return pickRecord(synced, title, duration, artist);
     };
 
-    // 先把所有请求列出来再统一发出：同步回调（测试 / 命中）不会在批次中途把
+    // 先把所有请求列出来再统一发出：同步回调不会在批次中途把 pending 减到 0，
     // pending 减到 0，避免提前判定「都没命中」。
     const specs = [];
     const addSpec = (path, name, singer) => {
@@ -1604,8 +1570,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
           tryCandidates(rankSongs(songs, title, artist, duration, (item) => item.name, artistOf, durationOf), fetchLyric, cb);
           return;
         }
-        // 歌手详情请求并行发出，全部回来后再统一补 alias；旧实现一个个等，
-        // 最多 3 个歌手会串成 3 个 RTT。
+        // 歌手详情请求并行发出，全部回来后再统一补 alias。
         let left = pending.length;
         for (const person of pending) {
           httpGetJson("https://music.163.com/api/artist/" + person.id, (details) => {
@@ -1848,7 +1813,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   // 候选歌词请求并行发出（最多 3 个），首个拿到可解析歌词的胜出；全部没歌词
-  // 时返回 null。旧实现按排名一个个试，候选越多越慢。
+  // 时返回 null。
   function tryCandidates(candidates, fetch, cb, limit = 3) {
     if (settled) return;
     const picked = Array.isArray(candidates) ? candidates.slice(0, limit) : [];
@@ -2481,7 +2446,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // ---- 曲目元数据回填 ---------------------------------------------------
   //
   // 歌词脚本取曲名 / 歌手要先读 spotify.track.meta；没命中就只能回源
-  // open.spotify.com（oEmbed / embed，实测 2.6s），整条歌词链路跟着变慢。
+  // open.spotify.com（oEmbed / embed），整条歌词链路跟着变慢。
   // scrollsita 的当前曲目 section 里本来就带着 track_title / artist_name
   // 的 metadata map，顺手抄一份写进同一个缓存：下次同一首再进 Now Playing
   // 就是零请求。
@@ -2609,7 +2574,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
   const url = res.url || (typeof $request !== "undefined" && $request && $request.url) || "";
   const status = Number(res.status || res.statusCode);
-  const startedAt = Date.now();
 
   if (status >= 300) {
     $done({});
@@ -2652,23 +2616,12 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   };
 
   // 补卡不等歌词：Now Playing 打开时客户端先渲染列表，之后才合并 scrollsita 的
-  // 响应；响应晚到只更新模型、不重绘列表，卡片要收起再展开才出现（实测）。
-  // 所以立刻补卡，内容由随后的 color-lyrics 响应填充——歌词已经在缓存里时，
-  // 客户端拿到卡片就会直接取到内容。
+  // 响应；晚到的响应只更新模型、不重绘列表，卡片要收起再展开才出现。
+  // 所以立刻补卡，内容由随后的 color-lyrics 响应填充。
   if (isScroll && wantCard) {
     const card = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsCard : null;
     const hasCard = typeof hasLyricsCard === "function" && hasLyricsCard(body);
     const allowed = !!trackId && !hasCard && (typeof card === "function" ? card(trackId) : true);
-    // 慢请求诊断：补卡决策只在耗时超过 500ms 或跳过时打一行，平时不输出。
-    const elapsed = Date.now() - startedAt;
-    if ((elapsed >= 500 || !allowed) && typeof console !== "undefined" && console.log) {
-      try {
-        console.log("[spotify.feed.slow] id=" + trackId + " elapsed=" + elapsed + "ms card=" +
-          (allowed ? "add" : "skip") + " existing=" + (hasCard ? 1 : 0));
-      } catch (e) {
-        // 日志失败不影响响应。
-      }
-    }
     if (!allowed) {
       finish(patchScroll(body, trackId, wantAds, false));
       return;

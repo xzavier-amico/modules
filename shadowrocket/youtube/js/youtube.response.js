@@ -320,7 +320,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   const CONFIG_KEY = "YouTubeConfig"; // clientKey / encryptKey 缓存
   const QUALITY_KEY = "YouTubeQuality"; // 视频 id -> 可用 itag 缓存
   // 超过上限的响应直接放行：解码 / 重编码会占用数倍于原始大小的内存，宁可漏改也不能把 Loon 打崩。
-  // 实测 player / browse 响应大多在 1 MiB 以内，8 MiB 已经留了很大余量。
+  // player / browse 响应大多在 1 MiB 以内，8 MiB 留有很大余量。
   const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
   // UMP 还要解密、解压、重编码、再加密，内存峰值更高，保持 5 MiB。
   const MAX_UMP_RESPONSE_BYTES = 5 * 1024 * 1024;

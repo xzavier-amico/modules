@@ -30,7 +30,7 @@
 
 `js/spotify.headers.js` 挂在请求阶段，固定把 URL 里的 `timezone=` 改成账号地区对应的时区。账号地区由 `js/spotify.js` 从 bootstrap / UCS 的 `country` 属性抄到本地存储 `spotify.account.region`；没有记录时看请求里的 `market=XX`，仍然没有就用 `Asia/Hong_Kong`。中国大陆账号会得到 `Asia/Shanghai`，台湾 `Asia/Taipei`，香港 `Asia/Hong_Kong`。
 
-时区只影响请求参数，不改系统时间。脚本不再改 `Accept-Language`：Spotify 的歌词语言由账号 / 客户端语言配置决定，改请求头只能影响接口的本地化文案，改不了歌词文本。
+时区只影响请求参数，不改系统时间。脚本不改 `Accept-Language`：Spotify 的歌词语言由账号 / 客户端语言配置决定，改请求头只能影响接口的本地化文案，改不了歌词文本。
 
 ## 歌词
 
@@ -41,7 +41,7 @@
 合成规则：
 
 - `auto` 同时请求网易云、QQ、LRCLIB，首个通过歌名 / 歌手 / Live 校验的同步歌词胜出；只有纯文本时等全部结束，或在 5 秒后先发纯文本，避免一直等到总超时。
-- 候选请求全部并行：LRCLIB 对完整曲名和去掉装饰括号后的曲名各发 `get` + `search`；网易云 / QQ 搜索后同时请求排名前 3 的候选歌词。任一同步歌词先通过校验就直接返回，不再按候选顺序一个个等。
+- 候选请求全部并行：LRCLIB 对完整曲名和去掉装饰括号后的曲名各发 `get` + `search`；网易云 / QQ 搜索后同时请求排名前 3 的候选歌词。任一同步歌词先通过校验就直接返回。
 - 歌名比较会忽略 `feat.` / `ft.` / `with` / `prod.`、`Remastered 2011` / `2011 Remaster`、`Radio Edit`、`Single Version`、`Album Version`、`Bonus Track`、`Deluxe Edition`、`Explicit` / `Clean` 等版本后缀；歌手按 `feat.` / `ft.` / `with` 和多歌手分隔符拆分，任意一位匹配即可。
 - 曲名 / 歌手比较默认做繁→简折叠（OpenCC t2s 表）：Spotify 的中文元数据常是繁体，网易云 / QQ 返回简体，不折叠时「說謊」对不上「说谎」、「周杰倫」对不上「周杰伦」。关闭 `ignore_han_variants` 后恢复逐字比较。
 - 补全歌词默认转简体（`lyrics_script=hans`）：只对判定为繁体的歌词做转换，网易云 / QQ 的简体歌词、英文与日文歌词原样保留；官方歌词不经过这一步。词表随脚本下发（约 30KB），首次用到时才构建，非繁体文本零逐字开销。
@@ -50,13 +50,12 @@
 - LRCLIB 并行候选都没命中时，会再用歌名搜一次；仍按歌手 / 版本 / Live / 时长校验，不会拿别人的同名歌。
 - 第三方请求超时、429、5xx 或所有源都没结果时都不写缓存，下次打开会立即重试。
 - 歌词页总时限 4.5 秒（从官方响应到达开始算），单个外部请求 4 秒；纯文本在 3.5 秒兜底。打开 Now Playing 时 feed 可能刚把 scrollsita 里的曲名 / 歌手写进缓存，歌词脚本会每 100ms 看一次元数据、最多 2 秒，命中就直接查歌词，不必等 open.spotify.com。scrollsita 补卡**不等歌词**：打开 Now Playing 时客户端先渲染列表，晚到的响应只更新模型、不重绘，所以收到 scroll 就立刻补卡，内容由随后的 color-lyrics 响应填充。
-- 慢请求诊断：响应超过 2.5 秒时脚本日志会打一行 `[spotify.lyrics.slow]`（wait / lookup / meta / 各源首个结果）；feed 处理超过 500ms 或跳过补卡时打 `[spotify.feed.slow]`。平时不输出。
 - protobuf 补齐官方字段（含歌词卡使用的 `previewLines`），并将歌词额度限制归一为可显示状态。
 - 配色：未激活行黑字，当前 / 已唱行白字；命中元数据缓存时不再请求 embed，用缓存里的封面色，没有缓存时用默认中灰底。
 - scrollsita 列表缺少歌词 section 时立刻补一格：读到 `spotify.lyrics.miss` 不补（有歌词请求在路上时旧标记不作数）；补在头部 section 之后；官方已有则不重复补。
 
 歌词源：`lrclib`、`musixmatch`、`netease`、`qq`、`auto`（默认）。
-- LRCLIB 把完整曲名、去掉 `feat.` / `remaster` 等后缀的曲名、繁→简折叠后的写法，以及歌名-only 的兜底搜索全部放进第一批并行请求（对应 EeveeSpotify 的 `strippedTrackTitle`），返回结果仍会重新校验歌手 / Live / 时长；不再有串行的第二轮。
+- LRCLIB 把完整曲名、去掉 `feat.` / `remaster` 等后缀的曲名、繁→简折叠后的写法，以及歌名-only 的兜底搜索全部放进第一批并行请求（对应 EeveeSpotify 的 `strippedTrackTitle`），返回结果仍会重新校验歌手 / Live / 时长。
 - 网易云在「歌名 / 时长已匹配、只差歌手写法」时，会把候选歌词与歌手 alias 查询并行预取；alias 确认后直接复用，不重复请求，也不放松歌手校验。
 - `extended-metadata` 是批量接口，可能到几 MB；脚本只解析包含 `spotify:track:` 的子消息，图片 / Credits / Canvas 等大块直接跳过，且用字段级 canonical 检查代替整包 `serialize` 拷贝。超过 12MB 的响应仍原样放行。
 
@@ -75,7 +74,7 @@
 
 ## 播放衔接
 
-模块不再改写「交叉淡入淡出 / Gapless」相关开关，也不会给免费号强行解锁
+模块不改写「交叉淡入淡出 / Gapless」相关开关，也不会给免费号强行解锁
 crossfade；这两项保持服务端与 App 自己的设置。AutoMix 仍在远程配置里强制关闭
 （`automix_enabled=0`），避免下一首按节拍提前混进来。修改后需要重启 App（或切换
 网络）让客户端重新拉取 bootstrap / 远程配置，旧缓存里的开关才会被覆盖。
@@ -113,9 +112,9 @@ Spotify。桌面端如果一直看不到脚本执行记录，说明请求可能�
 - 只支持逐行同步歌词，未实现逐字歌词。
 - 插件删除 `if-none-match` 并清除 `extended-metadata` 请求体里的 etag，避免 304 空响应导致脚本拿不到 body。
 - 脚本 URL 带 `?v=日期`；客户端元数据有缓存，更新后需重启 App 或打开未缓存的歌单。
-- 已删除的参数（`lyrics_debug`、`debug_log`、`lyrics_mode`、`force_zh_hans`、`spoof_timezone`）在旧安装里可能仍显示；需要在客户端删除插件后重新导入，并完全退出 App 再打开。脚本按 URL 缓存，只改 `?v=` 而不重新导入时，旧脚本可能继续运行。
+- 参数定义随插件保存；新增或删除参数后需要重新导入插件才会更新。脚本按 `?v=` 缓存，更新后需重启 App。
 - 新增参数同理：`[Argument]` 清单随安装保存在本地，远程新增的开关不会自动出现。需要删除插件后重新添加（可给插件 URL 加 `?v=日期` 绕过 raw 缓存），设置页才会显示「歌词字形」「忽略简繁」。重新添加后其它参数会回到默认值，按需再调。
 - `force_zh_hans` 已由 `lyrics_script` 取代：只转换补全的第三方歌词字形，不改 `Accept-Language`，也不影响官方歌词。
-- `spotify.headers` 请求脚本固定伪装时区；旧安装需要重新导入插件才会带上它，只更新插件而不重新导入时不会生效。脚本不再改 `Accept-Language`。
+- `spotify.headers` 请求脚本固定伪装时区；旧安装需要重新导入插件才会带上它。脚本不改 `Accept-Language`。
 - 需开启 MitM：`*-spclient.spotify.com`、`spclient.wg.spotify.com`。
 - 音质、下载与 Spotify Connect 由服务端判定，脚本无法修改。
