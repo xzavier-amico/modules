@@ -2399,6 +2399,26 @@ function testBilibiliGrpc() {
       assert.deepEqual(Object.keys(run(file, new Uint8Array([1, 2, 3]), view, { block_ads: true })), []);
     });
 
+    // Moss 引擎的客户端只认响应头里的 grpc-status，不读 HTTP/2 trailers。
+    check(platform + " bilibili grpc adds grpc-status for moss clients", () => {
+      const url = "https://grpc.biliapi.net/bilibili.app.view.v1.View/View";
+      const body = frame(serialize([v(99, 1n)]));
+      const request = { url, headers: { "user-agent": "bili-universal/7860200", "x-bili-moss-engine-type": "1" } };
+      const out = run(file, body, url, { block_ads: true }, { $request: request });
+      assert.equal(out.headers && out.headers["grpc-status"], "0");
+    });
+
+    check(platform + " bilibili grpc keeps trailers and drops status for international", () => {
+      const url = "https://grpc.biliapi.net/bilibili.app.view.v1.View/View";
+      const body = frame(serialize([v(30, 1n)]));
+      const request = { url, headers: { "user-agent": "bili-inter/123" } };
+      const response = { status: 200, body, headers: { "content-type": "application/grpc", "grpc-status": "0" }, h2_trailers: { "grpc-status": "0" } };
+      const out = run(file, body, url, { block_ads: true }, { $request: request, $response: response });
+      assert.ok(out.body, "international response body must stay");
+      assert.equal(out.headers && out.headers["grpc-status"], undefined);
+      if (platform !== "egern") assert.deepEqual(out.h2_trailers, { "grpc-status": "0" });
+    });
+
     // gzip 帧要 await 解压，$done 落在微任务里，得单独等一拍。
     pending.push((async () => {
       const body = frame(serialize([v(30, 1n)]), 1);

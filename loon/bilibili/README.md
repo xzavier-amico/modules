@@ -86,3 +86,6 @@
 - 首页广告卡如果换了新的 `card_type` 命名，脚本会当成普通卡片放行，不会误删内容。
 - 模块对 `bilibili.com`、`biliapi.net` 的 QUIC 直接 REJECT，强制回落 TCP；HTTP/3 走 UDP
   不经过代理，不拒绝时 gRPC 与 playurl 的请求/响应脚本拿不到。
+- 手机版 / HD / 海外版走 Moss 引擎（请求头 `x-bili-moss-engine-type: 1`）时只认响应头里的
+  `grpc-status`，不读 HTTP/2 trailers；脚本会按客户端类型补齐 `grpc-status: 0`（国际版则去掉），
+  避免改写 gRPC 响应后详情页、评论区一直转圈。
