@@ -132,6 +132,12 @@ const TARGETS = [
     standalone: "clean.js",
   },
   {
+    module: "xiaohongshu",
+    file: "xiaohongshu_probe.js",
+    title: "Xiaohongshu Probe — 只记录接口与响应结构，不改写",
+    standalone: "probe.js",
+  },
+  {
     module: "bilibili",
     file: "bilibili_clean.js",
     title: "BiliBili Enhance — JSON 响应（首页 / 搜索 / 详情 / 我的）",

@@ -2433,6 +2433,59 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
   });
 }
 
+// 探针只记录不改写：日志里必须有路径、数组长度、字段分布，响应必须原样放行。
+for (const platform of ["loon", "egern", "shadowrocket"]) {
+  const file = platform + "/xiaohongshu/js/xiaohongshu_probe.js";
+  const base = "https://edith.xiaohongshu.com/api/sns/v10";
+  const probe = (body, url) => {
+    const lines = [];
+    const out = run(file, body, url, {}, { console: { log: (s) => lines.push(String(s)) } });
+    return { out, log: lines.join("\n") };
+  };
+
+  check(platform + " xhs probe records card structure and leaves the body untouched", () => {
+    const body = JSON.stringify({
+      success: true,
+      data: [
+        { id: "n1", model_type: "note", note_card: { type: "normal" } },
+        { id: "l1", model_type: "live", live_info: { room_id: 1 } },
+      ],
+    });
+    const { out, log } = probe(body, base + "/homefeed?num=20");
+    assert.deepEqual(Object.keys(out), [], "探针不能改写响应");
+    assert.match(log, /R \/api\/sns\/v10\/homefeed 200 \d+B/);
+    assert.match(log, /data=array\[2\]/);
+    assert.match(log, /model_type → note:1 live:1/);
+    assert.match(log, /live_info\{room_id\}/);
+    assert.match(log, /note_card\{type\} type=normal/);
+  });
+
+  check(platform + " xhs probe dumps tab-like config fields", () => {
+    const { out, log } = probe(JSON.stringify({ data: { bottom_tab: [{ name: "购物" }], keep: 1 } }),
+      base + "/system_service/config");
+    assert.deepEqual(Object.keys(out), []);
+    assert.match(log, /R data=\{bottom_tab,keep\}/);
+    assert.match(log, /★ bottom_tab = \[\{"name":"购物"\}\]/);
+  });
+}
+
+check("Xiaohongshu modules cache-bust their scripts and enable MitM over HTTP/2", () => {
+  for (const file of [
+    "loon/xiaohongshu/xiaohongshu-clean.plugin",
+    "egern/xiaohongshu/xiaohongshu-clean.yaml",
+    "shadowrocket/xiaohongshu/xiaohongshu-clean.sgmodule",
+    "loon/xiaohongshu/xiaohongshu-probe.plugin",
+    "egern/xiaohongshu/xiaohongshu-probe.yaml",
+    "shadowrocket/xiaohongshu/xiaohongshu-probe.sgmodule",
+  ]) {
+    assert.match(read(file), /xiaohongshu_(?:clean|probe)\.js\?v=\d{8}-\d+/, file + " 必须带版本号，否则客户端一直跑缓存里的旧脚本");
+  }
+  // 小红书接口走 HTTP/2，不开 h2 MITM 时 requires-body 拿不到 body。
+  assert.match(read("loon/xiaohongshu/xiaohongshu-clean.plugin"), /\[MitM\][\s\S]*?^h2 = true$/m);
+  assert.match(read("loon/xiaohongshu/xiaohongshu-probe.plugin"), /\[MitM\][\s\S]*?^h2 = true$/m);
+  assert.match(read("shadowrocket/xiaohongshu/xiaohongshu-clean.sgmodule"), /\[MITM\][\s\S]*?^h2 = true$/m);
+});
+
 // B 站 gRPC：按字段号删广告，没改动的字段连同原始编码一起保留。
 function testBilibiliGrpc() {
   // B 站接口强制 HTTP/2。MITM 不按 h2 解密时，并发请求会被串行化，
