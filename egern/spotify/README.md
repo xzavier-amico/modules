@@ -94,6 +94,7 @@ crossfade；这两项保持服务端与 App 自己的设置。AutoMix 仍在远�
 - Egern 不支持按参数加载脚本；关闭补全歌词后脚本仍会加载，但会立即返回。
 - 脚本 URL 带 `?v=日期`；客户端元数据有缓存，更新后需重启 App 或打开未缓存的歌单。
 - 已删除的参数（`lyrics_debug`、`debug_log`、`lyrics_mode`、`force_zh_hans`、`spoof_timezone`）在旧安装的模块引用里可能仍以 env 形式保留并显示；模块文件本身已经没有这些键。需要在该模块的环境变量里删掉它们，或删除模块引用后重新添加。脚本按 URL 缓存，只改 `?v=` 而不重新导入时，旧脚本可能继续运行。
+- 新增参数同理：`env_schema` 随模块引用保存在本地，远程新增的开关不会自动出现。需要删除模块引用后重新添加（可给模块 URL 加 `?v=日期` 绕过缓存），设置页才会显示「歌词字形」「忽略简繁」。
 - `force_zh_hans` 已由 `lyrics_script` 取代：只转换补全的第三方歌词字形，不改 `Accept-Language`，也不影响官方歌词。
 - `spotify.headers` 请求脚本固定伪装时区；旧安装需要重新导入模块才会带上它，只更新 YAML 而不重新导入时不会生效。脚本不再改 `Accept-Language`。
 - 需开启 MitM：`*-spclient.spotify.com`、`spclient.wg.spotify.com`。
