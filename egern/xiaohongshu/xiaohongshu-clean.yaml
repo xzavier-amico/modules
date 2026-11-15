@@ -37,7 +37,7 @@ env_schema:
     options: ["true", "false"]
   clean_ui:
     name: "精简界面"
-    description: "删除首页「购物」「市集」「直播」三个 tab 和启动配置里的商城入口"
+    description: "删除首页顶部分类栏的「购物」「市集」「直播」三个 tab 和启动配置里的商城入口；底部导航栏不动"
     default_value: "false"
     options: ["true", "false"]
 
@@ -62,7 +62,7 @@ scriptings:
   - http_response:
       name: "xiaohongshu.clean"
       match: "^https?:\\/\\/(?:edith|www|pages)\\.xiaohongshu\\.com\\/api\\/sns\\/v\\d+\\/(?:homefeed(?:\\/categories)?|search\\/notes|note\\/(?:comment\\/list|widgets|tabfeed|videofeed|imagefeed|redtube|feed)|system_service\\/(?:splash_config|config))"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/xiaohongshu/js/xiaohongshu_clean.js"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/xiaohongshu/js/xiaohongshu_clean.js?v=20261115-1"
       body_required: true
       max_size: 8388608
       timeout: 20

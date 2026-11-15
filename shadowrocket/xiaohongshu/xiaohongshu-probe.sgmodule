@@ -1,0 +1,20 @@
+#!name=Xiaohongshu Probe
+#!desc=排障专用：只把接口路径与响应结构写进脚本日志，不改写任何内容。抓完日志就关掉或删除。
+#!author=xzavier-amico
+#!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/xiaohongshu.png
+
+[Rule]
+# 拒绝 QUIC，强制回落 TCP：HTTP/3 走 UDP，不经过 MITM，脚本看不到这些请求。
+AND,((DOMAIN-SUFFIX,xiaohongshu.com),(PROTOCOL,QUIC)),REJECT
+
+[Script]
+# 请求阶段只记路径，不读 body，代价很低
+xiaohongshu.probe.url = type=http-request,pattern=^https?:\/\/[a-z0-9.-]+\.xiaohongshu\.com\/,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/xiaohongshu/js/xiaohongshu_probe.js?v=20261115-1
+# 响应阶段读 body 记结构
+xiaohongshu.probe.json = type=http-response,pattern=^https?:\/\/[a-z0-9.-]+\.xiaohongshu\.com\/(?:api|fe_api)\/,requires-body=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/xiaohongshu/js/xiaohongshu_probe.js?v=20261115-1
+
+[MITM]
+# 用通配覆盖全部子域：底栏与直播相关接口不一定在 edith / www / pages 上。
+hostname = %APPEND% *.xiaohongshu.com
+# 不开 h2 MITM 时读不到 body，日志里就只剩 Q 行。
+h2 = true
