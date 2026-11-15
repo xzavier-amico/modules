@@ -1064,6 +1064,17 @@
     } catch (e) {
       return null;
     }
+    // TEMP-DIAG: 把内部状态写回响应，确认新脚本是否在跑。
+    if (data && data.attributes && "object" === typeof data.attributes) {
+      data.attributes["__diag"] = { stringValue: JSON.stringify({
+        v: 30,
+        keys: Object.keys(data.attributes).length,
+        forced: Object.keys(forced).length,
+        spoof: spoof, adsOn: adsOn, desktop: desktop, playOn: playOn,
+        scope: typeof scopeOfAccount === "undefined" ? "n/a" : "x",
+      }) };
+      return JSON.stringify(data);
+    }
     if (!data || "object" !== typeof data) return null;
     const attributes = data.attributes;
     if (!attributes || "object" !== typeof attributes) return null;
