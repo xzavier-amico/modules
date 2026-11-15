@@ -93,6 +93,19 @@ crossfade；这两项保持服务端与 App 自己的设置。AutoMix 仍在远�
   授权由服务端判定，强行写会让客户端以为有 Premium 播放权，几秒后拿不到音频密钥
   就跳歌。
 - `unlock_playback=auto` 在桌面端默认关闭；需要尝试时手动改成 `true`。
+  2026-11-15 在 Spotify 1.3.9.2055（macOS 14.8.9）上复测过一次：把开关打开、重启
+  Loon 与 App 后，客户端的属性缓存（`~/Library/Application Support/Spotify/
+  PersistentCache/offline.bnk`）里确实出现了模块写入的桌面播放授权字段
+  （`player-license` / `player-license-v2` = premium、`streaming-rules` 空、
+  `on-demand`），随后连续播放 30s + 50s 没有跳歌、没有中断——单看这一轮，「几秒后
+  跳歌」没有复现。但只有两段短样本，且免费号的属性块里 `type` / `catalogue` 仍是
+  free，无法确认客户端真正吃到的就是 premium 播放授权，所以桌面端默认仍然关闭，
+  保持现状。
+- 同一轮还发现：1.3.9 的桌面端 `remote-config-resolver/v3/configuration` 返回的是
+  **JSON**（`{"configuration":{...}}`，属性在 `desktop-ui` scope 里），脚本只按
+  protobuf 解析，所以远程配置里那批 `cap` / 广告规则的删除对桌面端目前是空转，只有
+  账号属性的改写在生效。要做桌面端「去限制」得另起一条 JSON 改写路径。
+
 - 桌面端歌词页走 `color-lyrics/v2/track/{id}/image/{封面}`：官方客户端把歌词和封面色
   合到一个「image」路径上，格式仍由 `?format=json` 决定。桌面端跑在 CEF 里，这条请求
   是跨域 fetch，**先发 OPTIONS 预检再发 GET**：预检响应只有 CORS 头、没有 body，
