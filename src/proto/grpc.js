@@ -133,28 +133,65 @@
     return wireEncodeField(no, wt, payload);
   }
 
-  // drop 里的字段号整条删；filters 里的字段号按条件删（只处理 length-delimited）。
-  // 没有改动返回 null，调用方据此原样放行。
-  function rewrite(msg, drop, filters) {
-    const fields = parseFields(msg, 0, msg.length);
-    if (!fields) return null;
-
+  // drop 里的字段号整条删；filters 里的字段号按条件删（只处理 length-delimited）；
+  // maps 里的字段号改写载荷（只处理 length-delimited）。
+  // 单次扫描完成，不建完整字段列表；没有改动返回 null，调用方据此原样放行。
+  function rewrite(msg, drop, filters, maps) {
     const parts = [];
     let changed = false;
-    for (let i = 0; i < fields.length; i++) {
-      const f = fields[i];
-      if (drop && drop.indexOf(f.no) >= 0) {
-        changed = true;
-        continue;
+    const state = { i: 0 };
+    try {
+      while (state.i < msg.length) {
+        const start = state.i;
+        const tag = wireReadCount(msg, state);
+        const no = tag >>> 3;
+        const wt = tag & 7;
+        if (!no) throw new Error("Invalid protobuf field");
+        let ds = state.i;
+        let de;
+        if (wt === 2) {
+          const length = wireReadCount(msg, state);
+          if (length > msg.length - state.i) throw new Error("Truncated protobuf field");
+          ds = state.i;
+          state.i += length;
+          de = state.i;
+        } else if (wt === 1) {
+          state.i += 8;
+          de = state.i;
+        } else if (wt === 5) {
+          state.i += 4;
+          de = state.i;
+        } else if (wt === 0) {
+          wireSkipVarint(msg, state);
+          de = state.i;
+        } else {
+          throw new Error("Unsupported protobuf wire type " + wt);
+        }
+        if (state.i > msg.length) throw new Error("Truncated protobuf field");
+        const end = state.i;
+        if (drop && drop.indexOf(no) >= 0) {
+          changed = true;
+          continue;
+        }
+        if (filters && wt === 2 && filters[no] && filters[no](msg, ds, de)) {
+          changed = true;
+          continue;
+        }
+        if (maps && wt === 2 && maps[no]) {
+          const sub = msg.subarray(ds, de);
+          const next = maps[no](sub);
+          if (next && !same(next, sub)) {
+            parts.push(encodeField(no, 2, next));
+            changed = true;
+            continue;
+          }
+        }
+        parts.push(msg.subarray(start, end));
       }
-      if (filters && f.wt === 2 && filters[f.no] && filters[f.no](msg, f.ds, f.de)) {
-        changed = true;
-        continue;
-      }
-      parts.push(msg.subarray(f.s, f.e));
+    } catch (e) {
+      return null;
     }
-    if (!changed) return null;
-    return concat(parts);
+    return changed ? concat(parts) : null;
   }
 
   // 读某个 varint 字段的值；没有就返回 null。
@@ -239,70 +276,157 @@
   }
 
   // 对 no 字段的每个 length-delimited 载荷调用 fn，fn 返回新字节或 null（不改）。
+  // 单次扫描，不建完整字段列表。
   function mapSub(msg, no, fn) {
-    const fields = parseFields(msg, 0, msg.length);
-    if (!fields) return null;
     const parts = [];
     let changed = false;
-    for (let i = 0; i < fields.length; i++) {
-      const f = fields[i];
-      if (f.no === no && f.wt === 2) {
-        const sub = msg.subarray(f.ds, f.de);
-        const next = fn(sub);
-        if (next && !same(next, sub)) {
-          parts.push(encodeField(no, 2, next));
-          changed = true;
-          continue;
+    const state = { i: 0 };
+    try {
+      while (state.i < msg.length) {
+        const start = state.i;
+        const tag = wireReadCount(msg, state);
+        const fieldNo = tag >>> 3;
+        const wt = tag & 7;
+        if (!fieldNo) throw new Error("Invalid protobuf field");
+        let ds = state.i;
+        let de;
+        if (wt === 2) {
+          const length = wireReadCount(msg, state);
+          if (length > msg.length - state.i) throw new Error("Truncated protobuf field");
+          ds = state.i;
+          state.i += length;
+          de = state.i;
+        } else if (wt === 1) {
+          state.i += 8;
+          de = state.i;
+        } else if (wt === 5) {
+          state.i += 4;
+          de = state.i;
+        } else if (wt === 0) {
+          wireSkipVarint(msg, state);
+          de = state.i;
+        } else {
+          throw new Error("Unsupported protobuf wire type " + wt);
         }
-      }
-      parts.push(msg.subarray(f.s, f.e));
-    }
-    return changed ? concat(parts) : null;
-  }
-
-  // 过滤重复字段：keep 返回 false 的整条删掉。
-  function filterRepeated(msg, no, keep) {
-    const fields = parseFields(msg, 0, msg.length);
-    if (!fields) return null;
-    const parts = [];
-    let changed = false;
-    for (let i = 0; i < fields.length; i++) {
-      const f = fields[i];
-      if (f.no === no && f.wt === 2 && !keep(msg.subarray(f.ds, f.de))) {
-        changed = true;
-        continue;
-      }
-      parts.push(msg.subarray(f.s, f.e));
-    }
-    return changed ? concat(parts) : null;
-  }
-
-  // 一次解析同时做 filter + map：keep 返回 false 的删掉，
-  // keep 返回 true 的再调 mapFn（可返回 null 表示不改）。
-  // 比分别调 filterRepeated + mapSub 少一次完整 parseFields。
-  function filterAndMap(msg, no, keep, mapFn) {
-    const fields = parseFields(msg, 0, msg.length);
-    if (!fields) return null;
-    const parts = [];
-    let changed = false;
-    for (let i = 0; i < fields.length; i++) {
-      const f = fields[i];
-      if (f.no === no && f.wt === 2) {
-        const sub = msg.subarray(f.ds, f.de);
-        if (!keep(sub)) {
-          changed = true;
-          continue;
-        }
-        if (mapFn) {
-          const next = mapFn(sub);
+        if (state.i > msg.length) throw new Error("Truncated protobuf field");
+        const end = state.i;
+        if (fieldNo === no && wt === 2) {
+          const sub = msg.subarray(ds, de);
+          const next = fn(sub);
           if (next && !same(next, sub)) {
             parts.push(encodeField(no, 2, next));
             changed = true;
             continue;
           }
         }
+        parts.push(msg.subarray(start, end));
       }
-      parts.push(msg.subarray(f.s, f.e));
+    } catch (e) {
+      return null;
+    }
+    return changed ? concat(parts) : null;
+  }
+
+  // 过滤重复字段：keep 返回 false 的整条删掉。单次扫描，不建完整字段列表。
+  function filterRepeated(msg, no, keep) {
+    const parts = [];
+    let changed = false;
+    const state = { i: 0 };
+    try {
+      while (state.i < msg.length) {
+        const start = state.i;
+        const tag = wireReadCount(msg, state);
+        const fieldNo = tag >>> 3;
+        const wt = tag & 7;
+        if (!fieldNo) throw new Error("Invalid protobuf field");
+        let ds = state.i;
+        let de;
+        if (wt === 2) {
+          const length = wireReadCount(msg, state);
+          if (length > msg.length - state.i) throw new Error("Truncated protobuf field");
+          ds = state.i;
+          state.i += length;
+          de = state.i;
+        } else if (wt === 1) {
+          state.i += 8;
+          de = state.i;
+        } else if (wt === 5) {
+          state.i += 4;
+          de = state.i;
+        } else if (wt === 0) {
+          wireSkipVarint(msg, state);
+          de = state.i;
+        } else {
+          throw new Error("Unsupported protobuf wire type " + wt);
+        }
+        if (state.i > msg.length) throw new Error("Truncated protobuf field");
+        const end = state.i;
+        if (fieldNo === no && wt === 2 && !keep(msg.subarray(ds, de))) {
+          changed = true;
+          continue;
+        }
+        parts.push(msg.subarray(start, end));
+      }
+    } catch (e) {
+      return null;
+    }
+    return changed ? concat(parts) : null;
+  }
+
+  // 一次扫描同时做 filter + map：keep 返回 false 的删掉，
+  // keep 返回 true 的再调 mapFn（可返回 null 表示不改）。
+  function filterAndMap(msg, no, keep, mapFn) {
+    const parts = [];
+    let changed = false;
+    const state = { i: 0 };
+    try {
+      while (state.i < msg.length) {
+        const start = state.i;
+        const tag = wireReadCount(msg, state);
+        const fieldNo = tag >>> 3;
+        const wt = tag & 7;
+        if (!fieldNo) throw new Error("Invalid protobuf field");
+        let ds = state.i;
+        let de;
+        if (wt === 2) {
+          const length = wireReadCount(msg, state);
+          if (length > msg.length - state.i) throw new Error("Truncated protobuf field");
+          ds = state.i;
+          state.i += length;
+          de = state.i;
+        } else if (wt === 1) {
+          state.i += 8;
+          de = state.i;
+        } else if (wt === 5) {
+          state.i += 4;
+          de = state.i;
+        } else if (wt === 0) {
+          wireSkipVarint(msg, state);
+          de = state.i;
+        } else {
+          throw new Error("Unsupported protobuf wire type " + wt);
+        }
+        if (state.i > msg.length) throw new Error("Truncated protobuf field");
+        const end = state.i;
+        if (fieldNo === no && wt === 2) {
+          const sub = msg.subarray(ds, de);
+          if (!keep(sub)) {
+            changed = true;
+            continue;
+          }
+          if (mapFn) {
+            const next = mapFn(sub);
+            if (next && !same(next, sub)) {
+              parts.push(encodeField(no, 2, next));
+              changed = true;
+              continue;
+            }
+          }
+        }
+        parts.push(msg.subarray(start, end));
+      }
+    } catch (e) {
+      return null;
     }
     return changed ? concat(parts) : null;
   }

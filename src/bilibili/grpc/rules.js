@@ -151,104 +151,35 @@
 
   const RULES = {};
 
-  // 旧版详情页：先扫描有没有广告字段，没有就跳过。
-  RULES[VIEW + "View"] = (m) => {
-    let hasTarget = false;
-    try {
-      wireScanFields(m, (no) => {
-        if (no === 30 || no === 31 || no === 34 || no === 41 || no === 48 || no === 10 || no === 32) {
-          hasTarget = true;
-          return true;
-        }
-        return false;
-      });
-    } catch (e) {
-      return null;
-    }
-    if (!hasTarget) return null;
-    return rewrite(m, [30, 31, 34, 41, 48], { 10: legacyRelateAd, 32: adTab });
-  };
+  // 旧版详情页：删广告字段，过滤相关推荐与定制 Tab。
+  // rewrite 单次扫描，没有目标字段或没有改动时返回 null。
+  RULES[VIEW + "View"] = (m) => rewrite(m, [30, 31, 34, 41, 48], { 10: legacyRelateAd, 32: adTab });
   RULES[VIEW + "RelatesFeed"] = (m) => rewrite(m, null, { 1: legacyRelateAd });
   RULES[VIEW + "PlayerRelates"] = (m) => rewrite(m, null, { 1: legacyRelateAd });
   RULES[VIEW + "ViewProgress"] = (m) => rewrite(m, [1]);
   RULES[VIEW + "TFInfo"] = (m) => rewrite(m, [2, 3]);
 
   // 新版详情页：顶层 cm(7) + 详情 Tab(5) 里的推广模块与推荐广告卡。
-  // 先扫描有没有目标字段，没有就跳过完整解析。
-  RULES[UNITE + "View"] = (m) => {
-    let hasTarget = false;
-    try {
-      wireScanFields(m, (no) => {
-        if (no === 7 || no === 5) {
-          hasTarget = true;
-          return true;
-        }
-        return false;
-      });
-    } catch (e) {
-      return null;
-    }
-    if (!hasTarget) return null;
-    const dropped = rewrite(m, [7]);
-    const tabbed = mapSub(dropped || m, 5, cleanTab);
-    return tabbed || dropped;
-  };
+  // 删除与改写一次扫描完成，不再先扫描再完整解析。
+  RULES[UNITE + "View"] = (m) => rewrite(m, [7], null, { 5: cleanTab });
   // 异步补充的详情页：cm(1) + tab(2) 里的模块（AIRelateTab.modules = 1）
-  RULES[UNITE + "AIRelateAsync"] = (m) => {
-    let hasTarget = false;
-    try {
-      wireScanFields(m, (no) => {
-        if (no === 1 || no === 2) {
-          hasTarget = true;
-          return true;
-        }
-        return false;
-      });
-    } catch (e) {
-      return null;
-    }
-    if (!hasTarget) return null;
-    const dropped = rewrite(m, [1]);
-    const tabbed = mapSub(dropped || m, 2, (tab) => cleanModules(tab, 1));
-    return tabbed || dropped;
-  };
+  RULES[UNITE + "AIRelateAsync"] = (m) => rewrite(m, [1], null, { 2: (tab) => cleanModules(tab, 1) });
   RULES[UNITE + "RelatesFeed"] = (m) => rewrite(m, null, { 1: unifiedRelateAd });
   RULES[UNITE + "ViewProgress"] = (m) => rewrite(m, [1]);
   RULES[UNITE + "PlayPause"] = () => EMPTY;
   RULES[UNITE + "ViewEndPage"] = () => EMPTY;
 
-  // 评论区：先扫描有没有目标字段（11/4/5/6/14/28），没有就跳过完整解析。
-  // 大部分评论响应只有普通评论，不含广告/带货，快速扫描省一次 parseFields。
-  RULES[REPLY + "MainList"] = (m) => {
-    let hasTarget = false;
-    try {
-      wireScanFields(m, (no) => {
-        if (no === 11 || no === 4 || no === 5 || no === 6 || no === 14 || no === 28) {
-          hasTarget = true;
-          return true;
-        }
-        return false;
-      });
-    } catch (e) {
-      return null;
-    }
-    if (!hasTarget) return null;
-    return rewrite(m, [11], {
+  // 评论区：删广告字段，过滤置顶带货评论与顶部带货卡。
+  // 普通评论页没有目标字段时，单次扫描直接返回 null。
+  RULES[REPLY + "MainList"] = (m) =>
+    rewrite(m, [11], {
       4: commercialReply,
       5: commercialReply,
       6: commercialReply,
       14: commercialReply,
       28: commercialTopCard,
     });
-  };
 
   // 动态页：综合页和视频页的 dynamic_list(1) 里删广告卡。
-  // 先扫描有没有字段 1，没有就跳过完整解析。
-  RULES[DYNAMIC + "DynAll"] = (m) => {
-    if (!hasField(m, 0, m.length, 1)) return null;
-    return mapSub(m, 1, cleanDynamicList);
-  };
-  RULES[DYNAMIC + "DynVideo"] = (m) => {
-    if (!hasField(m, 0, m.length, 1)) return null;
-    return mapSub(m, 1, cleanDynamicList);
-  };
+  RULES[DYNAMIC + "DynAll"] = (m) => mapSub(m, 1, cleanDynamicList);
+  RULES[DYNAMIC + "DynVideo"] = (m) => mapSub(m, 1, cleanDynamicList);

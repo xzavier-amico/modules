@@ -395,28 +395,65 @@
     return wireEncodeField(no, wt, payload);
   }
 
-  // drop 里的字段号整条删；filters 里的字段号按条件删（只处理 length-delimited）。
-  // 没有改动返回 null，调用方据此原样放行。
-  function rewrite(msg, drop, filters) {
-    const fields = parseFields(msg, 0, msg.length);
-    if (!fields) return null;
-
+  // drop 里的字段号整条删；filters 里的字段号按条件删（只处理 length-delimited）；
+  // maps 里的字段号改写载荷（只处理 length-delimited）。
+  // 单次扫描完成，不建完整字段列表；没有改动返回 null，调用方据此原样放行。
+  function rewrite(msg, drop, filters, maps) {
     const parts = [];
     let changed = false;
-    for (let i = 0; i < fields.length; i++) {
-      const f = fields[i];
-      if (drop && drop.indexOf(f.no) >= 0) {
-        changed = true;
-        continue;
+    const state = { i: 0 };
+    try {
+      while (state.i < msg.length) {
+        const start = state.i;
+        const tag = wireReadCount(msg, state);
+        const no = tag >>> 3;
+        const wt = tag & 7;
+        if (!no) throw new Error("Invalid protobuf field");
+        let ds = state.i;
+        let de;
+        if (wt === 2) {
+          const length = wireReadCount(msg, state);
+          if (length > msg.length - state.i) throw new Error("Truncated protobuf field");
+          ds = state.i;
+          state.i += length;
+          de = state.i;
+        } else if (wt === 1) {
+          state.i += 8;
+          de = state.i;
+        } else if (wt === 5) {
+          state.i += 4;
+          de = state.i;
+        } else if (wt === 0) {
+          wireSkipVarint(msg, state);
+          de = state.i;
+        } else {
+          throw new Error("Unsupported protobuf wire type " + wt);
+        }
+        if (state.i > msg.length) throw new Error("Truncated protobuf field");
+        const end = state.i;
+        if (drop && drop.indexOf(no) >= 0) {
+          changed = true;
+          continue;
+        }
+        if (filters && wt === 2 && filters[no] && filters[no](msg, ds, de)) {
+          changed = true;
+          continue;
+        }
+        if (maps && wt === 2 && maps[no]) {
+          const sub = msg.subarray(ds, de);
+          const next = maps[no](sub);
+          if (next && !same(next, sub)) {
+            parts.push(encodeField(no, 2, next));
+            changed = true;
+            continue;
+          }
+        }
+        parts.push(msg.subarray(start, end));
       }
-      if (filters && f.wt === 2 && filters[f.no] && filters[f.no](msg, f.ds, f.de)) {
-        changed = true;
-        continue;
-      }
-      parts.push(msg.subarray(f.s, f.e));
+    } catch (e) {
+      return null;
     }
-    if (!changed) return null;
-    return concat(parts);
+    return changed ? concat(parts) : null;
   }
 
   // 读某个 varint 字段的值；没有就返回 null。
@@ -501,70 +538,157 @@
   }
 
   // 对 no 字段的每个 length-delimited 载荷调用 fn，fn 返回新字节或 null（不改）。
+  // 单次扫描，不建完整字段列表。
   function mapSub(msg, no, fn) {
-    const fields = parseFields(msg, 0, msg.length);
-    if (!fields) return null;
     const parts = [];
     let changed = false;
-    for (let i = 0; i < fields.length; i++) {
-      const f = fields[i];
-      if (f.no === no && f.wt === 2) {
-        const sub = msg.subarray(f.ds, f.de);
-        const next = fn(sub);
-        if (next && !same(next, sub)) {
-          parts.push(encodeField(no, 2, next));
-          changed = true;
-          continue;
+    const state = { i: 0 };
+    try {
+      while (state.i < msg.length) {
+        const start = state.i;
+        const tag = wireReadCount(msg, state);
+        const fieldNo = tag >>> 3;
+        const wt = tag & 7;
+        if (!fieldNo) throw new Error("Invalid protobuf field");
+        let ds = state.i;
+        let de;
+        if (wt === 2) {
+          const length = wireReadCount(msg, state);
+          if (length > msg.length - state.i) throw new Error("Truncated protobuf field");
+          ds = state.i;
+          state.i += length;
+          de = state.i;
+        } else if (wt === 1) {
+          state.i += 8;
+          de = state.i;
+        } else if (wt === 5) {
+          state.i += 4;
+          de = state.i;
+        } else if (wt === 0) {
+          wireSkipVarint(msg, state);
+          de = state.i;
+        } else {
+          throw new Error("Unsupported protobuf wire type " + wt);
         }
-      }
-      parts.push(msg.subarray(f.s, f.e));
-    }
-    return changed ? concat(parts) : null;
-  }
-
-  // 过滤重复字段：keep 返回 false 的整条删掉。
-  function filterRepeated(msg, no, keep) {
-    const fields = parseFields(msg, 0, msg.length);
-    if (!fields) return null;
-    const parts = [];
-    let changed = false;
-    for (let i = 0; i < fields.length; i++) {
-      const f = fields[i];
-      if (f.no === no && f.wt === 2 && !keep(msg.subarray(f.ds, f.de))) {
-        changed = true;
-        continue;
-      }
-      parts.push(msg.subarray(f.s, f.e));
-    }
-    return changed ? concat(parts) : null;
-  }
-
-  // 一次解析同时做 filter + map：keep 返回 false 的删掉，
-  // keep 返回 true 的再调 mapFn（可返回 null 表示不改）。
-  // 比分别调 filterRepeated + mapSub 少一次完整 parseFields。
-  function filterAndMap(msg, no, keep, mapFn) {
-    const fields = parseFields(msg, 0, msg.length);
-    if (!fields) return null;
-    const parts = [];
-    let changed = false;
-    for (let i = 0; i < fields.length; i++) {
-      const f = fields[i];
-      if (f.no === no && f.wt === 2) {
-        const sub = msg.subarray(f.ds, f.de);
-        if (!keep(sub)) {
-          changed = true;
-          continue;
-        }
-        if (mapFn) {
-          const next = mapFn(sub);
+        if (state.i > msg.length) throw new Error("Truncated protobuf field");
+        const end = state.i;
+        if (fieldNo === no && wt === 2) {
+          const sub = msg.subarray(ds, de);
+          const next = fn(sub);
           if (next && !same(next, sub)) {
             parts.push(encodeField(no, 2, next));
             changed = true;
             continue;
           }
         }
+        parts.push(msg.subarray(start, end));
       }
-      parts.push(msg.subarray(f.s, f.e));
+    } catch (e) {
+      return null;
+    }
+    return changed ? concat(parts) : null;
+  }
+
+  // 过滤重复字段：keep 返回 false 的整条删掉。单次扫描，不建完整字段列表。
+  function filterRepeated(msg, no, keep) {
+    const parts = [];
+    let changed = false;
+    const state = { i: 0 };
+    try {
+      while (state.i < msg.length) {
+        const start = state.i;
+        const tag = wireReadCount(msg, state);
+        const fieldNo = tag >>> 3;
+        const wt = tag & 7;
+        if (!fieldNo) throw new Error("Invalid protobuf field");
+        let ds = state.i;
+        let de;
+        if (wt === 2) {
+          const length = wireReadCount(msg, state);
+          if (length > msg.length - state.i) throw new Error("Truncated protobuf field");
+          ds = state.i;
+          state.i += length;
+          de = state.i;
+        } else if (wt === 1) {
+          state.i += 8;
+          de = state.i;
+        } else if (wt === 5) {
+          state.i += 4;
+          de = state.i;
+        } else if (wt === 0) {
+          wireSkipVarint(msg, state);
+          de = state.i;
+        } else {
+          throw new Error("Unsupported protobuf wire type " + wt);
+        }
+        if (state.i > msg.length) throw new Error("Truncated protobuf field");
+        const end = state.i;
+        if (fieldNo === no && wt === 2 && !keep(msg.subarray(ds, de))) {
+          changed = true;
+          continue;
+        }
+        parts.push(msg.subarray(start, end));
+      }
+    } catch (e) {
+      return null;
+    }
+    return changed ? concat(parts) : null;
+  }
+
+  // 一次扫描同时做 filter + map：keep 返回 false 的删掉，
+  // keep 返回 true 的再调 mapFn（可返回 null 表示不改）。
+  function filterAndMap(msg, no, keep, mapFn) {
+    const parts = [];
+    let changed = false;
+    const state = { i: 0 };
+    try {
+      while (state.i < msg.length) {
+        const start = state.i;
+        const tag = wireReadCount(msg, state);
+        const fieldNo = tag >>> 3;
+        const wt = tag & 7;
+        if (!fieldNo) throw new Error("Invalid protobuf field");
+        let ds = state.i;
+        let de;
+        if (wt === 2) {
+          const length = wireReadCount(msg, state);
+          if (length > msg.length - state.i) throw new Error("Truncated protobuf field");
+          ds = state.i;
+          state.i += length;
+          de = state.i;
+        } else if (wt === 1) {
+          state.i += 8;
+          de = state.i;
+        } else if (wt === 5) {
+          state.i += 4;
+          de = state.i;
+        } else if (wt === 0) {
+          wireSkipVarint(msg, state);
+          de = state.i;
+        } else {
+          throw new Error("Unsupported protobuf wire type " + wt);
+        }
+        if (state.i > msg.length) throw new Error("Truncated protobuf field");
+        const end = state.i;
+        if (fieldNo === no && wt === 2) {
+          const sub = msg.subarray(ds, de);
+          if (!keep(sub)) {
+            changed = true;
+            continue;
+          }
+          if (mapFn) {
+            const next = mapFn(sub);
+            if (next && !same(next, sub)) {
+              parts.push(encodeField(no, 2, next));
+              changed = true;
+              continue;
+            }
+          }
+        }
+        parts.push(msg.subarray(start, end));
+      }
+    } catch (e) {
+      return null;
     }
     return changed ? concat(parts) : null;
   }
@@ -752,107 +876,38 @@
 
   const RULES = {};
 
-  // 旧版详情页：先扫描有没有广告字段，没有就跳过。
-  RULES[VIEW + "View"] = (m) => {
-    let hasTarget = false;
-    try {
-      wireScanFields(m, (no) => {
-        if (no === 30 || no === 31 || no === 34 || no === 41 || no === 48 || no === 10 || no === 32) {
-          hasTarget = true;
-          return true;
-        }
-        return false;
-      });
-    } catch (e) {
-      return null;
-    }
-    if (!hasTarget) return null;
-    return rewrite(m, [30, 31, 34, 41, 48], { 10: legacyRelateAd, 32: adTab });
-  };
+  // 旧版详情页：删广告字段，过滤相关推荐与定制 Tab。
+  // rewrite 单次扫描，没有目标字段或没有改动时返回 null。
+  RULES[VIEW + "View"] = (m) => rewrite(m, [30, 31, 34, 41, 48], { 10: legacyRelateAd, 32: adTab });
   RULES[VIEW + "RelatesFeed"] = (m) => rewrite(m, null, { 1: legacyRelateAd });
   RULES[VIEW + "PlayerRelates"] = (m) => rewrite(m, null, { 1: legacyRelateAd });
   RULES[VIEW + "ViewProgress"] = (m) => rewrite(m, [1]);
   RULES[VIEW + "TFInfo"] = (m) => rewrite(m, [2, 3]);
 
   // 新版详情页：顶层 cm(7) + 详情 Tab(5) 里的推广模块与推荐广告卡。
-  // 先扫描有没有目标字段，没有就跳过完整解析。
-  RULES[UNITE + "View"] = (m) => {
-    let hasTarget = false;
-    try {
-      wireScanFields(m, (no) => {
-        if (no === 7 || no === 5) {
-          hasTarget = true;
-          return true;
-        }
-        return false;
-      });
-    } catch (e) {
-      return null;
-    }
-    if (!hasTarget) return null;
-    const dropped = rewrite(m, [7]);
-    const tabbed = mapSub(dropped || m, 5, cleanTab);
-    return tabbed || dropped;
-  };
+  // 删除与改写一次扫描完成，不再先扫描再完整解析。
+  RULES[UNITE + "View"] = (m) => rewrite(m, [7], null, { 5: cleanTab });
   // 异步补充的详情页：cm(1) + tab(2) 里的模块（AIRelateTab.modules = 1）
-  RULES[UNITE + "AIRelateAsync"] = (m) => {
-    let hasTarget = false;
-    try {
-      wireScanFields(m, (no) => {
-        if (no === 1 || no === 2) {
-          hasTarget = true;
-          return true;
-        }
-        return false;
-      });
-    } catch (e) {
-      return null;
-    }
-    if (!hasTarget) return null;
-    const dropped = rewrite(m, [1]);
-    const tabbed = mapSub(dropped || m, 2, (tab) => cleanModules(tab, 1));
-    return tabbed || dropped;
-  };
+  RULES[UNITE + "AIRelateAsync"] = (m) => rewrite(m, [1], null, { 2: (tab) => cleanModules(tab, 1) });
   RULES[UNITE + "RelatesFeed"] = (m) => rewrite(m, null, { 1: unifiedRelateAd });
   RULES[UNITE + "ViewProgress"] = (m) => rewrite(m, [1]);
   RULES[UNITE + "PlayPause"] = () => EMPTY;
   RULES[UNITE + "ViewEndPage"] = () => EMPTY;
 
-  // 评论区：先扫描有没有目标字段（11/4/5/6/14/28），没有就跳过完整解析。
-  // 大部分评论响应只有普通评论，不含广告/带货，快速扫描省一次 parseFields。
-  RULES[REPLY + "MainList"] = (m) => {
-    let hasTarget = false;
-    try {
-      wireScanFields(m, (no) => {
-        if (no === 11 || no === 4 || no === 5 || no === 6 || no === 14 || no === 28) {
-          hasTarget = true;
-          return true;
-        }
-        return false;
-      });
-    } catch (e) {
-      return null;
-    }
-    if (!hasTarget) return null;
-    return rewrite(m, [11], {
+  // 评论区：删广告字段，过滤置顶带货评论与顶部带货卡。
+  // 普通评论页没有目标字段时，单次扫描直接返回 null。
+  RULES[REPLY + "MainList"] = (m) =>
+    rewrite(m, [11], {
       4: commercialReply,
       5: commercialReply,
       6: commercialReply,
       14: commercialReply,
       28: commercialTopCard,
     });
-  };
 
   // 动态页：综合页和视频页的 dynamic_list(1) 里删广告卡。
-  // 先扫描有没有字段 1，没有就跳过完整解析。
-  RULES[DYNAMIC + "DynAll"] = (m) => {
-    if (!hasField(m, 0, m.length, 1)) return null;
-    return mapSub(m, 1, cleanDynamicList);
-  };
-  RULES[DYNAMIC + "DynVideo"] = (m) => {
-    if (!hasField(m, 0, m.length, 1)) return null;
-    return mapSub(m, 1, cleanDynamicList);
-  };
+  RULES[DYNAMIC + "DynAll"] = (m) => mapSub(m, 1, cleanDynamicList);
+  RULES[DYNAMIC + "DynVideo"] = (m) => mapSub(m, 1, cleanDynamicList);
 
   // ---- 解压 -------------------------------------------------------------
 
