@@ -231,6 +231,39 @@ export default async function (ctx) {
     return true;
   }
 
+  // 旧式 group（wire type 3）：从 start 之后开始找匹配的 end group，返回结束位置。
+  // Spotify 的元数据响应里偶尔会带 group，不认它的话整条响应只能原样放行。
+  function wireSkipGroup(bytes, from, no) {
+    const state = { i: from };
+    while (state.i < bytes.length) {
+      const tag = wireReadCount(bytes, state);
+      const inner = tag >>> 3;
+      const wire = tag & 7;
+      if (!inner) throw new Error("Invalid protobuf field");
+      if (wire === 4) {
+        if (inner !== no) throw new Error("Mismatched protobuf end group");
+        return state.i;
+      }
+      if (wire === 2) {
+        const length = wireReadCount(bytes, state);
+        if (length > bytes.length - state.i) throw new Error("Truncated protobuf field");
+        state.i += length;
+      } else if (wire === 1) {
+        state.i += 8;
+      } else if (wire === 5) {
+        state.i += 4;
+      } else if (wire === 0) {
+        wireSkipVarint(bytes, state);
+      } else if (wire === 3) {
+        state.i = wireSkipGroup(bytes, state.i, inner);
+      } else {
+        throw new Error("Unsupported protobuf wire type " + wire);
+      }
+      if (state.i > bytes.length) throw new Error("Truncated protobuf field");
+    }
+    throw new Error("Truncated protobuf group");
+  }
+
   // 返回 [{ no, wire, data, raw }]；data 是字段值，raw 是含 tag 的整段字节。
   function wireParseFields(bytes) {
     const fields = [];
@@ -254,6 +287,9 @@ export default async function (ctx) {
         state.i += 4;
       } else if (wire === 0) {
         wireSkipVarint(bytes, state);
+      } else if (wire === 3) {
+        // group：整段（含起止 tag）当 opaque 值保留，重新编码时原样写回。
+        state.i = wireSkipGroup(bytes, state.i, no);
       } else {
         throw new Error("Unsupported protobuf wire type " + wire);
       }
@@ -288,6 +324,8 @@ export default async function (ctx) {
         state.i += 4;
       } else if (wire === 0) {
         wireSkipVarint(bytes, state);
+      } else if (wire === 3) {
+        state.i = wireSkipGroup(bytes, state.i, no);
       } else {
         throw new Error("Unsupported protobuf wire type " + wire);
       }
@@ -390,15 +428,18 @@ export default async function (ctx) {
     } catch (e) {
       return null;
     }
-    return fields.map((f) =>
-      f.wire === 0
-        ? { no: f.no, w: 0, v: wireReadVarint(f.data, { i: 0 }), raw: f.raw }
-        : { no: f.no, w: f.wire, p: f.data, raw: f.raw },
-    );
+    return fields.map((f) => {
+      if (f.wire === 0) return { no: f.no, w: 0, v: wireReadVarint(f.data, { i: 0 }), raw: f.raw };
+      // group 原样保留：p 存的是含起止 tag 的整段，serialize 直接写回。
+      if (f.wire === 3) return { no: f.no, w: 3, p: f.raw, raw: f.raw };
+      return { no: f.no, w: f.wire, p: f.data, raw: f.raw };
+    });
   }
 
   function serialize(fields) {
-    return wireConcat(fields.map((f) => wireEncodeField(f.no, f.w, f.w === 0 ? wireEncodeVarint(f.v) : f.p)));
+    return wireConcat(fields.map((f) => (f.w === 3
+      ? f.p
+      : wireEncodeField(f.no, f.w, f.w === 0 ? wireEncodeVarint(f.v) : f.p))));
   }
 
   // 判断整条消息是否本来就是规范编码。等价于 same(serialize(parse(buffer)), buffer)，
@@ -421,6 +462,9 @@ export default async function (ctx) {
         const length = wireEncodeVarint(f.p.length);
         if (f.raw.length !== tag.length + length.length + f.p.length) return false;
         if (!samePrefix(f.raw.subarray(tag.length, tag.length + length.length), length)) return false;
+      } else if (f.w === 3) {
+        // group 按 raw 原样写回，只要保留着就认为是规范编码。
+        if (!f.raw || f.raw.length !== f.p.length) return false;
       } else if (f.raw.length !== tag.length + (f.w === 1 ? 8 : 4)) {
         return false;
       }
@@ -1889,12 +1933,49 @@ export default async function (ctx) {
         : patchCustomize(body) || patchBootstrap(body);
   }
 
+  function headerValue(headers, name) {
+    if (!headers || "object" != typeof headers) return "";
+    for (const key in headers) {
+      if (String(key).toLowerCase() !== name) continue;
+      const value = headers[key];
+      if (Array.isArray(value)) return String(value[0] || "");
+      return String(value === undefined || value === null ? "" : value);
+    }
+    return "";
+  }
+
   const finish = () => {
     if (!out || same(out, body)) {
       $done({});
       return;
     }
-    $done({ body: out });
+    // 只换 body 时必须把原响应头带上：桌面端（CEF）对这些接口是跨域 fetch，
+    // 丢掉 Access-Control-Allow-Origin 整条请求会被浏览器拦掉。has_lyrics 查询
+    // 就是这么废的——元数据改写成功、客户端却以为这首歌没有歌词。
+    const headers = {};
+    const source = res && res.headers;
+    if (source && "object" == typeof source) {
+      for (const key in source) {
+        const lower = String(key).toLowerCase();
+        if (lower === "content-length" || lower === "content-encoding"
+          || lower === "transfer-encoding") continue;
+        headers[key] = source[key];
+      }
+    }
+    let hasOrigin = false;
+    for (const key in headers) {
+      if (String(key).toLowerCase() === "access-control-allow-origin") hasOrigin = true;
+    }
+    if (!hasOrigin) {
+      const origin = headerValue(req && req.headers, "origin");
+      headers["Access-Control-Allow-Origin"] = origin || "*";
+      if (origin) {
+        headers["Access-Control-Allow-Credentials"] = "true";
+        headers["Vary"] = "Origin";
+      }
+    }
+    headers["Content-Length"] = String(out.length);
+    $done({ status: Number(res.status) || 200, headers: headers, body: out });
   };
 
   finish();

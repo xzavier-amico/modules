@@ -70,12 +70,49 @@
         : patchCustomize(body) || patchBootstrap(body);
   }
 
+  function headerValue(headers, name) {
+    if (!headers || "object" != typeof headers) return "";
+    for (const key in headers) {
+      if (String(key).toLowerCase() !== name) continue;
+      const value = headers[key];
+      if (Array.isArray(value)) return String(value[0] || "");
+      return String(value === undefined || value === null ? "" : value);
+    }
+    return "";
+  }
+
   const finish = () => {
     if (!out || same(out, body)) {
       $done({});
       return;
     }
-    $done({ body: out });
+    // 只换 body 时必须把原响应头带上：桌面端（CEF）对这些接口是跨域 fetch，
+    // 丢掉 Access-Control-Allow-Origin 整条请求会被浏览器拦掉。has_lyrics 查询
+    // 就是这么废的——元数据改写成功、客户端却以为这首歌没有歌词。
+    const headers = {};
+    const source = res && res.headers;
+    if (source && "object" == typeof source) {
+      for (const key in source) {
+        const lower = String(key).toLowerCase();
+        if (lower === "content-length" || lower === "content-encoding"
+          || lower === "transfer-encoding") continue;
+        headers[key] = source[key];
+      }
+    }
+    let hasOrigin = false;
+    for (const key in headers) {
+      if (String(key).toLowerCase() === "access-control-allow-origin") hasOrigin = true;
+    }
+    if (!hasOrigin) {
+      const origin = headerValue(req && req.headers, "origin");
+      headers["Access-Control-Allow-Origin"] = origin || "*";
+      if (origin) {
+        headers["Access-Control-Allow-Credentials"] = "true";
+        headers["Vary"] = "Origin";
+      }
+    }
+    headers["Content-Length"] = String(out.length);
+    $done({ status: Number(res.status) || 200, headers: headers, body: out });
   };
 
   finish();

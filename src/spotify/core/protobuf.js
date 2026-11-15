@@ -16,15 +16,18 @@
     } catch (e) {
       return null;
     }
-    return fields.map((f) =>
-      f.wire === 0
-        ? { no: f.no, w: 0, v: wireReadVarint(f.data, { i: 0 }), raw: f.raw }
-        : { no: f.no, w: f.wire, p: f.data, raw: f.raw },
-    );
+    return fields.map((f) => {
+      if (f.wire === 0) return { no: f.no, w: 0, v: wireReadVarint(f.data, { i: 0 }), raw: f.raw };
+      // group 原样保留：p 存的是含起止 tag 的整段，serialize 直接写回。
+      if (f.wire === 3) return { no: f.no, w: 3, p: f.raw, raw: f.raw };
+      return { no: f.no, w: f.wire, p: f.data, raw: f.raw };
+    });
   }
 
   function serialize(fields) {
-    return wireConcat(fields.map((f) => wireEncodeField(f.no, f.w, f.w === 0 ? wireEncodeVarint(f.v) : f.p)));
+    return wireConcat(fields.map((f) => (f.w === 3
+      ? f.p
+      : wireEncodeField(f.no, f.w, f.w === 0 ? wireEncodeVarint(f.v) : f.p))));
   }
 
   // 判断整条消息是否本来就是规范编码。等价于 same(serialize(parse(buffer)), buffer)，
@@ -47,6 +50,9 @@
         const length = wireEncodeVarint(f.p.length);
         if (f.raw.length !== tag.length + length.length + f.p.length) return false;
         if (!samePrefix(f.raw.subarray(tag.length, tag.length + length.length), length)) return false;
+      } else if (f.w === 3) {
+        // group 按 raw 原样写回，只要保留着就认为是规范编码。
+        if (!f.raw || f.raw.length !== f.p.length) return false;
       } else if (f.raw.length !== tag.length + (f.w === 1 ? 8 : 4)) {
         return false;
       }

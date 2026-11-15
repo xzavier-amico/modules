@@ -180,6 +180,39 @@
     return true;
   }
 
+  // 旧式 group（wire type 3）：从 start 之后开始找匹配的 end group，返回结束位置。
+  // Spotify 的元数据响应里偶尔会带 group，不认它的话整条响应只能原样放行。
+  function wireSkipGroup(bytes, from, no) {
+    const state = { i: from };
+    while (state.i < bytes.length) {
+      const tag = wireReadCount(bytes, state);
+      const inner = tag >>> 3;
+      const wire = tag & 7;
+      if (!inner) throw new Error("Invalid protobuf field");
+      if (wire === 4) {
+        if (inner !== no) throw new Error("Mismatched protobuf end group");
+        return state.i;
+      }
+      if (wire === 2) {
+        const length = wireReadCount(bytes, state);
+        if (length > bytes.length - state.i) throw new Error("Truncated protobuf field");
+        state.i += length;
+      } else if (wire === 1) {
+        state.i += 8;
+      } else if (wire === 5) {
+        state.i += 4;
+      } else if (wire === 0) {
+        wireSkipVarint(bytes, state);
+      } else if (wire === 3) {
+        state.i = wireSkipGroup(bytes, state.i, inner);
+      } else {
+        throw new Error("Unsupported protobuf wire type " + wire);
+      }
+      if (state.i > bytes.length) throw new Error("Truncated protobuf field");
+    }
+    throw new Error("Truncated protobuf group");
+  }
+
   // 返回 [{ no, wire, data, raw }]；data 是字段值，raw 是含 tag 的整段字节。
   function wireParseFields(bytes) {
     const fields = [];
@@ -203,6 +236,9 @@
         state.i += 4;
       } else if (wire === 0) {
         wireSkipVarint(bytes, state);
+      } else if (wire === 3) {
+        // group：整段（含起止 tag）当 opaque 值保留，重新编码时原样写回。
+        state.i = wireSkipGroup(bytes, state.i, no);
       } else {
         throw new Error("Unsupported protobuf wire type " + wire);
       }
@@ -237,6 +273,8 @@
         state.i += 4;
       } else if (wire === 0) {
         wireSkipVarint(bytes, state);
+      } else if (wire === 3) {
+        state.i = wireSkipGroup(bytes, state.i, no);
       } else {
         throw new Error("Unsupported protobuf wire type " + wire);
       }

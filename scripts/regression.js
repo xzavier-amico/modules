@@ -597,6 +597,54 @@ check("Spotify official protobuf preserves opaque 64-bit and fixed-width fields"
   assert.equal(Object.keys(run("loon/spotify/js/spotify_lyrics.js", new Uint8Array([10, 127]), "https://spclient.wg.spotify.com/color-lyrics/v2/track/id")).length, 0);
 });
 
+check("Spotify patched responses keep CORS headers for the desktop client", () => {
+  // 元数据改写后如果只回 body，Loon 会把 Access-Control-Allow-* 顶掉，桌面端
+  // 这条跨域 fetch 直接失败 → has_lyrics 拿不到 → 客户端认为没有歌词。
+  const track = serialize([s(4, "書劍恩仇錄")]);
+  const url = "https://spclient.wg.spotify.com/metadata/4/track/000f22c0461543e4a19bc1ec119d2c4e?market=from_token";
+  const args = { spoof_premium: true, block_ads: true, unlock_playback: false, enable_lyrics: true, desktop: "macos", lyrics_source: "auto" };
+  const out = run("loon/spotify/js/spotify.js", track, url, args, {
+    $request: { url, method: "GET", headers: { origin: "https://xpui.app.spotify.com" } },
+    $response: {
+      status: 200,
+      headers: {
+        "content-type": "application/x-protobuf",
+        "content-encoding": "gzip",
+        "content-length": "10",
+        "access-control-allow-credentials": "true",
+      },
+      body: track,
+    },
+    $persistentStore: { read: () => null, write: () => true },
+  });
+  assert.ok(out && out.body, "metadata must be patched");
+  const headers = {};
+  for (const key in out.headers) headers[String(key).toLowerCase()] = out.headers[key];
+  assert.equal(headers["access-control-allow-origin"], "https://xpui.app.spotify.com", "CORS header must survive");
+  assert.equal(headers["access-control-allow-credentials"], "true", "existing CORS header must be kept");
+  assert.equal(headers["content-encoding"], undefined, "content-encoding must be dropped");
+  assert.equal(headers["content-type"], "application/x-protobuf", "content-type must stay protobuf");
+  assert.equal(headers["content-length"], String(out.body.length), "content-length must follow the new body");
+});
+
+check("Spotify metadata patch survives legacy protobuf groups", () => {
+  // Spotify 的 metadata/4/track 响应里偶尔带旧式 group（wire type 3）。
+  // 底层解析不认 group 时整条响应会被放行，has_lyrics 改不动，
+  // 客户端就认为这首歌没有歌词、连 color-lyrics 都不请求。
+  const group = new Uint8Array([0xf3, 0x01, 0x08, 0x07, 0xf4, 0x01]); // field 30 group { 1: 7 }
+  const track = concat(serialize([s(4, "書劍恩仇錄"), v(1, 1)]), group);
+  const url = "https://spclient.wg.spotify.com/metadata/4/track/000f22c0461543e4a19bc1ec119d2c4e?market=from_token";
+  const args = { spoof_premium: true, block_ads: true, unlock_playback: false, enable_lyrics: true, desktop: "macos", lyrics_source: "auto" };
+  const store = { read: () => null, write: () => true };
+  const out = run("loon/spotify/js/spotify.js", track, url, args, { $persistentStore: store });
+  assert.ok(out && out.body, "group-bearing metadata must still be patched");
+  const fields = parse(out.body);
+  assert.equal(first(fields, 18).v, 1n, "has_lyrics must be set");
+  const kept = fields.filter((f) => f.no === 30);
+  assert.equal(kept.length, 1, "group must be preserved");
+  assert.deepEqual(Array.from(kept[0].p), Array.from(group), "group bytes must round-trip unchanged");
+});
+
 check("Spotify context metadata patches current track without losing opaque fields", () => {
   const entry = (key, value) => b(3, serialize([s(1, key), s(2, value)]));
   const context = serialize([s(1, track), s(2, "uid"), entry("track_title", "Song"), v(90, 18446744073709551615n)]);
