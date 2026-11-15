@@ -363,6 +363,20 @@ check("Egern lyrics script declares body_required", () => {
   assert.ok(/body_required:\s*true/.test(response), "lyrics response entry must set body_required");
 });
 
+check("Spotify modules drop if-none-match for track metadata too", () => {
+  // metadata/4/track 是桌面端判断「这首歌有没有歌词」的来源。不禁用 304 时
+  // 客户端会一直用浏览器缓存里的旧 has_lyrics，补了元数据也看不到歌词。
+  const loonNeedle = "metadata\\/4\\/track";
+  for (const file of ["loon/spotify/spotify-enhance.plugin", "loon/spotify/spotify-enhance-mac.plugin"]) {
+    const line = read(file).split("\n").find((item) => item.includes('request.header.del("if-none-match")'));
+    assert.ok(line && line.includes(loonNeedle), file + " must drop if-none-match for metadata/4/track");
+  }
+  const sr = read("shadowrocket/spotify/spotify-enhance.sgmodule").split("\n").find((l) => l.includes("header-del if-none-match"));
+  assert.ok(sr && sr.includes(loonNeedle), "shadowrocket must drop if-none-match for metadata/4/track");
+  const egern = read("egern/spotify/spotify-enhance.yaml");
+  assert.ok(egern.includes("metadata\\\\/4\\\\/track"), "egern must drop if-none-match for metadata/4/track");
+});
+
 check("Spotify client plugins short-circuit cached lyrics at request phase", () => {
   // 请求阶段命中缓存时直接返回歌词，跳过可能很慢的官方 color-lyrics 请求。
   for (const file of ["loon/spotify/spotify-enhance.plugin", "loon/spotify/spotify-enhance-mac.plugin", "shadowrocket/spotify/spotify-enhance.sgmodule"]) {

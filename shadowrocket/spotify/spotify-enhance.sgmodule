@@ -18,7 +18,7 @@ AND,((DOMAIN-SUFFIX,spotify.com),(PROTOCOL,QUIC)),REJECT
 
 [Header Rewrite]
 # 删除 if-none-match，避免 304 空响应导致脚本拿不到 body。
-http-request ^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:bootstrap|user-customization-service|extended-metadata|color-lyrics|remote-config-resolver|nebula|casita|browsita|scrollsita)\/ header-del if-none-match
+http-request ^https:\/\/(?:\w+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:bootstrap|user-customization-service|extended-metadata|metadata\/4\/track|color-lyrics|remote-config-resolver|nebula|casita|browsita|scrollsita)\/ header-del if-none-match
 
 [Script]
 # 请求头 / 时区：按账号地区改写 URL 里的 timezone（固定开启）。

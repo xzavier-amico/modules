@@ -46,7 +46,7 @@ DOMAIN-SUFFIX,www.googletagservices.com,REJECT
 
 [Rewrite]
 # 删除 if-none-match，避免 304 空响应导致脚本拿不到 body。
-request if ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/(?:bootstrap|user-customization-service|extended-metadata|color-lyrics|remote-config-resolver|nebula|casita|browsita|scrollsita)\//i then request.header.del("if-none-match")
+request if ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/(?:bootstrap|user-customization-service|extended-metadata|metadata\/4\/track|color-lyrics|remote-config-resolver|nebula|casita|browsita|scrollsita)\//i then request.header.del("if-none-match")
 
 # 拦截桌面端广告接口。
 request if ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/ads\/v[12]\//i then reject(404)

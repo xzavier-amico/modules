@@ -112,6 +112,10 @@ header_rewrites:
       name: "if-none-match"
       type: "request"
   - delete:
+      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/metadata\\/4\\/track\\/"
+      name: "if-none-match"
+      type: "request"
+  - delete:
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/"
       name: "if-none-match"
       type: "request"
