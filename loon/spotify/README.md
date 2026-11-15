@@ -23,6 +23,8 @@
 | `enable_lyrics` | true | 补全歌词；关闭后不加载歌词脚本 |
 | `lyrics_source` | auto | 歌词源；`auto` 并发查询网易云 / QQ / LRCLIB，不自动查 Musixmatch |
 | `desktop` | auto | `auto` 按 User-Agent 识别 iPhone / iPad 与 Loon for Mac；识别不准时手动指定 `ios` / `macos` |
+| `lyrics_script` | hans | 补全的第三方歌词默认转简体（`hans`）；`source` 保持歌词源原文。官方歌词不受影响 |
+| `ignore_han_variants` | true | 查歌词时把繁体曲名 / 歌手按简体比较；关闭后繁简写法必须完全一致 |
 
 ## 时区
 
@@ -41,6 +43,8 @@
 - `auto` 同时请求网易云、QQ、LRCLIB，首个通过歌名 / 歌手 / Live 校验的同步歌词胜出；只有纯文本时等全部结束，或在 5 秒后先发纯文本，避免一直等到总超时。
 - 候选请求全部并行：LRCLIB 对完整曲名和去掉装饰括号后的曲名各发 `get` + `search`；网易云 / QQ 搜索后同时请求排名前 3 的候选歌词。任一同步歌词先通过校验就直接返回，不再按候选顺序一个个等。
 - 歌名比较会忽略 `feat.` / `ft.` / `with` / `prod.`、`Remastered 2011` / `2011 Remaster`、`Radio Edit`、`Single Version`、`Album Version`、`Bonus Track`、`Deluxe Edition`、`Explicit` / `Clean` 等版本后缀；歌手按 `feat.` / `ft.` / `with` 和多歌手分隔符拆分，任意一位匹配即可。
+- 曲名 / 歌手比较默认做繁→简折叠（OpenCC t2s 表）：Spotify 的中文元数据常是繁体，网易云 / QQ 返回简体，不折叠时「說謊」对不上「说谎」、「周杰倫」对不上「周杰伦」。关闭 `ignore_han_variants` 后恢复逐字比较。
+- 补全歌词默认转简体（`lyrics_script=hans`）：只对判定为繁体的歌词做转换，网易云 / QQ 的简体歌词、英文与日文歌词原样保留；官方歌词不经过这一步。词表随脚本下发（约 30KB），首次用到时才构建，非繁体文本零逐字开销。
 - 曲名里带 `()` / `（）` 的装饰信息（影视剧名、节目名、歌手名等）会先去掉再查一次；括号里含 `Live`、`Remix`、`Acoustic`、`伴奏`、`版` 等版本词时保留，避免把现场版查成录音室版。返回结果仍按完整曲名或去掉装饰后的曲名校验。
 - `DJ版` / `DJ Remix` / `(DJ)` / `- DJ` 这类标记会先从曲名里去掉再查，并跳过歌手约束（DJ 版通常挂别人名字）；时长容差放宽到 60 秒，避免混音版比原曲长而匹配失败。
 - LRCLIB 并行候选都没命中时，会再用歌名搜一次；仍按歌手 / 版本 / Live / 时长校验，不会拿别人的同名歌。
@@ -51,7 +55,7 @@
 - scrollsita 列表缺少歌词 section 时立刻补一格：读到 `spotify.lyrics.miss` 不补（有歌词请求在路上时旧标记不作数）；补在头部 section 之后；官方已有则不重复补。
 
 歌词源：`lrclib`、`musixmatch`、`netease`、`qq`、`auto`（默认）。
-- LRCLIB 先按完整曲名查，再用去掉 `feat.` / `remaster` 等后缀的曲名重试（对应 EeveeSpotify 的 `strippedTrackTitle`），返回结果仍会重新校验歌手 / Live / 时长。
+- LRCLIB 先按完整曲名查，再用去掉 `feat.` / `remaster` 等后缀的曲名重试（对应 EeveeSpotify 的 `strippedTrackTitle`），返回结果仍会重新校验歌手 / Live / 时长；仍未命中时再用繁→简折叠后的歌名 / 歌手搜一次。
 - `extended-metadata` 是批量接口，可能到几 MB；脚本只解析包含 `spotify:track:` 的子消息，图片 / Credits / Canvas 等大块直接跳过，且用字段级 canonical 检查代替整包 `serialize` 拷贝。超过 12MB 的响应仍原样放行。
 
 
@@ -108,6 +112,7 @@ Spotify。桌面端如果一直看不到脚本执行记录，说明请求可能�
 - 插件删除 `if-none-match` 并清除 `extended-metadata` 请求体里的 etag，避免 304 空响应导致脚本拿不到 body。
 - 脚本 URL 带 `?v=日期`；客户端元数据有缓存，更新后需重启 App 或打开未缓存的歌单。
 - 已删除的参数（`lyrics_debug`、`debug_log`、`lyrics_mode`、`force_zh_hans`、`spoof_timezone`）在旧安装里可能仍显示；需要在客户端删除插件后重新导入，并完全退出 App 再打开。脚本按 URL 缓存，只改 `?v=` 而不重新导入时，旧脚本可能继续运行。
+- `force_zh_hans` 已由 `lyrics_script` 取代：只转换补全的第三方歌词字形，不改 `Accept-Language`，也不影响官方歌词。
 - `spotify.headers` 请求脚本固定伪装时区；旧安装需要重新导入插件才会带上它，只更新插件而不重新导入时不会生效。脚本不再改 `Accept-Language`。
 - 需开启 MitM：`*-spclient.spotify.com`、`spclient.wg.spotify.com`。
 - 音质、下载与 Spotify Connect 由服务端判定，脚本无法修改。

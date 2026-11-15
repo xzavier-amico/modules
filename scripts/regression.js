@@ -133,8 +133,8 @@ const scroll = "https://spclient.wg.spotify.com/scrollsita/v1/scroll/" + encodeU
 function lyricsStore(id, source = "auto") {
   const map = {
     "spotify.lyrics.cache.v2": JSON.stringify({
-      [source + "|" + id]: {
-        t: Date.now(), m: 0, s: "LINE_SYNCED", p: "LRCLIB", i: "", l: "en",
+      [source + "|hans|" + id]: {
+        t: Date.now(), m: 0, z: 1, s: "LINE_SYNCED", p: "LRCLIB", i: "", l: "en",
         c: [-16777216, -1, -1], a: [[0, "line"]],
       },
     }),
@@ -404,6 +404,93 @@ check("Spotify request phase passes through when the cache is empty", () => {
   }
 });
 
+check("Spotify han variant table folds traditional text with phrase exceptions", () => {
+  const context = vm.createContext({});
+  vm.runInContext(read("src/spotify/t2s.js") + "\nglobalThis.han = SPOTIFY_HAN_VARIANTS;", context);
+  const han = context.han;
+  assert.equal(han.fold("說謊"), "说谎");
+  assert.equal(han.fold("周杰倫"), "周杰伦");
+  assert.equal(han.fold("後來"), "后来");
+  assert.equal(han.fold("乾淨"), "干净");
+  assert.equal(han.fold("藉口"), "借口");
+  assert.equal(han.fold("慰藉"), "慰藉");
+  assert.equal(han.fold("乾隆"), "乾隆");
+  assert.equal(han.fold("乾坤大挪移"), "乾坤大挪移");
+  assert.equal(han.fold("宮商角徵羽"), "宫商角徵羽");
+  assert.equal(han.isTraditional("我們的愛"), true);
+  assert.equal(han.isTraditional("我们的爱"), false);
+  assert.equal(han.toHans("僕らの愛を"), "僕らの愛を");
+});
+
+check("Spotify lyrics fold traditional metadata for simplified catalogs", () => {
+  const id = "tradmatch";
+  const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json";
+  const meta = { [id]: ["說謊", "林宥嘉", 270000, Date.now()] };
+  const metaStore = () => ({
+    read: (key) => (key === "spotify.track.meta.v2" ? JSON.stringify(meta) : null),
+    write: () => true,
+  });
+  const http = {
+    get: (request, callback) => callback(null, { status: 200 }, JSON.stringify(
+      request.url.includes("/api/get")
+        ? { trackName: "说谎", artistName: "林宥嘉", syncedLyrics: "[00:00.50]我们的爱" }
+        : [],
+    )),
+  };
+  const args = { $response: { status: 404, body: "" }, $persistentStore: metaStore(), $httpClient: http };
+  const out = run("loon/spotify/js/spotify_lyrics.js", "", url, ["lrclib", true], args);
+  assert.equal(JSON.parse(out.body).lyrics.lines[0].words, "我们的爱", "traditional title must match a simplified catalog");
+
+  // 关掉忽略简繁后恢复逐字比较，繁体曲名匹配不到简体曲库。
+  const off = run("loon/spotify/js/spotify_lyrics.js", "", url, ["lrclib", true, "auto", "hans", false], {
+    $response: { status: 404, body: "" },
+    $persistentStore: metaStore(),
+    $httpClient: http,
+  });
+  assert.equal(Object.keys(off).length, 0);
+});
+
+check("Spotify lyrics convert traditional supplements to simplified by default", () => {
+  const id = "tradlyric";
+  const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json";
+  const map = { "spotify.track.meta.v2": JSON.stringify({ [id]: ["我們的愛", "F.I.R.", 250000, Date.now()] }) };
+  const store = {
+    read: (key) => (key in map ? map[key] : null),
+    write: (value, key) => { map[key] = value; return true; },
+  };
+  const http = {
+    get: (request, callback) => callback(null, { status: 200 }, JSON.stringify(
+      request.url.includes("/api/get")
+        ? { trackName: "我們的愛", artistName: "F.I.R.", syncedLyrics: "[00:01.00]我們的愛" }
+        : [],
+    )),
+  };
+  const args = { $response: { status: 404, body: "" }, $persistentStore: store, $httpClient: http };
+  const out = run("loon/spotify/js/spotify_lyrics.js", "", url, ["lrclib", true], args);
+  assert.equal(JSON.parse(out.body).lyrics.lines[0].words, "我们的爱");
+
+  // lyrics_script=source 保持歌词源原文；字形变了不复用旧缓存。
+  const raw = run("loon/spotify/js/spotify_lyrics.js", "", url, ["lrclib", true, "auto", "source"], args);
+  assert.equal(JSON.parse(raw.body).lyrics.lines[0].words, "我們的愛");
+});
+
+check("Spotify modules expose the han variant switches consistently", () => {
+  for (const file of ["loon/spotify/spotify-enhance.plugin", "loon/spotify/spotify-enhance-mac.plugin"]) {
+    const text = read(file);
+    assert.ok(text.includes("lyrics_script = select,hans,source"), file);
+    assert.ok(text.includes("ignore_han_variants = switch,true"), file);
+    for (const line of text.split("\n").filter((item) => item.includes("spotify_lyrics.js"))) {
+      assert.ok(line.includes("${lyrics_script}, ${ignore_han_variants}"), file + " lyrics arguments");
+    }
+  }
+  const egern = read("egern/spotify/spotify-enhance.yaml");
+  assert.ok(egern.includes("lyrics_script:"), "egern lyrics_script");
+  assert.ok(egern.includes("ignore_han_variants:"), "egern ignore_han_variants");
+  const sr = read("shadowrocket/spotify/spotify-enhance.sgmodule");
+  assert.ok(sr.includes("歌词字形:hans"), "shadowrocket lyrics_script argument");
+  assert.ok(sr.includes("忽略简繁:true"), "shadowrocket ignore_han_variants argument");
+});
+
 check("Spotify feed scripts get a 30s timeout", () => {
   // scrollsita 响应可以到 12MB，10 秒偶尔不够，超时会放行原始响应、歌词卡片不出现。
   const egern = read("egern/spotify/spotify-enhance.yaml").split(/\n\s*-\s+(?=http_request:|http_response:)/)
@@ -555,7 +642,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     const afterMiss = missCalls;
     assert.ok(afterMiss > 0, platform);
     const missCache = JSON.parse(map["spotify.lyrics.cache.v2"] || "{}");
-    assert.equal(missCache["lrclib|missing"], undefined, platform + " must not cache a miss");
+    assert.equal(missCache["lrclib|hans|missing"], undefined, platform + " must not cache a miss");
     // 乐观补出来的歌词卡需要知道「这次确实没歌词」，短期内不再补空卡。
     const missMark = JSON.parse(map["spotify.lyrics.miss"] || "null");
     assert.equal(missMark && missMark.id, "missing", platform + " must remember a miss for the lyrics card");
@@ -1207,7 +1294,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
   check(platform + " Spotify Live validates artist, performance and duration before fetching lyrics", () => {
     for (const sample of [
       { title: "落叶归根-四公live", candidate: "落叶归根 (Live版)", accept: true },
-      { title: "落葉歸根 - 四公 live", candidate: "落叶归根 (Live版)", accept: false },
+      { title: "落葉歸根 - 四公 live", candidate: "落叶归根 (Live版)", accept: true },
       { title: "落叶归根（四公 LIVE）", candidate: "落叶归根 (Live版)", accept: true },
       { title: "落叶归根 - 四公现场", candidate: "落叶归根 (Live版)", accept: true },
       { title: "落叶归根 - 四公 live", candidate: "落叶归根", accept: false },
@@ -1341,7 +1428,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     for (const sample of [
       { title: "書劍恩仇錄", artist: "Adam Cheng", name: "書劍恩仇錄", singer: "Cheng, Adam", accept: true },
       { title: "书剑恩仇录", artist: "Adam Cheng", name: "书剑恩仇录", singer: "郑少秋", accept: false },
-      { title: "書劍恩仇錄", artist: "Adam Cheng", name: "书剑恩仇录", singer: "Adam Cheng", accept: false },
+      { title: "書劍恩仇錄", artist: "Adam Cheng", name: "书剑恩仇录", singer: "Adam Cheng", accept: true },
       { title: "Ｓｏｎｇ", artist: "Artist", name: "Song", singer: "Artist", accept: true },
       { title: "Cafe\u0301", artist: "Artist", name: "Café", singer: "Artist", accept: true },
       { title: "東京", artist: "歌手", name: "大阪", singer: "歌手", accept: false },
@@ -1422,7 +1509,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     const lyrics = JSON.parse(out.body).lyrics;
     assert.equal(lyrics.provider, "LRCLIB");
     assert.equal(lyrics.syncType, "UNSYNCED");
-    assert.equal(lyrics.lines[0].words, "紅花會豪傑");
+    assert.equal(lyrics.lines[0].words, "红花会豪杰");
   });
 
   check(platform + " Spotify validates provider artist aliases by ID without a built-in name mapping", () => {
@@ -1552,7 +1639,7 @@ check("Loon passes arguments in the declared order", () => {
     const names = [...tuple.matchAll(/\$\{(\w+)\}/g)].map((match) => match[1]);
     for (const name of names) assert.ok(new RegExp("^" + name + " = ", "m").test(plugin));
     if (line.includes("spotify_lyrics.js")) {
-      assert.deepEqual(names, ["lyrics_source", "enable_lyrics", "desktop"]);
+      assert.deepEqual(names, ["lyrics_source", "enable_lyrics", "desktop", "lyrics_script", "ignore_han_variants"]);
     } else {
       assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source"]);
     }
@@ -1567,7 +1654,7 @@ check("Loon passes arguments in the declared order", () => {
     $persistentStore: lyricsStore("0VjIjW4GlUZAMYd2vXMi3b"),
   }).body);
   let requests = 0;
-  const response = run("loon/spotify/js/spotify_lyrics.js", "", lyricsUrl, ["lrclib", true, "ios", true], {
+  const response = run("loon/spotify/js/spotify_lyrics.js", "", lyricsUrl, ["lrclib", true, "ios", "hans", true], {
     $response: { status: 404, body: "" },
     $httpClient: { get: (request, callback) => {
       requests++;

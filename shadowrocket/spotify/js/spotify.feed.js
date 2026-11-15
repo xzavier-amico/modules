@@ -659,8 +659,14 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     try {
       const raw = typeof $argument !== "undefined" ? $argument : undefined;
       if (Array.isArray(raw)) {
-        // Loon 位置参数：歌词源, 补全歌词, 设备类型。
-        opt = { lyrics_source: raw[0], enable_lyrics: raw[1], desktop: raw[2] };
+        // Loon 位置参数：歌词源, 补全歌词, 设备类型, 歌词字形, 忽略简繁。
+        opt = {
+          lyrics_source: raw[0],
+          enable_lyrics: raw[1],
+          desktop: raw[2],
+          lyrics_script: raw[3],
+          ignore_han_variants: raw[4],
+        };
       }
       else if (typeof raw === "string") {
         try {
@@ -701,6 +707,17 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return flag(v, false);
   };
   const desktop = desktopMode(opt.desktop);
+
+  // 匹配用的繁→简折叠：Spotify 的中文曲名 / 歌手常是繁体，网易云 / QQ 曲库是
+  // 简体；不折叠时「說謊」对不上「说谎」，「周杰倫」对不上「周杰伦」。
+  const foldHanVariants = flag(opt.ignore_han_variants, true);
+  // 补全歌词的显示字形：hans（默认）转简体，source 保持歌词源原文。
+  // 只在整段判定为繁体时转换，简体 / 英文 / 日文歌词原样返回。
+  const hansLyrics = (() => {
+    const raw = opt.lyrics_script === undefined || opt.lyrics_script === null ? "hans" : opt.lyrics_script;
+    const mode = String(raw).trim().toLowerCase();
+    return mode !== "source" && mode !== "original" && mode !== "keep";
+  })();
 
   // 参数关闭时直接放行；请求阶段的缓存命中在下面处理，未命中同样立即放行。
   // Loon 靠 enable= 决定是否加载脚本，Egern 不支持条件加载，只能在这里早退。
@@ -859,12 +876,14 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return wanted === "lrclib" || wanted === "musixmatch" || wanted === "netease" || wanted === "qq" ? wanted : "auto";
   }
 
-  const lyricsCacheKey = (id) => lyricsSourceKey() + "|" + id;
+  const lyricsCacheKey = (id) => lyricsSourceKey() + "|" + (hansLyrics ? "hans" : "source") + "|" + id;
 
   function readLyricsCache(key, id) {
     const map = readJsonMap(LYRICS_CACHE_KEY);
     const valid = (value) => !!value && "object" == typeof value && !value.m &&
-      Date.now() - Number(value.t || 0) < LYRICS_CACHE_HIT_TTL;
+      Date.now() - Number(value.t || 0) < LYRICS_CACHE_HIT_TTL &&
+      // 缓存存的是已经转换过的歌词；字形设置换过就不复用，避免显示成另一种字形。
+      (HELPER || (Number(value.z) || 0) === (hansLyrics ? 1 : 0));
     let entry = map && map[key];
     // 配置换过歌词源（auto ↔ lrclib）时旧缓存 key 会不同；按曲目 id 再找一次，
     // 避免同一首歌已经缓存过却因为前缀不同重新查源。
@@ -932,6 +951,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     map[key] = {
       t: now,
       m: 0,
+      z: hansLyrics ? 1 : 0,
       s: lyrics.syncType === "UNSYNCED" ? "UNSYNCED" : "LINE_SYNCED",
       p: String(lyrics.provider || "LRCLIB"),
       i: lyrics.providerLyricsId === undefined || lyrics.providerLyricsId === null ? "" : String(lyrics.providerLyricsId),
@@ -1393,6 +1413,20 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       return pickRecord(synced, title, duration, artist);
     };
 
+    const search = (name, singer, next) => {
+      const query = "track_name=" + encodeURIComponent(name) + (singer ? "&artist_name=" + encodeURIComponent(singer) : "");
+      httpGetJson("https://lrclib.net/api/search?" + query, next);
+    };
+
+    // 繁简兜底：LRCLIB 里两种写法都有。原写法全部没命中时，再用折叠后的
+    // 歌名 / 歌手搜一次；pickRecord 仍按原曲名、歌手、时长校验。
+    const foldedQuery = () => {
+      if (!foldHanVariants || typeof SPOTIFY_HAN_VARIANTS === "undefined") return null;
+      const name = SPOTIFY_HAN_VARIANTS.fold(names[names.length - 1]);
+      const singer = SPOTIFY_HAN_VARIANTS.fold(queryArtist);
+      return name === names[names.length - 1] && singer === queryArtist ? null : { name: name, artist: singer };
+    };
+
     const finish = () => {
       if (done || pending) return;
       done = true;
@@ -1404,12 +1438,32 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       // 歌手写法不一致（feat. / 多歌手 / 翻译名）时，用歌名再搜一次；
       // pickRecord 仍会按 artist 过滤，不会把别人的同名歌当成结果。
       if (!queryArtist) {
-        cb(null);
+        const retry = foldedQuery();
+        if (!retry) {
+          cb(null);
+          return;
+        }
+        search(retry.name, retry.artist, (list) => {
+          const hit = pickRecord(list, title, duration, artist);
+          cb(hit ? withProvider(hit, "LRCLIB") : null);
+        });
         return;
       }
-      httpGetJson("https://lrclib.net/api/search?track_name=" + encodeURIComponent(names[names.length - 1]), (list) => {
+      search(names[names.length - 1], queryArtist, (list) => {
         const fallback = pickRecord(list, title, duration, artist);
-        cb(fallback ? withProvider(fallback, "LRCLIB") : null);
+        if (fallback) {
+          cb(withProvider(fallback, "LRCLIB"));
+          return;
+        }
+        const retry = foldedQuery();
+        if (!retry) {
+          cb(null);
+          return;
+        }
+        search(retry.name, retry.artist, (list2) => {
+          const hit = pickRecord(list2, title, duration, artist);
+          cb(hit ? withProvider(hit, "LRCLIB") : null);
+        });
       });
     };
 
@@ -2109,6 +2163,15 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   function makePayload(syncType, rawLines, record) {
     const lines = normalizeLines(rawLines);
     if (!lines.length) return null;
+    // 补全歌词默认转简体：先对整段做一次判定，只有繁体才逐行折叠。
+    // 网易云 / QQ 的简体歌词、英文与日文歌词都不会走到逐字转换。
+    if (hansLyrics && typeof SPOTIFY_HAN_VARIANTS !== "undefined") {
+      const sample = [];
+      for (let i = 0; i < lines.length && i < 40; i += 1) sample.push(lines[i].words);
+      if (SPOTIFY_HAN_VARIANTS.isTraditional(sample)) {
+        for (let i = 0; i < lines.length; i += 1) lines[i].words = SPOTIFY_HAN_VARIANTS.fold(lines[i].words);
+      }
+    }
     const provider = record.provider || "LRCLIB";
     const id = record.providerId !== undefined ? record.providerId : record.id;
     const language = detectLanguage(lines);
@@ -2269,8 +2332,13 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   function normalize(text) {
-    // NFKC 处理全角 / 组合字符；翻译与简繁转换需要来源提供对应文本。
-    return String(text || "")
+    // NFKC 处理全角 / 组合字符。查歌词时把繁体折叠成简体再比较：
+    // Spotify 与曲库的繁简写法不同也能对上（可由 ignore_han_variants 关闭）。
+    const value = String(text || "");
+    const folded = foldHanVariants && typeof SPOTIFY_HAN_VARIANTS !== "undefined"
+      ? SPOTIFY_HAN_VARIANTS.fold(value)
+      : value;
+    return folded
       .normalize("NFKC")
       .toLowerCase()
       .replace(NORMALIZE_DROP, "");

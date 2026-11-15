@@ -117,7 +117,7 @@ const TARGETS = [
     file: "spotify_lyrics.js",
     binary: true,
     title: "Spotify Lyrics — 官方无歌词时补第三方歌词",
-    standalone: "lyrics.js",
+    standalone: ["t2s.js", "lyrics.js"],
   },
   {
     module: "amap",
@@ -186,7 +186,8 @@ function compose(target, platform) {
     chunks.push(read("env", "head.js"));
   }
   if (target.standalone) {
-    chunks.push(read(target.module, target.standalone));
+    const files = Array.isArray(target.standalone) ? target.standalone : [target.standalone];
+    for (const file of files) chunks.push(read(target.module, file));
   } else {
     chunks.push(read(target.module, target.head || "head.js"));
     for (const part of target.parts) {
