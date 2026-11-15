@@ -1853,6 +1853,9 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
   let body = res.body;
   if (body instanceof ArrayBuffer) body = new Uint8Array(body);
+  // JSON 响应（桌面端 nebula 属性 / 远程配置）有些客户端直接把字符串交过来，
+  // 这里统一转成字节，后面的 JSON / protobuf 分流都按字节处理。
+  else if (typeof body === "string") body = WIRE_TEXT.encode(body);
   if (!body || !ArrayBuffer.isView(body) || !body.length) {
     $done({});
     return;

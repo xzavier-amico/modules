@@ -1874,6 +1874,12 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.equal(attributes["estimated-age"].longValue, "33", "unknown attributes stay");
     assert.equal(attributes.country_code.stringValue, "US");
 
+    // 有的客户端把 JSON 响应当字符串交给脚本（Loon for Mac 实测），也要能改写。
+    const asString = run(platform + "/spotify/js/spotify.js",
+      JSON.stringify({ attributes: { type: { stringValue: "free" } } }),
+      "https://spclient.wg.spotify.com/nebula/v1/configuration/attributes", args);
+    assert.equal(JSON.parse(dec.decode(asString.body)).attributes.type.stringValue, "premium", platform + " string body");
+
     // 不伪装 Premium 时不碰账号属性。
     args.spoof_premium = false;
     args.block_ads = false;
