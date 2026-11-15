@@ -150,6 +150,17 @@ Spotify。桌面端如果一直看不到脚本执行记录，说明请求可能�
 - 只支持逐行同步歌词，未实现逐字歌词。
 - 插件删除 `if-none-match` 并清除 `extended-metadata` 请求体里的 etag，避免 304 空响应导致脚本拿不到 body。
 - 脚本 URL 带 `?v=日期`；客户端元数据有缓存，更新后需重启 App 或打开未缓存的歌单。
+
+  > 改完脚本客户端毫无变化时，先确认不是缓存：Loon 按 **URL** 缓存脚本
+  > （`/Library/Application Support/com.loon.Loon/scripts/<md5(url)>.js`），插件内容
+  > 没变就不会重新下载，而 raw 的 CDN 在推送后还会继续给一阵旧内容。排查顺序：
+  > ① `curl` 带 `?v=` 的地址确认 raw 已是新内容；② 删掉
+  > `remotePlugin/<hash>.lpx` 让 Loon 重新下载插件（或直接在 Loon 里更新插件），
+  > 它会连带把脚本重新拉一遍；③ 重启 Loon 与 App。
+  >
+  > 注意：只清 `scripts/` 里的脚本缓存、插件却不重新下载时，带 `requires_body`
+  > 的那几条脚本（`spotify.config` / `spotify.meta` / bootstrap）会静默不执行——
+  > 表现是「账号属性没改写，但歌词还正常」，很容易误判成代码问题。
 - 参数定义随插件保存；新增或删除参数后需要重新导入插件才会更新。脚本按 `?v=` 缓存，更新后需重启 App。
 - 新增参数同理：`[Argument]` 清单随安装保存在本地，远程新增的开关不会自动出现。需要删除插件后重新添加（可给插件 URL 加 `?v=日期` 绕过 raw 缓存），设置页才会显示「歌词字形」「忽略简繁」。重新添加后其它参数会回到默认值，按需再调。
 - `force_zh_hans` 已由 `lyrics_script` 取代：只转换补全的第三方歌词字形，不改 `Accept-Language`，也不影响官方歌词。
