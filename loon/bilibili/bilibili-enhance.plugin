@@ -1,5 +1,5 @@
 #!name=BiliBili Enhance
-#!desc=去广告、去会员推广、去遥测、精简界面，播放请求自动要最高画质。JSON 与 gRPC 都改，不碰视频流。
+#!desc=去广告、去会员推广、去遥测、精简界面，播放请求自动要最高画质。JSON 与 gRPC 都改，不碰视频流。需在 Loon 的 MitM 页面开启「MitM over HTTP/2」与「QUIC 回退保护」，否则 B 站加载会明显变慢。
 #!category=BiliBili
 #!author=xzavier-amico
 #!homepage=https://github.com/xzavier-amico/modules
@@ -37,3 +37,7 @@ response if ${url} ~= /^https?:\/\/(?:grpc\.biliapi\.net|grpc\.bilibili\.com|app
 
 [MitM]
 hostname = app.bilibili.com, api.bilibili.com, api.live.bilibili.com, app.biliapi.net, api.biliapi.net, grpc.biliapi.net, grpc.bilibili.com
+# B 站接口强制 HTTP/2。MITM 不按 HTTP/2 解密时，并发请求会被串行化处理，
+# 详情页 / 评论区 / 播放加载会明显变慢。h2 = true 是通用写法，部分 Loon 版本
+# 可能忽略，以 MitM 页面里的「MitM over HTTP/2」「QUIC 回退保护」开关为准。
+h2 = true

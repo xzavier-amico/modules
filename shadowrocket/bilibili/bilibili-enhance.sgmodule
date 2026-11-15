@@ -1,5 +1,5 @@
 #!name=BiliBili Enhance
-#!desc=去广告、去会员推广、去遥测、精简界面，播放请求自动要最高画质。JSON 与 gRPC 都改，不碰视频流。
+#!desc=去广告、去会员推广、去遥测、精简界面，播放请求自动要最高画质。JSON 与 gRPC 都改，不碰视频流。模块已开启 h2 MITM；如客户端 MITM 设置里有 HTTP/2 开关请保持开启，否则 B 站加载会明显变慢。
 #!author=xzavier-amico
 #!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/bilibili.png
 #!arguments=去广告:true, 去会员推广:true, 精简界面:true, 自动最高画质:true, 支持网页版:true
@@ -29,3 +29,5 @@ bilibili.grpc = type=http-response,pattern=^https?:\/\/(?:grpc\.biliapi\.net|grp
 
 [MITM]
 hostname = %APPEND% app.bilibili.com, api.bilibili.com, api.live.bilibili.com, app.biliapi.net, api.biliapi.net, grpc.biliapi.net, grpc.bilibili.com
+# B 站接口强制 HTTP/2，不开 h2 MITM 时并发请求处理会变慢（详情页 / 评论区 / 播放加载）。
+h2 = true

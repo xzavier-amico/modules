@@ -70,6 +70,7 @@ Shadowrocket 的模块语法与 Loon 不同，转换时做了这些映射：
 - YouTube 的 response / ump 脚本需要处理大响应，三端都已把 timeout 调到 60s；设备较慢时可继续调大。
 - YouTube 的脚本按请求阶段拆成 `youtube.request.js` / `youtube.key.js` / `youtube.response.js`，插件只把对应阶段的请求交给对应脚本；`ad_break` / `log_event` 请求不再强制读取 body。网页版 `www.youtube.com` / `m.youtube.com` 的 youtubei 响应是 JSON，脚本走单独的保守 JSON 改写路径，不套用 protobuf 解码。
 - YouTube 与 Bilibili 的「支持网页版」默认开启；关闭后网页版请求完全放行，App / gRPC 逻辑不受影响。Bilibili 网页版只改 API JSON，不改网页 HTML 里的 `__INITIAL_STATE__`。
+- B 站接口强制走 HTTP/2。Loon 用户必须在 MitM 页面打开「MitM over HTTP/2」和「QUIC 回退保护」；只按 HTTP/1.1 做 MITM 时并发请求会被串行化，详情页、评论区、播放加载会明显变慢。Egern 内核默认支持 h2 MITM；Shadowrocket 模块里已写 `h2 = true`。
 - 带脚本的模块（YouTube、Bilibili、Spotify、小红书）都内置了 QUIC REJECT 规则（`PROTOCOL, QUIC`），强制客户端回落 TCP。HTTP/3 走 UDP 不经过 HTTP 代理，不拒绝时脚本看不到这些请求，表现就是「装了模块但完全没生效」。这条规则是必需的，不要为了省一次回落删掉。
 - Shadowrocket 的脚本运行在内存受限的 Network Extension 里，sgmodule 里的 `max-size` 是保险丝：超过上限的响应直接放行，不会把脚本拖死。正常响应远低于上限。
 

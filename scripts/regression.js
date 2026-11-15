@@ -2348,6 +2348,14 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
 
 // B 站 gRPC：按字段号删广告，没改动的字段连同原始编码一起保留。
 function testBilibiliGrpc() {
+  // B 站接口强制 HTTP/2。MITM 不按 h2 解密时，并发请求会被串行化，
+  // 详情页 / 评论区 / 播放加载明显变慢，所以模块里必须带 h2 = true。
+  check("loon bilibili plugin enables MitM over HTTP/2", () => {
+    assert.match(read("loon/bilibili/bilibili-enhance.plugin"), /\[MitM\][\s\S]*?^h2 = true$/m);
+  });
+  check("shadowrocket bilibili module enables MitM over HTTP/2", () => {
+    assert.match(read("shadowrocket/bilibili/bilibili-enhance.sgmodule"), /\[MITM\][\s\S]*?^h2 = true$/m);
+  });
   const frame = (msg, flag = 0) => {
     const head = new Uint8Array(5);
     head[0] = flag;

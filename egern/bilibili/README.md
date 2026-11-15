@@ -101,6 +101,11 @@ gRPC 帧的 flag 是 1 表示消息体 gzip（帧级压缩，不是 `Content-Enc
 
 - 需开启 MitM：`app.bilibili.com`、`api.bilibili.com`、`api.live.bilibili.com`、
   `app.biliapi.net`、`api.biliapi.net`、`grpc.biliapi.net`、`grpc.bilibili.com`。
+- Egern 内核的 MITM 默认支持 HTTP/2 并复用连接，不需要 Loon 那样的「MitM over HTTP/2」
+  开关；B 站接口强制 HTTP/2，如果换到不支持 h2 MITM 的客户端，详情页 / 评论区 / 播放
+  加载会明显变慢。
+- `auto_quality` 会把播放请求提到 4K（qn=120）。带宽不足时起播会变慢，可以关掉这个开关，
+  服务端仍按账号权限返回 1080P。
 - 详情页 / 评论区依赖 gRPC 的 MITM。如果客户端对 HTTP/2 gRPC 的
   MITM 支持不好，表现是详情页转圈或评论刷不出来 —— 这时把 `block_ads` 关掉仍会
   保留 MITM，需要从模块里去掉 `grpc.biliapi.net` 才会完全恢复。

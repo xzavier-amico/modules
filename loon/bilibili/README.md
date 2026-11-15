@@ -79,6 +79,12 @@
 
 - 需开启 MitM：`app.bilibili.com`、`api.bilibili.com`、`api.live.bilibili.com`、
   `app.biliapi.net`、`api.biliapi.net`、`grpc.biliapi.net`、`grpc.bilibili.com`。
+- **务必在 Loon 的 MitM 页面打开「MitM over HTTP/2」和「QUIC 回退保护」。** B 站接口强制走
+  HTTP/2，只按 HTTP/1.1 做 MITM 时并发请求会被串行化，表现为详情页、评论区、播放加载明显
+  变慢甚至转圈。插件里的 `h2 = true` 是通用写法，部分 Loon 版本可能不读，以 MitM 页面的
+  开关为准。
+- `auto_quality` 会把播放请求提到 4K（qn=120）。带宽不足时起播会变慢，可以关掉这个开关，
+  服务端仍按账号权限返回 1080P。
 - 「我的」页顶部的会员入口仍是 App 本地 UI，不走 HTTP，代理层删不掉；能删的是接口下发的
   VIP 卡片、大会员推广块、我的服务分区和番剧页付费块。
 - 网页版只处理 API 返回的 JSON，不改网页 HTML 里的 `__INITIAL_STATE__`；网页首屏如果直接内嵌了
