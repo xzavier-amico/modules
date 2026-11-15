@@ -1192,17 +1192,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     } catch (e) {
       return null;
     }
-    // TEMP-DIAG: 把内部状态写回响应，确认新脚本是否在跑。
-    if (data && data.attributes && "object" === typeof data.attributes) {
-      data.attributes["__diag"] = { stringValue: JSON.stringify({
-        v: 30,
-        keys: Object.keys(data.attributes).length,
-        forced: Object.keys(forced).length,
-        spoof: spoof, adsOn: adsOn, desktop: desktop, playOn: playOn,
-        scope: typeof scopeOfAccount === "undefined" ? "n/a" : "x",
-      }) };
-      return JSON.stringify(data);
-    }
     if (!data || "object" !== typeof data) return null;
     const attributes = data.attributes;
     if (!attributes || "object" !== typeof attributes) return null;
@@ -1859,40 +1848,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   else enabled = desktop ? spoof || adsOn : spoof;
   if (!enabled) {
     $done({});
-    return;
-  }
-
-  try {
-    console.log("[spotify-diag]", JSON.stringify({
-      v: 20261115,
-      url: String(url).slice(0, 70),
-      enabled: enabled, spoof: spoof, adsOn: adsOn,
-      desktop: desktop, playOn: playOn,
-      bodyType: Object.prototype.toString.call(res.body),
-      isView: ArrayBuffer.isView(res.body),
-      len: res.body && res.body.length,
-      arg: opt,
-    }));
-  } catch (e) {}
-
-  // TEMP-DIAG: 无条件写回入口诊断，确认脚本版本与 body 类型。
-  if (res && /nebula\//.test(String(url))) {
-    $done({
-      body: WIRE_TEXT.encode(JSON.stringify({
-        diag: {
-          url: String(url).slice(0, 66),
-          enabled: enabled,
-          bodyTag: Object.prototype.toString.call(res.body),
-          isView: ArrayBuffer.isView(res.body),
-          len: res.body && res.body.length,
-          spoof: spoof,
-          adsOn: adsOn,
-          desktop: desktop,
-          playOn: playOn,
-          forced: Object.keys(forced).length,
-        },
-      })),
-    });
     return;
   }
 
