@@ -3,9 +3,9 @@
   const yearOn = new Date(Date.now() + 365 * 86400000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
   const ATTR_CORE = {
-    // 不写 enable-crossfade-product-state：免费号被强行解锁交叉淡入淡出后，
-    // App 会按本地滑杆把下一首提前混进来。保留服务端下发的值，只解锁 Gapless。
-    "enable-gapless-product-state": "1",
+    // 不写 enable-crossfade-product-state / enable-gapless-product-state：
+    // 这两项由服务端与 App 播放设置决定。强制打开会让上一首结尾和下一首重叠，
+    // 表现为倒计时结束后仍响 1–2 秒。
     "catalogue": "premium",
     "financial-product": "pr:premium,tc:0",
     "is-eligible-premium-unboxing": true,
@@ -108,6 +108,8 @@
 
   function patchAttributes(buffer, fields = parse(buffer)) {
     if (!fields || !same(serialize(fields), buffer)) return null;
+    // 先记下账号地区，headers 脚本据此选择时区。
+    rememberRegion(fields);
     const out = [];
     const seen = Object.create(null);
     for (const f of fields) {

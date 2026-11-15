@@ -207,6 +207,29 @@ test("?format=json gets a JSON payload even on mobile", async () => {
   assert.equal(body.lyrics.provider, "LRCLIB");
 });
 
+test("DJ versions drop the marker and artist before searching NetEase", async () => {
+  const calls = stubNetwork([
+    ["spclient.wg.spotify.com", () => upstreamResponse(new Uint8Array(0), 404, "application/json")],
+    ["open.spotify.com/oembed", () => upstreamResponse(JSON.stringify({ title: "晚秋 (DJ版)", author_name: "毛宁" }), 200, "application/json")],
+    ["music.163.com/api/search", () => upstreamResponse(JSON.stringify({ result: { songs: [
+      { id: 7, name: "晚秋", artists: [{ name: "其他歌手" }], duration: 260000 },
+    ] } }), 200, "application/json")],
+    ["music.163.com/api/song/lyric", () => upstreamResponse(JSON.stringify({ lrc: { lyric: "[00:01.00]DJ lyric" } }), 200, "application/json")],
+  ]);
+
+  const response = await handle(lyricsRequest({ query: "?format=json" }), {
+    LYRICS_ENABLED: "true",
+    LYRICS_SOURCE: "netease",
+    BLOCK_ADS: "false",
+  });
+  const body = await response.json();
+  assert.equal(body.lyrics.lines[0].words, "DJ lyric");
+  const search = calls.find((url) => url.includes("music.163.com/api/search"));
+  assert.ok(search.includes(encodeURIComponent("晚秋")), "the DJ marker must be dropped");
+  assert.ok(!search.includes(encodeURIComponent("DJ")), "no DJ marker in the query");
+  assert.ok(!search.includes(encodeURIComponent("毛宁")), "the artist constraint is skipped for DJ versions");
+});
+
 test("synthesized lyrics follow the shape of the official error body", async () => {
   stubNetwork([
     [

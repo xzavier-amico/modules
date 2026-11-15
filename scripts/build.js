@@ -104,7 +104,13 @@ const TARGETS = [
     file: "spotify.feed.js",
     binary: true,
     title: "Spotify Enhance — 信息流广告过滤",
-    parts: [...SP_CORE, "feed/ads.js", "feed/lyrics-prefetch.js", "lyrics.js", "feed/lyrics.js", "feed/entry.js"],
+    parts: [...SP_CORE, "feed/ads.js", "feed/lyrics-card.js", "lyrics.js", "feed/lyrics.js", "feed/entry.js"],
+  },
+  {
+    module: "spotify",
+    file: "spotify.headers.js",
+    title: "Spotify Enhance — 请求头 / 时区",
+    standalone: "headers.js",
   },
   {
     module: "spotify",

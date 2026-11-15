@@ -261,7 +261,7 @@
   // （该域名在部分出口会直接回 400，白等一轮超时）。
   //
   // 存储值：{ "<track id>": [title, artist, durationMs, savedAt] }，最多 24 首。
-  const TRACK_CACHE_KEY = "spotify.track.meta";
+  const TRACK_CACHE_KEY = "spotify.track.meta.v2";
   const TRACK_CACHE_MAX = 24;
   const TITLE_KEYS = ["track_title", "title", "track_name"];
   const ARTIST_KEYS = ["artist_name", "artist"];
@@ -269,6 +269,34 @@
   // 服务端 patcher 里没有 $persistentStore，读不到就直接跳过。
   const cacheStore = () =>
     typeof $persistentStore !== "undefined" && $persistentStore ? $persistentStore : null;
+
+  // 账号地区：bootstrap / UCS 的账号属性里通常带 country / current-country。
+  // 记下来供 headers 脚本按地区选时区；只在变化时写一次。
+  const REGION_KEY = "spotify.account.region";
+  const REGION_ATTR_KEYS = ["country", "current-country", "preferred-country", "account-country", "billing-country"];
+  function rememberRegion(fields) {
+    const store = cacheStore();
+    if (!store) return;
+    for (const f of fields) {
+      if (f.no !== 1 || f.w !== 2) continue;
+      const entry = parse(f.p);
+      if (!entry) continue;
+      const key = text(first(entry, 1));
+      if (!key || REGION_ATTR_KEYS.indexOf(key.toLowerCase()) < 0) continue;
+      const value = first(entry, 2);
+      const valueFields = value && value.w === 2 ? parse(value.p) : null;
+      const region = valueFields ? text(first(valueFields, 4)) : null;
+      if (!region || !/^[A-Za-z]{2}$/.test(region)) continue;
+      const next = region.toUpperCase();
+      try {
+        if (store.read(REGION_KEY) === next) return;
+        store.write(next, REGION_KEY);
+      } catch (e) {
+        // 存储写失败不影响响应改写。
+      }
+      return;
+    }
+  }
 
   function pickMeta(meta, keys) {
     for (const key of keys) if (meta[key]) return meta[key];
@@ -320,19 +348,7 @@
     out[id] = [name, artists.join(", "), duration && duration.w === 0 ? Number(duration.v) : 0];
   }
 
-  // 元数据缓存排障日志：歌词脚本回源 open.spotify.com 时要 2.6s，如果客户端
-  // 自己的 connect-state / metadata 响应里明明有曲名却没写进缓存，就得能看出来。
-  // 只在「写入发生变化」时输出，connect-state 每几秒轮询一次也不会刷屏。
-  const metaLog = (event, message) => {
-    if (!flag(opt.debug_log, false)) return;
-    try {
-      if (typeof console !== "undefined" && console.log) console.log("[spotify] " + Date.now() + " " + event + " " + message);
-    } catch (e) {
-      // 日志失败不影响响应改写
-    }
-  };
-
-  function rememberTracks(found, from) {
+  function rememberTracks(found) {
     const store = cacheStore();
     const ids = Object.keys(found);
     if (!store || !ids.length) return;
@@ -351,7 +367,6 @@
       const old = map[id];
       if (old && old[0] === next[0] && old[1] === next[1] && Number(old[2]) === next[2]) continue;
       map[id] = [next[0], next[1], next[2], now];
-      metaLog("meta.cache", "track=" + id + " title=" + next[0] + " artist=" + (next[1] || "-") + " from=" + (from || "?"));
       changed = true;
     }
     if (!changed) return;
@@ -367,15 +382,11 @@
 
   function cacheTrackMeta(target, fields) {
     if (!cacheStore()) return;
-    const from = target.indexOf("/metadata/4/track/") >= 0 ? "metadata"
-      : target.indexOf("/connect-state/") >= 0 ? "connect"
-      : target.indexOf("/context-resolve/") >= 0 ? "context" : "other";
     const trackUrl = /\/metadata\/4\/track\/([A-Za-z0-9]{22})/.exec(target);
     if (trackUrl) {
       const found = Object.create(null);
       collectTrackEntity(fields, trackUrl[1], found);
-      if (!found[trackUrl[1]]) metaLog("meta.none", "track=" + trackUrl[1] + " from=" + from + " fields=" + fields.length);
-      rememberTracks(found, from);
+      rememberTracks(found);
       return;
     }
     // extended-metadata 体积大且不含 track_title；当前曲目在
@@ -383,7 +394,7 @@
     if (target.indexOf("/extended-metadata/") >= 0) return;
     const found = Object.create(null);
     collectTracks(fields, found, 0);
-    rememberTracks(found, from);
+    rememberTracks(found);
   }
 
   function patchMeta(buffer, target) {

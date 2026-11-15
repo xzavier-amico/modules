@@ -5,8 +5,8 @@
   try {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
     if (Array.isArray(raw)) {
-      const modeInFifth = ["full", "no_card", "metadata_only", "response_only", "card_only"].indexOf(raw[4]) >= 0;
-      opt = { spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2], enable_lyrics: raw[3], desktop: modeInFifth ? false : raw[4], lyrics_mode: modeInFifth ? raw[4] : raw[5], debug_log: raw[6] };
+      // Loon 位置参数：spoof, ads, unlock, enable_lyrics, desktop, lyrics_source。
+      opt = { spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2], enable_lyrics: raw[3], desktop: raw[4], lyrics_source: raw[5] };
     } else if (typeof raw === "string") {
       opt = JSON.parse(raw || "{}") || {};
     } else if (raw && "object" == typeof raw) {
@@ -54,12 +54,6 @@
   // unlock_playback=auto 时移动端开启、桌面端关闭；桌面端强行写播放授权容易跳歌。
   const playOn = autoPlay(opt.unlock_playback) ? !desktop : flag(opt.unlock_playback, !desktop);
   const lyricsOn = flag(opt.enable_lyrics, true);
-  // full / no_card / metadata_only 处理元数据和歌词响应；card_only 只补歌词 section。
-  // 保留旧值解析，兼容已保存的参数。
-  const lyricsMode = ["full", "no_card", "metadata_only", "response_only", "card_only"].indexOf(opt.lyrics_mode) >= 0 ? opt.lyrics_mode : "full";
-  const lyricsMetaOn = lyricsOn && (lyricsMode === "full" || lyricsMode === "no_card" || lyricsMode === "metadata_only");
-  // 歌词卡片：full / card_only 时向 scrollsita 列表补一个真实的歌词 section。
-  const lyricsCardOn = lyricsOn && (lyricsMode === "full" || lyricsMode === "card_only");
   // 响应体上限：超过上限直接放行，避免异常响应占满内存。
   const MAX_META_BYTES = 12 * 1024 * 1024; // extended-metadata / context-resolve / connect-state / metadata
   const MAX_FEED_BYTES = 12 * 1024 * 1024; // home / browse / scroll / remote-config / nebula

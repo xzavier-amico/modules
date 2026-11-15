@@ -1,9 +1,3 @@
-  // 日志与曲名标签由 lyrics.js 的辅助模式通过 globalThis 暴露；没有时静默降级。
-  // 定义在这里而不是 entry.js：补卡、元数据回填的排障日志都在本文件里。
-  const spotifyLog = (typeof globalThis !== "undefined" && globalThis.__spotifyLog) || (() => {});
-  const trackLabel = (typeof globalThis !== "undefined" && globalThis.__spotifyTrackLabel) || ((id) => id || "?");
-  const debugOn = !!(typeof globalThis !== "undefined" && globalThis.__spotifyDebug);
-
   // ------------------------------------------------------------ lyrics card
   //
   // 歌词卡是 Now Playing 滚动列表里的一格：列表里必须存在一个「歌词 section」，
@@ -95,11 +89,7 @@
     if (typeof remember !== "function" || !trackId) return;
     const found = { title: "", artist: "" };
     collectMetaPairs(bytes, found, 0, { left: META_WALK_LIMIT });
-    if (!found.title) {
-      spotifyLog("feed.meta", "track=" + trackId + " title=-");
-      return;
-    }
-    spotifyLog("feed.meta", "track=" + trackId + " title=" + found.title + " artist=" + (found.artist || "-"));
+    if (!found.title) return;
     remember(trackId, found.title, found.artist, 0, null);
   }
 
@@ -166,13 +156,7 @@
 
     const addCard = wantCard && !!trackId && !hasLyrics;
     if (!removed && !addCard) return null;
-    if (addCard) {
-      kept.unshift(wireEncodeField(1, 2, lyricsSection(trackId)));
-      if (debugOn) {
-        spotifyLog("feed.card", "track=" + trackId + " removed=" + removed
-          + " sections=" + sections.length + "->" + kept.length);
-      }
-    }
+    if (addCard) kept.unshift(wireEncodeField(1, 2, lyricsSection(trackId)));
 
     const rebuilt = wireEncodeField(1, 2, wireConcat(kept));
     const parts = [];

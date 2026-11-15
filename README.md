@@ -105,7 +105,7 @@ server/<service>/src/               # 服务端代码
 YouTube、Spotify、Pluto、Tubi、AMap、Xiaohongshu、Bilibili、Delivery 与 Emby 的脚本源文件全部在 `src/`，成品由构建脚本生成：
 
 - YouTube：`youtube.request.js`（请求阶段）、`youtube.key.js`（UMP 密钥）、`youtube.response.js`（youtubei 响应 + UMP）。
-- Spotify：`spotify.js`（bootstrap / UCS / 元数据 / 远程配置）、`spotify.feed.js`（首页 / 搜索 / 滚动页）、`spotify_lyrics.js`（歌词）。歌词卡补卡时机与并行链路见 [`src/spotify/SCROLLSITA.md`](src/spotify/SCROLLSITA.md)。
+- Spotify：`spotify.headers.js`（请求头 / 时区）、`spotify.js`（bootstrap / UCS / 元数据 / 远程配置）、`spotify.feed.js`（首页 / 搜索 / 滚动页）、`spotify_lyrics.js`（歌词）。歌词卡补卡时机与并行链路见 [`src/spotify/SCROLLSITA.md`](src/spotify/SCROLLSITA.md)。
 - Pluto / Tubi：独立脚本同样从 `src/pluto/`、`src/tubi/` 生成，Loon / Egern 不再内嵌小火箭兼容实现。
 - AMap：`src/amap/amap_clean.js` 生成三端的 `amap_clean.js`，处理开屏、首页、「我的」、消息、热词与附近推荐里的广告位。
 - Xiaohongshu：`src/xiaohongshu/clean.js` 生成三端的 `xiaohongshu_clean.js`，删首页 / 搜索 / 评论广告。

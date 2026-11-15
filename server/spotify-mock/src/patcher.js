@@ -192,8 +192,8 @@ function buildPatcher($argument) {
   try {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
     if (Array.isArray(raw)) {
-      const modeInFifth = ["full", "no_card", "metadata_only", "response_only", "card_only"].indexOf(raw[4]) >= 0;
-      opt = { spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2], enable_lyrics: raw[3], desktop: modeInFifth ? false : raw[4], lyrics_mode: modeInFifth ? raw[4] : raw[5] };
+      // Loon 位置参数：spoof, ads, unlock, enable_lyrics, desktop, lyrics_source。
+      opt = { spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2], enable_lyrics: raw[3], desktop: raw[4], lyrics_source: raw[5] };
     } else if (typeof raw === "string") {
       opt = JSON.parse(raw || "{}") || {};
     } else if (raw && "object" == typeof raw) {
@@ -241,12 +241,6 @@ function buildPatcher($argument) {
   // unlock_playback=auto 时移动端开启、桌面端关闭；桌面端强行写播放授权容易跳歌。
   const playOn = autoPlay(opt.unlock_playback) ? !desktop : flag(opt.unlock_playback, !desktop);
   const lyricsOn = flag(opt.enable_lyrics, true);
-  // full / no_card / metadata_only 处理元数据和歌词响应；card_only 只补歌词 section。
-  // 保留旧值解析，兼容已保存的参数。
-  const lyricsMode = ["full", "no_card", "metadata_only", "response_only", "card_only"].indexOf(opt.lyrics_mode) >= 0 ? opt.lyrics_mode : "full";
-  const lyricsMetaOn = lyricsOn && (lyricsMode === "full" || lyricsMode === "no_card" || lyricsMode === "metadata_only");
-  // 歌词卡片：full / card_only 时向 scrollsita 列表补一个真实的歌词 section。
-  const lyricsCardOn = lyricsOn && (lyricsMode === "full" || lyricsMode === "card_only");
   // 响应体上限：超过上限直接放行，避免异常响应占满内存。
   const MAX_META_BYTES = 12 * 1024 * 1024; // extended-metadata / context-resolve / connect-state / metadata
   const MAX_FEED_BYTES = 12 * 1024 * 1024; // home / browse / scroll / remote-config / nebula
@@ -593,9 +587,9 @@ function buildPatcher($argument) {
   const yearOn = new Date(Date.now() + 365 * 86400000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
   const ATTR_CORE = {
-    // 不写 enable-crossfade-product-state：免费号被强行解锁交叉淡入淡出后，
-    // App 会按本地滑杆把下一首提前混进来。保留服务端下发的值，只解锁 Gapless。
-    "enable-gapless-product-state": "1",
+    // 不写 enable-crossfade-product-state / enable-gapless-product-state：
+    // 这两项由服务端与 App 播放设置决定。强制打开会让上一首结尾和下一首重叠，
+    // 表现为倒计时结束后仍响 1–2 秒。
     "catalogue": "premium",
     "financial-product": "pr:premium,tc:0",
     "is-eligible-premium-unboxing": true,
@@ -698,6 +692,8 @@ function buildPatcher($argument) {
 
   function patchAttributes(buffer, fields = parse(buffer)) {
     if (!fields || !same(serialize(fields), buffer)) return null;
+    // 先记下账号地区，headers 脚本据此选择时区。
+    rememberRegion(fields);
     const out = [];
     const seen = Object.create(null);
     for (const f of fields) {
@@ -1274,7 +1270,7 @@ function buildPatcher($argument) {
   // （该域名在部分出口会直接回 400，白等一轮超时）。
   //
   // 存储值：{ "<track id>": [title, artist, durationMs, savedAt] }，最多 24 首。
-  const TRACK_CACHE_KEY = "spotify.track.meta";
+  const TRACK_CACHE_KEY = "spotify.track.meta.v2";
   const TRACK_CACHE_MAX = 24;
   const TITLE_KEYS = ["track_title", "title", "track_name"];
   const ARTIST_KEYS = ["artist_name", "artist"];
@@ -1282,6 +1278,34 @@ function buildPatcher($argument) {
   // 服务端 patcher 里没有 $persistentStore，读不到就直接跳过。
   const cacheStore = () =>
     typeof $persistentStore !== "undefined" && $persistentStore ? $persistentStore : null;
+
+  // 账号地区：bootstrap / UCS 的账号属性里通常带 country / current-country。
+  // 记下来供 headers 脚本按地区选时区；只在变化时写一次。
+  const REGION_KEY = "spotify.account.region";
+  const REGION_ATTR_KEYS = ["country", "current-country", "preferred-country", "account-country", "billing-country"];
+  function rememberRegion(fields) {
+    const store = cacheStore();
+    if (!store) return;
+    for (const f of fields) {
+      if (f.no !== 1 || f.w !== 2) continue;
+      const entry = parse(f.p);
+      if (!entry) continue;
+      const key = text(first(entry, 1));
+      if (!key || REGION_ATTR_KEYS.indexOf(key.toLowerCase()) < 0) continue;
+      const value = first(entry, 2);
+      const valueFields = value && value.w === 2 ? parse(value.p) : null;
+      const region = valueFields ? text(first(valueFields, 4)) : null;
+      if (!region || !/^[A-Za-z]{2}$/.test(region)) continue;
+      const next = region.toUpperCase();
+      try {
+        if (store.read(REGION_KEY) === next) return;
+        store.write(next, REGION_KEY);
+      } catch (e) {
+        // 存储写失败不影响响应改写。
+      }
+      return;
+    }
+  }
 
   function pickMeta(meta, keys) {
     for (const key of keys) if (meta[key]) return meta[key];
@@ -1576,12 +1600,9 @@ function buildPatcher($argument) {
     return match ? match[1] : "";
   }
 
-  // 补卡前先做一次廉价的字节扫描：列表里已经有歌词 section 时不用去查歌词，
-  // 避免每首官方有歌词的歌都白等一次第三方查询。完整的 section 结构仍由
-  // patchScroll 在重编码时确认。
-  function hasLyricsCard(buffer) {
-    if (!buffer || !buffer.length || buffer.length < LYRICS_SECTION_ID_BYTES.length) return false;
-    const needle = LYRICS_SECTION_ID_BYTES;
+  // 在 Uint8Array 里搜索 needle；命中返回 true。hasLyricsCard 和 patchScroll 共用。
+  function containsBytes(buffer, needle) {
+    if (!buffer || !buffer.length || buffer.length < needle.length) return false;
     const last = buffer.length - needle.length;
     for (let i = 0; i <= last; i += 1) {
       if (buffer[i] !== needle[0]) continue;
@@ -1592,11 +1613,68 @@ function buildPatcher($argument) {
     return false;
   }
 
+  // 补卡前先做一次廉价的字节扫描：列表里已经有歌词 section 时不用去查歌词，
+  // 避免每首官方有歌词的歌都白等一次第三方查询。patchScroll 内部也用同样的
+  // 检测判断是否已有歌词 section，保持入口与补卡逻辑一致。
+  function hasLyricsCard(buffer) {
+    return containsBytes(buffer, LYRICS_SECTION_ID_BYTES);
+  }
+
   function lyricsSection(trackId) {
     return serialize([
       fieldBytes(5, serialize([fieldString(1, "spotify:track:" + trackId)])),
       fieldBytes(23, serialize([fieldString(1, LYRICS_SECTION_ID)])),
     ]);
+  }
+
+  // ---- 曲目元数据回填 ---------------------------------------------------
+  //
+  // 歌词脚本取曲名 / 歌手要先读 spotify.track.meta；没命中就只能回源
+  // open.spotify.com（oEmbed / embed，实测 2.6s），整条歌词链路跟着变慢。
+  // scrollsita 的当前曲目 section 里本来就带着 track_title / artist_name
+  // 的 metadata map，顺手抄一份写进同一个缓存：下次同一首再进 Now Playing
+  // 就是零请求。
+  //
+  // 只在「section 里确实有当前曲目的 track 引用」时递归，并且限制遍历节点数，
+  // 避免把 12MB 的列表整个走一遍。
+  const META_TITLE_KEYS = ["track_title", "title", "track_name"];
+  const META_ARTIST_KEYS = ["artist_name", "artist"];
+  const META_WALK_LIMIT = 4000;
+
+  function collectMetaPairs(bytes, found, depth, budget) {
+    if (depth > 6 || budget.left <= 0) return;
+    let fields;
+    try {
+      fields = parse(bytes);
+    } catch (e) {
+      return;
+    }
+    if (!fields) return;
+    budget.left -= fields.length;
+    // metadata map 的一项：{ 1: key, 2: value }
+    if (fields.length === 2 && fields[0].w === 2 && fields[1].w === 2) {
+      const key = fields[0].no === 1 ? text(fields[0]) : null;
+      const value = fields[1].no === 2 ? text(fields[1]) : null;
+      if (key && value && value.length <= 200) {
+        if (!found.title && META_TITLE_KEYS.indexOf(key) >= 0) found.title = value;
+        else if (!found.artist && META_ARTIST_KEYS.indexOf(key) >= 0) found.artist = value;
+      }
+    }
+    if (found.title && found.artist) return;
+    for (const f of fields) {
+      if (f.w !== 2 || !f.p || f.p.length < 2) continue;
+      collectMetaPairs(f.p, found, depth + 1, budget);
+      if (found.title && found.artist) return;
+    }
+  }
+
+  function rememberScrollMeta(bytes, trackId) {
+    const remember = typeof globalThis !== "undefined" ? globalThis.__spotifyRememberTrackMeta : null;
+    if (typeof remember !== "function" || !trackId) return;
+    const found = { title: "", artist: "" };
+    collectMetaPairs(bytes, found, 0, { left: META_WALK_LIMIT });
+    if (!found.title) return;
+    remember(trackId, found.title, found.artist, 0, null);
   }
 
   // 滚动页一次遍历：删广告 section + 补歌词 section。
@@ -1626,28 +1704,37 @@ function buildPatcher($argument) {
     const kept = [];
     let removed = 0;
     let hasLyrics = false;
+    const trackRef = trackId ? new TextEncoder().encode("spotify:track:" + trackId) : null;
     for (const section of sections) {
       if (section.no !== 1 || section.wire !== 2) {
         kept.push(section.raw);
         continue;
       }
       let ad = false;
-      let card = false;
+      let hasTrack = false;
+      let hasSectionId = false;
       try {
-        // 只扫字段号：看到 30（广告内容）或 5（曲目）就够判断了。
+        // 歌词卡同时有字段 5（曲目引用）和字段 23（section id）。
+        // 只看字段 5 会把相关推荐、下一首等卡片也误判为歌词卡，导致不补卡。
         wireScanFields(section.data, (no) => {
           if (no === 30) ad = true;
-          else if (no === 5) card = true;
-          return ad && card;
+          else if (no === 5) hasTrack = true;
+          else if (no === 23) hasSectionId = true;
+          return ad && hasTrack && hasSectionId;
         });
       } catch (e) {
         return null;
+      }
+      // 官方歌词 section 的真实字节：和 lyricsSection() 的合成结果对比用。
+      if (hasTrack && hasSectionId) hasLyrics = true;
+      // 当前曲目的 section 里通常带 track_title / artist_name，抄进元数据缓存。
+      if (trackRef && hasTrack && containsBytes(section.data, trackRef)) {
+        rememberScrollMeta(section.data, trackId);
       }
       if (wantAds && ad) {
         removed++;
         continue;
       }
-      if (card) hasLyrics = true;
       kept.push(section.raw);
     }
 
@@ -1690,6 +1777,5 @@ export function createPatcher(options = {}) {
     unlock_playback: options.unlockPlayback,
     enable_lyrics: options.enableLyrics,
     desktop: options.desktop,
-    lyrics_mode: options.lyricsMode,
   });
 }

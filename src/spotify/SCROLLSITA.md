@@ -20,7 +20,7 @@ section {
   查到歌词 / 官方有歌词 / 缓存命中会清掉标记。
 - `spotify.lyrics.pending`：请求阶段开始查歌词时写。有请求在路上时旧的 miss
   标记不作数，这次可能就查到了。feed 只读这个标记做判断，不再轮询等待。
-- `spotify.lyrics.cache`：`color-lyrics` 响应阶段拿到歌词就会写它；卡片渲染时
+- `spotify.lyrics.cache.v2`：`color-lyrics` 响应阶段拿到歌词就会写它；卡片渲染时
   客户端自己来取，所以补卡时缓存是否就绪不影响是否补卡。
 - 曾经的「等 `spotify.lyrics.served` 再放行」已经去掉：等 200ms 也是等，
   响应照样晚于客户端第一次渲染。
@@ -30,7 +30,7 @@ section {
 
 ## 曲目元数据回填
 
-歌词脚本取曲名 / 歌手要先读 `spotify.track.meta`；没命中就只能回源 `open.spotify.com`
+歌词脚本取曲名 / 歌手要先读 `spotify.track.meta.v2`；没命中就只能回源 `open.spotify.com`
 （oEmbed 与 embed 并行，实测各 2.6 秒）。滚动页的当前曲目 section 里本来就带着
 `track_title` / `artist_name` 的 metadata map，feed 顺手抄一份写进同一个缓存，
 下次同一首再进 Now Playing 就是零请求。

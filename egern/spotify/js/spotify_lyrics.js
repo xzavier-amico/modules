@@ -152,53 +152,24 @@ export default async function (ctx) {
 (() => {
   "use strict";
 
-  // feed / 元数据脚本以辅助模式加载：只暴露缓存查询与补卡判断，不处理响应。
-  const PREFETCH = typeof SPOTIFY_LYRICS_PREFETCH !== "undefined" && SPOTIFY_LYRICS_PREFETCH;
+  // feed 脚本以辅助模式加载：只暴露缓存查询与补卡判断，不处理响应。
+  const HELPER = typeof SPOTIFY_LYRICS_HELPER !== "undefined" && SPOTIFY_LYRICS_HELPER;
 
   const req = typeof $request !== "undefined" && $request ? $request : null;
   const res = typeof $response !== "undefined" && $response ? $response : null;
   const url = (res && res.url) || (req && req.url) || "";
 
-  // ---------------------------------------------------------------- debug log
-  //
-  // 排障日志：定位歌词卡「scroll 先于歌词响应」的时序问题。默认关闭，在模块
-  // 参数里打开 debug_log 后输出（Egern 设置页已提供「排障日志」开关），前缀
-  // 统一为 [spotify]，第二个字段是毫秒时间戳，方便把 feed / lyrics 两段脚本
-  // 对齐。日志会包含曲名，排查完记得关掉。
-  const spotifyLog = (event, message) => {
-    if (!DEBUG_LOG) return;
-    try {
-      if (typeof console !== "undefined" && console.log) {
-        console.log("[spotify] " + Date.now() + " " + event + " " + message);
-      }
-    } catch (e) {
-      // 日志失败不影响响应。
-    }
-  };
-  // 曲名 / 歌手来自 spotify.js 写下的元数据缓存；没有就退回曲目 id。
-  const trackLabel = (id) => {
-    const meta = cachedTrackMeta(id);
-    if (!meta || !meta.title) return id || "?";
-    return meta.title + (meta.artist ? " / " + meta.artist : "");
-  };
-
   // Loon 传位置数组，Egern 传 JSON 字符串。
   let opt = {};
-  if (PREFETCH) {
-    // feed 的位置参数和歌词脚本不同，由 feed/lyrics-prefetch.js 解析后传入。
-    opt = typeof SPOTIFY_PREFETCH_OPTIONS !== "undefined" && SPOTIFY_PREFETCH_OPTIONS ? SPOTIFY_PREFETCH_OPTIONS : {};
+  if (HELPER) {
+    // feed 的位置参数和歌词脚本不同，由 feed/lyrics-card.js 解析后传入。
+    opt = typeof SPOTIFY_HELPER_OPTIONS !== "undefined" && SPOTIFY_HELPER_OPTIONS ? SPOTIFY_HELPER_OPTIONS : {};
   } else {
     try {
       const raw = typeof $argument !== "undefined" ? $argument : undefined;
       if (Array.isArray(raw)) {
-        const modes = ["full", "no_card", "metadata_only", "response_only", "card_only"];
-        const modeInThird = modes.indexOf(raw[2]) >= 0;
-        // Loon 位置参数：歌词源, 补全歌词, 设备类型, 模式 / 排障日志。
-        // 第 4 个位置既是旧版的 lyrics_mode，也可能是 debug_log，按取值区分。
-        const modeInFourth = modes.indexOf(raw[3]) >= 0;
-        opt = { lyrics_source: raw[0], enable_lyrics: raw[1], desktop: modeInThird ? false : raw[2],
-          lyrics_mode: modeInThird ? raw[2] : modeInFourth ? raw[3] : undefined,
-          debug_log: modeInThird || modeInFourth ? undefined : raw[3] };
+        // Loon 位置参数：歌词源, 补全歌词, 设备类型, 强制简体中文。
+        opt = { lyrics_source: raw[0], enable_lyrics: raw[1], desktop: raw[2], force_zh_hans: raw[3] };
       }
       else if (typeof raw === "string") {
         try {
@@ -213,8 +184,6 @@ export default async function (ctx) {
     }
   }
   const flag = (v, d) => (v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0"));
-  // 排障日志开关；默认关闭，避免把曲名写进日常日志。
-  const DEBUG_LOG = flag(opt.debug_log, false);
   // 客户端模式：auto 按 User-Agent 识别，拿不到 UA 时再看 Loon 运行环境。
   const requestUserAgent = () => {
     if (!req || !req.headers || "object" != typeof req.headers) return "";
@@ -244,31 +213,38 @@ export default async function (ctx) {
 
   // 参数关闭时直接放行；请求阶段的缓存命中在下面处理，未命中同样立即放行。
   // Loon 靠 enable= 决定是否加载脚本，Egern 不支持条件加载，只能在这里早退。
-  if (!PREFETCH && (!flag(opt.enable_lyrics, true) || opt.lyrics_mode === "metadata_only" || opt.lyrics_mode === "card_only")) {
+  if (!HELPER && !flag(opt.enable_lyrics, true)) {
     $done({});
     return;
   }
 
   const match = /\/color-lyrics\/v\d\/track\/([A-Za-z0-9]+)/.exec(url);
-  let trackId = PREFETCH ? "" : match ? match[1] : "";
-  if (!PREFETCH && !match) {
+  let trackId = HELPER ? "" : match ? match[1] : "";
+  if (!HELPER && !match) {
     $done({});
     return;
   }
 
+  // LRCLIB 要求请求方在 UA 里说明自己是谁，所以默认保留这个描述性 UA。
+  // 网易云 / QQ 音乐用的是网页接口，按接口形态换成浏览器 UA：
+  // 非浏览器 UA 目前也能拿到数据，但更容易被风控或后续加白名单时挡掉。
   const USER_AGENT = "xzavier-modules/1.0 (https://github.com/xzavier-amico/modules)";
+  const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+  // search_for_qq_cp 是 QQ 音乐的移动端入口，配移动浏览器 UA 更一致。
+  const MOBILE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+  const ACCEPT_LANGUAGE = "zh-CN,zh-Hans;q=0.9,zh;q=0.8";
   const utf8 = new TextDecoder("utf-8");
   const encoder = new TextEncoder();
 
   // spotify.js 在改写曲目元数据时，顺手把曲名 / 歌手 / 时长存进了本地存储。
   // 命中时连 oEmbed 都不用请求，只留 embed 页面取封面配色。
-  const TRACK_CACHE_KEY = "spotify.track.meta";
+  const TRACK_CACHE_KEY = "spotify.track.meta.v2";
   const TRACK_CACHE_MAX = 24;
 
   // 歌词结果缓存：同一首歌的播放器、歌词页与歌词卡会重复请求 color-lyrics，
   // 命中后直接回缓存，不再打第三方源。命中的歌词基本不会变，存久一点；
   // 查不到 / 超时都不写缓存，避免一次网络抖动把这首歌判成「无歌词」。
-  const LYRICS_CACHE_KEY = "spotify.lyrics.cache";
+  const LYRICS_CACHE_KEY = "spotify.lyrics.cache.v2";
   const LYRICS_CACHE_MAX = 24;
   const LYRICS_CACHE_HIT_TTL = 24 * 60 * 60 * 1000;
   const LYRICS_CACHE_MAX_LINES = 400;
@@ -314,8 +290,8 @@ export default async function (ctx) {
     }
   }
 
-  // 预取接力标记：不同脚本实例（歌词 / connect-state / feed）之间只靠持久化
-  // 存储通信，标记一律带时间戳，脚本被超时杀掉时也不会长期阻塞后续调度。
+  // 请求标记：不同脚本实例（歌词 / connect-state / feed）之间只靠持久化存储
+  // 通信，标记一律带时间戳，脚本被超时杀掉时也不会长期阻塞后续调度。
   function readMark(key) {
     const store = storeBackend();
     if (!store) return null;
@@ -343,18 +319,10 @@ export default async function (ctx) {
     return mark && (!id || mark.id === id) && Number(mark.at) && Date.now() - Number(mark.at) < ttl ? mark : null;
   }
 
-  // 歌词请求已经开始（请求阶段放行官方请求之前），feed 据此把等待窗口从
-  // scroll 到达时刻顺延到歌词请求自己的 deadline。
+  // 歌词请求已经开始（请求阶段放行官方请求之前），feed 据此判断这首歌是否
+  // 正在查询，避免旧的 miss 标记把这次可能成功的歌词挡掉。
   const markPending = () => {
     if (trackId) writeMark(PENDING_KEY, { id: trackId, at: Date.now() });
-  };
-
-  // 歌词响应马上要交给客户端（$done 之前最后一步）：只打一条日志，用来和
-  // feed 的 scroll 时间戳对齐。feed 补卡不再等它（等不起，见 feed/entry.js）。
-  const markServed = (proto) => {
-    if (!trackId) return;
-    spotifyLog("lyrics.served", "track=" + trackId + " title=" + trackLabel(trackId)
-      + " format=" + (proto ? "protobuf" : "json"));
   };
 
   function cachedTrackMeta(id) {
@@ -526,6 +494,11 @@ export default async function (ctx) {
   const SONG_TITLE_BRACKET_NOISE = /[（(\[][^()（）\[\]]*\b(?:(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?(?:\s+version)?|feat\.?|ft\.?|featuring|with|prod\.?|radio edit|single version|album version|bonus track|deluxe(?: edition)?|explicit|clean|mono|stereo)\b[^()（）\[\]]*[)）\]]/gi;
   const SONG_TITLE_DASH_FEAT = /\s*[-–—]\s*(?:feat\.?|ft\.?|featuring|with|prod\.?)\b.*$/i;
   const SONG_TITLE_DASH_EDITION = /\s*[-–—]\s*(?:(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?(?:\s+version)?|radio edit|single version|album version|bonus track|deluxe(?: edition)?|explicit|clean|mono|stereo)\s*$/i;
+  // DJ 版本：DJ版 / DJ Remix / DJ Mix / (DJ) / 末尾 - DJ。只认这些版本写法，
+  // 避免把 "DJ Got Us Fallin' In Love" 这类曲名当成 DJ 版本。
+  const DJ_VERSION_MARK = /dj\s*(?:版|remix|mix|version|edit|抖音|舞曲|慢摇|house|club)|[（(\[]\s*dj\s*[)）\]]|(?:^|[\s\-–—])dj\s*$/i;
+  const SONG_TITLE_DASH_DJ = /\s*[-–—]\s*dj\s*(?:版|remix|mix|version|edit|抖音|舞曲|慢摇|house|club).*$|\s*[-–—]\s*dj\s*$/i;
+  const SONG_TITLE_LEADING_DJ = /^\s*dj\s*(?:版|remix|mix|version|edit|抖音|舞曲|慢摇|house|club)\s*[-–—:]?\s*/i;
   const ARTIST_SPLIT = /[,，、/;&]|\b(?:feat\.?|ft\.?|featuring|with)\b/i;
   const CJK_MARK = /[\u3400-\u9fff]/;
   const KANA_MARK = /[\u3040-\u30ff]/;
@@ -556,24 +529,11 @@ export default async function (ctx) {
     // 响应已经交给客户端，这次歌词请求不会再产出结果；清掉 pending，
     // 让 feed 不用一直按「还在查」延长等待（超时后晚到的结果仍会写缓存）。
     writeMark(PENDING_KEY, null);
-    if (value && (value.status || value.body)) {
-      const body = value.body;
-      const size = body ? (typeof body === "string" ? body.length : body.length || 0) : 0;
-      spotifyLog("lyrics.done", "track=" + trackId + " status=" + (value.status || 200) + " bytes=" + size);
-    } else {
-      spotifyLog("lyrics.done", "track=" + trackId + " pass");
-    }
     $done(value);
   };
 
-  if (PREFETCH) {
-    // 辅助模式：feed / 元数据脚本只复用缓存查询与补卡判断，不发起歌词查询。
-    // feed/entry.js 在本 IIFE 之外，日志和曲名标签通过 globalThis 传出去。
-    globalThis.__spotifyLog = spotifyLog;
-    globalThis.__spotifyTrackLabel = trackLabel;
-    // 排障开关也传出去：feed 侧有开销较大的结构 dump（遍历 section、打 hex），
-    // 只在打开 debug_log 时执行。
-    globalThis.__spotifyDebug = DEBUG_LOG;
+  if (HELPER) {
+    // 辅助模式：feed 脚本只复用缓存查询与补卡判断，不发起歌词查询。
     // 曲目元数据回填：feed 从 scrollsita 里抄到的曲名 / 歌手写进同一份缓存。
     globalThis.__spotifyRememberTrackMeta = rememberTrackMeta;
 
@@ -591,12 +551,10 @@ export default async function (ctx) {
 
   // 请求阶段：缓存命中直接返回合成歌词，跳过官方请求；未命中立即放行。
   if (!res) {
-    if (!PREFETCH && trackId && flag(opt.enable_lyrics, true)) {
+    if (!HELPER && trackId && flag(opt.enable_lyrics, true)) {
       cacheKey = lyricsCacheKey(trackId);
       const cached = readLyricsCache(cacheKey, trackId);
       const proto = requestedProtoMode();
-      spotifyLog("lyrics.req", "track=" + trackId + " title=" + trackLabel(trackId)
-        + " want=" + (proto ? "protobuf" : "json") + " cache=" + (cached ? "hit" : "miss"));
       if (cached) {
         writeMark(MISS_KEY, null);
         writeMark(PENDING_KEY, null);
@@ -604,8 +562,6 @@ export default async function (ctx) {
           const bytes = encodeProto(cached.payload.lyrics.lines, cached.payload.lyrics.syncType,
             cached.payload.lyrics.provider, cached.payload.lyrics.providerLyricsId,
             cached.payload.lyrics.language, cached.payload.colors);
-          // 缓存命中时请求阶段直接返回歌词，同样要告诉 feed「歌词已经交给客户端」。
-          markServed(true);
           finish({
             status: 200,
             headers: { "Content-Type": "application/vnd.google.protobuf" },
@@ -613,7 +569,6 @@ export default async function (ctx) {
           });
         } else {
           const body = JSON.stringify(cached.payload);
-          markServed(false);
           finish({
             status: 200,
             headers: { "Content-Type": "application/json; charset=utf-8" },
@@ -623,9 +578,8 @@ export default async function (ctx) {
         return;
       }
     }
-    // 未命中：官方请求还要飞一会儿，先标 pending，feed 据此延长补卡等待。
+    // 未命中：官方请求还要飞一会儿，先标 pending，feed 据此判断歌词正在查。
     markPending();
-    spotifyLog("lyrics.req", "track=" + trackId + " title=" + trackLabel(trackId) + " pending=1 pass-through");
     finish({});
     return;
   }
@@ -671,10 +625,6 @@ export default async function (ctx) {
   const protoMode = status === 200 && hasBody
     ? trimmed.charAt(0) !== "{"
     : requestedProtoMode();
-  spotifyLog("lyrics.res", "track=" + trackId + " title=" + trackLabel(trackId)
-    + " status=" + status + " format=" + (protoMode ? "protobuf" : "json")
-    + " bytes=" + rawLength + " body=" + (hasBody ? 1 : 0)
-    + " ct=" + (headerValue(res && res.headers, "content-type") || "-") + " url=" + url);
 
   // 不把登录、限流或服务端错误伪装成有歌词。
   if (status !== 200 && status !== 404) {
@@ -689,7 +639,6 @@ export default async function (ctx) {
   if (status === 200 && !hasBody) {
     const declared = Number(headerValue(res && res.headers, "content-length"));
     if (Number.isFinite(declared) && declared > 0) {
-      spotifyLog("lyrics.res", "track=" + trackId + " official=body-missing content-length=" + declared + " -> pass");
       finish({});
       return;
     }
@@ -698,17 +647,14 @@ export default async function (ctx) {
       // 解析不了（拿不到原始字节）时返回 -1，宁可放行也不要顶掉官方歌词。
       const inspected = rawBytes.length ? inspectProto(rawBytes) : null;
       const count = inspected ? inspected.count : -1;
-      spotifyLog("lyrics.res", "track=" + trackId + " official=proto count=" + count);
       if (count !== 0) {
         // 免费号的歌词有每月额度，用完服务端会在 restriction（字段 14）里回
         // monthlyLimitReached，客户端就只显示「额度已用完」。归一成 showLyrics 再放行。
         const cleaned = count > 0 ? normalizeRestrictionProto(inspected) : null;
         if (cleaned) {
-          markServed(protoMode);
           finish({ status: 200, headers: { "Content-Type": "application/x-protobuf" }, body: cleaned });
         } else {
           // 原样放行，但 count > 0 说明官方歌词确实有内容。
-          if (count > 0) markServed(protoMode);
           finish({});
         }
         return;
@@ -716,10 +662,8 @@ export default async function (ctx) {
     } else if (hasLyrics(trimmed)) {
       const cleaned = stripRestrictionJson(trimmed);
       if (cleaned) {
-        markServed(protoMode);
         finish({ status: 200, headers: { "Content-Type": "application/json; charset=utf-8" }, body: cleaned });
       } else {
-        markServed(protoMode);
         finish({});
       }
       return;
@@ -731,18 +675,16 @@ export default async function (ctx) {
   cacheKey = lyricsCacheKey(trackId);
   const cachedLyrics = readLyricsCache(cacheKey, trackId);
   if (cachedLyrics) {
-    spotifyLog("lyrics.res", "track=" + trackId + " thirdparty=cache-hit lines=" + cachedLyrics.payload.lyrics.lines.length);
     writeMark(MISS_KEY, null);
     emit(cachedLyrics.payload);
     return;
   }
 
   // 总时限；超时后用纯文本兜底，没有就放行。超时不写 miss 标记：第三方歌词
-  // 可能还在路上，feed 脚本的 8s 轮询窗口与这里的 8s deadline 对齐，后续到达
-  // 的歌词会写进缓存供轮询命中。只有所有第三方源都确认没歌词时才写 miss。
+  // 可能还在路上，后续到达的歌词会写进缓存供 feed 轮询命中。只有所有第三方源
+  // 都确认没歌词时才写 miss。
   if (typeof setTimeout === "function") deadline = setTimeout(() => {
     if (settled) return;
-    spotifyLog("lyrics.res", "track=" + trackId + " deadline=" + LYRICS_DEADLINE_MS + "ms plain=" + (plainFallback ? 1 : 0));
     if (plainFallback) {
       writeLyricsCache(cacheKey, plainFallback);
       writeMark(MISS_KEY, null);
@@ -755,19 +697,15 @@ export default async function (ctx) {
     if (settled) {
       // deadline 超时放行后，所有源都确认没歌词时补写 miss 标记，
       // feed 轮询读到 miss 就不再乐观补空卡。拿到了歌词则由 runSource 写缓存。
-      spotifyLog("lyrics.res", "track=" + trackId + " late=" + (payload ? "hit" : "miss"));
       if (!payload) writeMark(MISS_KEY, { id: trackId, at: Date.now() });
       return;
     }
     writeLyricsCache(cacheKey, payload);
     if (!payload) {
-      spotifyLog("lyrics.res", "track=" + trackId + " thirdparty=miss");
       writeMark(MISS_KEY, { id: trackId, at: Date.now() });
       finish({});
       return;
     }
-    spotifyLog("lyrics.res", "track=" + trackId + " thirdparty=hit lines=" + payload.lyrics.lines.length
-      + " provider=" + payload.lyrics.provider);
     writeMark(MISS_KEY, null);
     emit(payload);
   });
@@ -782,7 +720,6 @@ export default async function (ctx) {
     // 歌词页背景用默认底色（不再为封面配色抓 embed 页面）。
     const cached = cachedTrackMeta(trackId);
     if (cached) {
-      spotifyLog("lyrics.meta", "track=" + trackId + " title=" + cached.title + " artist=" + (cached.artist || "-") + " source=cache");
       runSource(sourceOrder(cached.title, cached.artist), cached.title, cached.artist, cb, cached.duration, () => cached.color || null);
       return;
     }
@@ -794,9 +731,6 @@ export default async function (ctx) {
     let embedStarted = false;
     let embedDone = false;
     let started = false;
-    const metaStartedAt = Date.now();
-    let oembedMs = 0;
-    let embedMs = 0;
     const merged = () => {
       const oembed = {
         title: String((meta && meta.title) || ""),
@@ -816,17 +750,11 @@ export default async function (ctx) {
       if (started) return;
       const info = merged();
       if (!info.title) {
-        spotifyLog("lyrics.meta", "track=" + trackId + " title=- source=empty");
         started = true;
         cb(null);
         return;
       }
       started = true;
-      const source = meta && meta.title ? (embed && embed.title ? "oembed+embed" : "oembed")
-        : embed && embed.title ? "embed" : "none";
-      spotifyLog("lyrics.meta", "track=" + trackId + " title=" + info.title + " artist=" + (info.artist || "-")
-        + " source=" + source + " waited=" + (Date.now() - metaStartedAt) + "ms"
-        + " oembed=" + (oembedMs || "-") + "ms embed=" + (embedMs || "-") + "ms");
       rememberTrackMeta(trackId, info.title, info.artist, info.duration ? info.duration * 1000 : 0, colorOf());
       runSource(sourceOrder(info.title, info.artist), info.title, info.artist,
         (payload) => cb(payload), info.duration, colorOf);
@@ -835,9 +763,7 @@ export default async function (ctx) {
     const beginEmbed = () => {
       if (embedStarted) return;
       embedStarted = true;
-      const at = Date.now();
       httpGetText(embedUrl, (html) => {
-        embedMs = Date.now() - at;
         embed = parseEmbedTrack(html);
         embedDone = true;
         // 歌词可能已经先返回了；embed 晚到时只补一份封面配色与更准确的元数据。
@@ -861,8 +787,8 @@ export default async function (ctx) {
         start();
         return;
       }
-      // 缺歌手、或 Live 曲目要靠 embed 的歌手 / 时长做校验，才等 embed。
-      if ((!info.artist || isLive(info.title)) && !embedDone) {
+      // 缺歌手、Live 或 DJ 版本要靠 embed 的歌手 / 时长做校验，才等 embed。
+      if ((!info.artist || isLive(info.title) || isDj(info.title)) && !embedDone) {
         beginEmbed();
         return;
       }
@@ -874,7 +800,6 @@ export default async function (ctx) {
     // 串行时 open.spotify.com 慢一次就白等两轮（实测各 2.6s），并行至少拿到先到的那个。
     beginEmbed();
     httpGetJson(oembedUrl, (data) => {
-      oembedMs = Date.now() - metaStartedAt;
       meta = data;
       metaDone = true;
       maybeStart();
@@ -902,7 +827,6 @@ export default async function (ctx) {
       done(null);
       return;
     }
-    spotifyLog("lyrics.source", "track=" + trackId + " order=" + order.join(",") + " title=" + title);
     let remaining = order.length;
     let finished = false;
     const checkAllDone = () => {
@@ -914,8 +838,6 @@ export default async function (ctx) {
     for (const name of order) {
       if (settled || finished) return;
       lookup(name, title, artist, duration, (record) => {
-        spotifyLog("lyrics.source", "track=" + trackId + " source=" + name + " result=" + (record ? "hit" : "miss")
-          + (settled ? " late=1" : finished ? " ignored=1" : ""));
         if (settled) {
           // deadline 超时放行：歌词晚到时写缓存供 feed 轮询命中。
           if (record && colorOf) record.albumColor = colorOf();
@@ -929,8 +851,6 @@ export default async function (ctx) {
         if (record && colorOf) record.albumColor = colorOf();
         const payload = buildPayload(record);
         if (payload && (payload.lyrics.syncType === "LINE_SYNCED" || order.length === 1)) {
-          spotifyLog("lyrics.source", "track=" + trackId + " winner=" + name + " sync=" + payload.lyrics.syncType
-            + " lines=" + payload.lyrics.lines.length);
           finished = true;
           done(payload);
           return;
@@ -965,6 +885,8 @@ export default async function (ctx) {
   function lookupLrclib(title, artist, duration, cb) {
     const cleanTitle = queryTitle(title);
     const names = cleanTitle && cleanTitle !== title ? [title, cleanTitle] : [title];
+    // DJ 版本常换制作人署名，查询时不带歌手；pickRecord 仍会拿 artist 做打分。
+    const queryArtist = isDj(title) ? "" : artist;
     const lists = [];
     const records = [];
     let pending = names.length * 2;
@@ -991,7 +913,7 @@ export default async function (ctx) {
       }
       // 歌手写法不一致（feat. / 多歌手 / 翻译名）时，用歌名再搜一次；
       // pickRecord 仍会按 artist 过滤，不会把别人的同名歌当成结果。
-      if (!artist) {
+      if (!queryArtist) {
         cb(null);
         return;
       }
@@ -1014,7 +936,7 @@ export default async function (ctx) {
     };
 
     for (const name of names) {
-      const query = "track_name=" + encodeURIComponent(name) + (artist ? "&artist_name=" + encodeURIComponent(artist) : "");
+      const query = "track_name=" + encodeURIComponent(name) + (queryArtist ? "&artist_name=" + encodeURIComponent(queryArtist) : "");
       httpGetJson("https://lrclib.net/api/get?" + query, (record) => {
         if (record && "object" === typeof record) records.push(record);
         settle();
@@ -1028,8 +950,9 @@ export default async function (ctx) {
 
   // 网易云：搜索接口不需要 token，中文曲库覆盖最好。
   function lookupNetease(title, artist, duration, cb) {
-    const query = encodeURIComponent(queryTitle(title) + (artist ? " " + artist : ""));
-    const headers = { Referer: "https://music.163.com/" };
+    const queryArtist = isDj(title) ? "" : artist;
+    const query = encodeURIComponent(queryTitle(title) + (queryArtist ? " " + queryArtist : ""));
+    const headers = { Referer: "https://music.163.com/", "User-Agent": BROWSER_UA };
     httpGetJson("https://music.163.com/api/search/get?s=" + query + "&type=1&limit=10&offset=0", (data) => {
       const songs = data && data.result && data.result.songs;
       const select = () => {
@@ -1086,8 +1009,9 @@ export default async function (ctx) {
 
   // QQ 音乐：搜索拿 songmid，再用 nobase64=1 取明文 LRC。
   function lookupQq(title, artist, duration, cb) {
-    const query = encodeURIComponent(queryTitle(title) + (artist ? " " + artist : ""));
-    const headers = { Referer: "https://y.qq.com/" };
+    const queryArtist = isDj(title) ? "" : artist;
+    const query = encodeURIComponent(queryTitle(title) + (queryArtist ? " " + queryArtist : ""));
+    const headers = { Referer: "https://y.qq.com/", "User-Agent": MOBILE_UA };
     // QQ 旧版 client_search_cp 在部分网络下会直接 500 且要等 5 秒；
     // search_for_qq_cp 是同一个搜索服务的移动端入口，返回结构一致。
     httpGetJson("https://c.y.qq.com/soso/fcgi-bin/search_for_qq_cp?w=" + query + "&format=json&n=10&p=1", (data) => {
@@ -1112,6 +1036,7 @@ export default async function (ctx) {
   function lookupMusixmatch(title, artist, duration, cb) {
     // 该接口不提供足够的场次信息，Live 曲目直接跳过。
     if (isLive(title)) { cb(null); return; }
+    const queryArtist = isDj(title) ? "" : artist;
     const APP_ID = "mac-ios-v2.0";
     httpGetJson("https://apic.musixmatch.com/ws/1.1/token.get?app_id=" + APP_ID, (token) => {
       const userToken = token && token.message && token.message.body && token.message.body.user_token;
@@ -1125,7 +1050,7 @@ export default async function (ctx) {
         "&track_spotify_id=" + encodeURIComponent(trackId) +
         "&subtitle_format=lrc" +
         "&q_track=" + encodeURIComponent(title) +
-        (artist ? "&q_artist=" + encodeURIComponent(artist) : "") +
+        (queryArtist ? "&q_artist=" + encodeURIComponent(queryArtist) : "") +
         "&user_language=zh";
       httpGetJson(target, (data) => {
         const status = data && data.message && data.message.header && data.message.header.status_code;
@@ -1169,7 +1094,7 @@ export default async function (ctx) {
     const wanted = normalize(queryTitle(title));
     const singer = normalize(artist);
     const score = (item) => {
-      const name = normalize(nameOf(item));
+      const name = normalize(queryTitle(nameOf(item)));
       const seconds = durationOf(item);
       return (name === wanted ? 4 : name.indexOf(wanted) === 0 ? 2 : 0)
         + (singer && matchesArtist(artist, artistOf(item)) ? 8 : 0)
@@ -1183,10 +1108,23 @@ export default async function (ctx) {
     return LIVE_MARK.test(String(title));
   }
 
+  function isDj(title) {
+    return DJ_VERSION_MARK.test(String(title));
+  }
+
+  // 去掉 DJ 版本标记后再比较曲名：Spotify 写 "Song (DJ版)"，曲库可能只写
+  // "Song"；括号里是 "DJ Snake Remix" 这类制作人署名时不会误删。
+  function stripDjVersion(title) {
+    let text = String(title);
+    text = text.replace(SONG_TITLE_BRACKET_GROUP, (whole, inner) => (DJ_VERSION_MARK.test(inner) ? " " : whole));
+    return text.replace(SONG_TITLE_DASH_DJ, "").replace(SONG_TITLE_LEADING_DJ, "");
+  }
+
   function songTitle(title) {
     let text = String(title).replace(SONG_TITLE_LIVE, "").replace(SONG_TITLE_LIVE_BRACKET, "");
     // 歌手名、版本说明不参与歌名比较：Spotify 常见 "Song (feat. X)"、
     // "Song - 2011 Remaster" 而曲库只写 "Song"。
+    text = stripDjVersion(text);
     text = text.replace(SONG_TITLE_DASH_FEAT, "").replace(SONG_TITLE_DASH_EDITION, "");
     text = text.replace(SONG_TITLE_BRACKET_NOISE, "");
     return normalize(text);
@@ -1195,8 +1133,9 @@ export default async function (ctx) {
   // 查询第三方曲库时也先去掉 feat / remaster 等后缀；Live / Acoustic / Remix
   // 这类真正决定版本的信息保留，避免把现场版查成录音室版。
   // 括号里的影视 / 节目 / 歌手等装饰信息也一并去掉；只有包含版本词时才保留。
+  // DJ 版本单独去掉，先按原曲名去搜，再靠 matchesSong 的放宽规则匹配。
   function queryTitle(title) {
-    let text = String(title);
+    let text = stripDjVersion(String(title));
     text = text.replace(SONG_TITLE_DASH_FEAT, "").replace(SONG_TITLE_DASH_EDITION, "");
     text = text.replace(SONG_TITLE_BRACKET_NOISE, "");
     text = text.replace(SONG_TITLE_BRACKET_GROUP, (whole, inner) =>
@@ -1262,8 +1201,11 @@ export default async function (ctx) {
     if (!candidateTitle || !matchTitles(title, candidateTitle)) return false;
     if (isLive(title) !== isLive(candidateTitle)) return false;
     if (INSTRUMENTAL_MARK.test(candidateTitle) && !INSTRUMENTAL_MARK.test(title)) return false;
+    // DJ 版本经常换制作人署名，歌手对不上不代表不是同一首；时长也可能因为
+    // 加长 / 剪辑差出几十秒。命中 DJ 标记时放宽这两项，其余校验照旧。
+    const dj = isDj(title) || isDj(candidateTitle);
     const singer = normalize(artist);
-    if (singer && !matchesArtist(artist, candidateArtist)) return false;
+    if (singer && !dj && !matchesArtist(artist, candidateArtist)) return false;
     const stage = STAGE_MARK.exec(title);
     const otherStage = STAGE_MARK.exec(candidateTitle);
     if (stage && otherStage && stage[1] !== otherStage[1]) return false;
@@ -1276,9 +1218,9 @@ export default async function (ctx) {
     const delta = timed ? Math.abs(candidateSeconds - wantedDuration) : 0;
     // 仅凭 “Live” 无法确定具体场次，需再核对时长和场次信息。
     if (isLive(title)) {
-      if (timed && delta > 8) return false;
+      if (timed && delta > (dj ? 60 : 8)) return false;
       if (stage && !otherStage && (!timed || !singer)) return false;
-    } else if (timed && delta > 10) {
+    } else if (timed && delta > (dj ? 60 : 10)) {
       return false;
     }
     return true;
@@ -1352,6 +1294,8 @@ export default async function (ctx) {
     };
     try {
       const headers = { "User-Agent": USER_AGENT, Accept: target.indexOf("/embed/track/") >= 0 ? "text/html" : "application/json" };
+      // oEmbed / embed 会按请求语言返回曲名；不强制时保留服务端默认行为。
+      if (flag(opt.force_zh_hans, true)) headers["Accept-Language"] = ACCEPT_LANGUAGE;
       if (extraHeaders) {
         for (const key in extraHeaders) {
           if (Object.prototype.hasOwnProperty.call(extraHeaders, key)) headers[key] = extraHeaders[key];
@@ -1407,16 +1351,12 @@ export default async function (ctx) {
     if (protoMode) {
       const bytes = encodeProto(payload.lyrics.lines, payload.lyrics.syncType, payload.lyrics.provider,
         payload.lyrics.providerLyricsId, payload.lyrics.language, payload.colors);
-      // 编码完成、马上 $done 时才标 served：feed 看到它说明歌词响应即将交给
-      // 客户端，再等一个宽限就可以放行 scroll。
-      markServed(protoMode);
       // 与官方响应头保持一致。
       finish({ status: 200, headers: { "Content-Type": "application/vnd.google.protobuf" }, body: bytes });
       return;
     }
 
     const body = JSON.stringify(payload);
-    markServed(protoMode);
     finish({
       status: 200,
       headers: { "Content-Type": "application/json; charset=utf-8" },
@@ -1806,7 +1746,7 @@ export default async function (ctx) {
   // 时长贴近的优先（时间轴才对得上），其次要有同步时间轴，其次曲名精确匹配。
   function pickRecord(list, title, duration, artist) {
     if (!Array.isArray(list) || !list.length) return null;
-    const wanted = normalize(title);
+    const wanted = normalize(queryTitle(title));
     const usable = list.filter((item) => {
       if (!item || "object" != typeof item || item.instrumental) return false;
       if (!matchesSong(title, artist, duration, item.trackName, item.artistName, Number(item.duration))) return false;
@@ -1818,7 +1758,7 @@ export default async function (ctx) {
     if (!usable.length) return null;
 
     const synced = (item) => Boolean(item.syncedLyrics && item.syncedLyrics.trim());
-    const named = (item) => normalize(item.trackName) === wanted;
+    const named = (item) => normalize(queryTitle(item.trackName)) === wanted;
     const near = (item) =>
       Number.isFinite(duration) &&
       duration > 0 &&

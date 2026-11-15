@@ -192,8 +192,8 @@
   try {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
     if (Array.isArray(raw)) {
-      const modeInFifth = ["full", "no_card", "metadata_only", "response_only", "card_only"].indexOf(raw[4]) >= 0;
-      opt = { spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2], enable_lyrics: raw[3], desktop: modeInFifth ? false : raw[4], lyrics_mode: modeInFifth ? raw[4] : raw[5], debug_log: raw[6] };
+      // Loon 位置参数：spoof, ads, unlock, enable_lyrics, desktop, lyrics_source。
+      opt = { spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2], enable_lyrics: raw[3], desktop: raw[4], lyrics_source: raw[5] };
     } else if (typeof raw === "string") {
       opt = JSON.parse(raw || "{}") || {};
     } else if (raw && "object" == typeof raw) {
@@ -241,12 +241,6 @@
   // unlock_playback=auto 时移动端开启、桌面端关闭；桌面端强行写播放授权容易跳歌。
   const playOn = autoPlay(opt.unlock_playback) ? !desktop : flag(opt.unlock_playback, !desktop);
   const lyricsOn = flag(opt.enable_lyrics, true);
-  // full / no_card / metadata_only 处理元数据和歌词响应；card_only 只补歌词 section。
-  // 保留旧值解析，兼容已保存的参数。
-  const lyricsMode = ["full", "no_card", "metadata_only", "response_only", "card_only"].indexOf(opt.lyrics_mode) >= 0 ? opt.lyrics_mode : "full";
-  const lyricsMetaOn = lyricsOn && (lyricsMode === "full" || lyricsMode === "no_card" || lyricsMode === "metadata_only");
-  // 歌词卡片：full / card_only 时向 scrollsita 列表补一个真实的歌词 section。
-  const lyricsCardOn = lyricsOn && (lyricsMode === "full" || lyricsMode === "card_only");
   // 响应体上限：超过上限直接放行，避免异常响应占满内存。
   const MAX_META_BYTES = 12 * 1024 * 1024; // extended-metadata / context-resolve / connect-state / metadata
   const MAX_FEED_BYTES = 12 * 1024 * 1024; // home / browse / scroll / remote-config / nebula
@@ -593,9 +587,9 @@
   const yearOn = new Date(Date.now() + 365 * 86400000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
   const ATTR_CORE = {
-    // 不写 enable-crossfade-product-state：免费号被强行解锁交叉淡入淡出后，
-    // App 会按本地滑杆把下一首提前混进来。保留服务端下发的值，只解锁 Gapless。
-    "enable-gapless-product-state": "1",
+    // 不写 enable-crossfade-product-state / enable-gapless-product-state：
+    // 这两项由服务端与 App 播放设置决定。强制打开会让上一首结尾和下一首重叠，
+    // 表现为倒计时结束后仍响 1–2 秒。
     "catalogue": "premium",
     "financial-product": "pr:premium,tc:0",
     "is-eligible-premium-unboxing": true,
@@ -698,6 +692,8 @@
 
   function patchAttributes(buffer, fields = parse(buffer)) {
     if (!fields || !same(serialize(fields), buffer)) return null;
+    // 先记下账号地区，headers 脚本据此选择时区。
+    rememberRegion(fields);
     const out = [];
     const seen = Object.create(null);
     for (const f of fields) {
@@ -1274,7 +1270,7 @@
   // （该域名在部分出口会直接回 400，白等一轮超时）。
   //
   // 存储值：{ "<track id>": [title, artist, durationMs, savedAt] }，最多 24 首。
-  const TRACK_CACHE_KEY = "spotify.track.meta";
+  const TRACK_CACHE_KEY = "spotify.track.meta.v2";
   const TRACK_CACHE_MAX = 24;
   const TITLE_KEYS = ["track_title", "title", "track_name"];
   const ARTIST_KEYS = ["artist_name", "artist"];
@@ -1282,6 +1278,34 @@
   // 服务端 patcher 里没有 $persistentStore，读不到就直接跳过。
   const cacheStore = () =>
     typeof $persistentStore !== "undefined" && $persistentStore ? $persistentStore : null;
+
+  // 账号地区：bootstrap / UCS 的账号属性里通常带 country / current-country。
+  // 记下来供 headers 脚本按地区选时区；只在变化时写一次。
+  const REGION_KEY = "spotify.account.region";
+  const REGION_ATTR_KEYS = ["country", "current-country", "preferred-country", "account-country", "billing-country"];
+  function rememberRegion(fields) {
+    const store = cacheStore();
+    if (!store) return;
+    for (const f of fields) {
+      if (f.no !== 1 || f.w !== 2) continue;
+      const entry = parse(f.p);
+      if (!entry) continue;
+      const key = text(first(entry, 1));
+      if (!key || REGION_ATTR_KEYS.indexOf(key.toLowerCase()) < 0) continue;
+      const value = first(entry, 2);
+      const valueFields = value && value.w === 2 ? parse(value.p) : null;
+      const region = valueFields ? text(first(valueFields, 4)) : null;
+      if (!region || !/^[A-Za-z]{2}$/.test(region)) continue;
+      const next = region.toUpperCase();
+      try {
+        if (store.read(REGION_KEY) === next) return;
+        store.write(next, REGION_KEY);
+      } catch (e) {
+        // 存储写失败不影响响应改写。
+      }
+      return;
+    }
+  }
 
   function pickMeta(meta, keys) {
     for (const key of keys) if (meta[key]) return meta[key];
@@ -1333,19 +1357,7 @@
     out[id] = [name, artists.join(", "), duration && duration.w === 0 ? Number(duration.v) : 0];
   }
 
-  // 元数据缓存排障日志：歌词脚本回源 open.spotify.com 时要 2.6s，如果客户端
-  // 自己的 connect-state / metadata 响应里明明有曲名却没写进缓存，就得能看出来。
-  // 只在「写入发生变化」时输出，connect-state 每几秒轮询一次也不会刷屏。
-  const metaLog = (event, message) => {
-    if (!flag(opt.debug_log, false)) return;
-    try {
-      if (typeof console !== "undefined" && console.log) console.log("[spotify] " + Date.now() + " " + event + " " + message);
-    } catch (e) {
-      // 日志失败不影响响应改写
-    }
-  };
-
-  function rememberTracks(found, from) {
+  function rememberTracks(found) {
     const store = cacheStore();
     const ids = Object.keys(found);
     if (!store || !ids.length) return;
@@ -1364,7 +1376,6 @@
       const old = map[id];
       if (old && old[0] === next[0] && old[1] === next[1] && Number(old[2]) === next[2]) continue;
       map[id] = [next[0], next[1], next[2], now];
-      metaLog("meta.cache", "track=" + id + " title=" + next[0] + " artist=" + (next[1] || "-") + " from=" + (from || "?"));
       changed = true;
     }
     if (!changed) return;
@@ -1380,15 +1391,11 @@
 
   function cacheTrackMeta(target, fields) {
     if (!cacheStore()) return;
-    const from = target.indexOf("/metadata/4/track/") >= 0 ? "metadata"
-      : target.indexOf("/connect-state/") >= 0 ? "connect"
-      : target.indexOf("/context-resolve/") >= 0 ? "context" : "other";
     const trackUrl = /\/metadata\/4\/track\/([A-Za-z0-9]{22})/.exec(target);
     if (trackUrl) {
       const found = Object.create(null);
       collectTrackEntity(fields, trackUrl[1], found);
-      if (!found[trackUrl[1]]) metaLog("meta.none", "track=" + trackUrl[1] + " from=" + from + " fields=" + fields.length);
-      rememberTracks(found, from);
+      rememberTracks(found);
       return;
     }
     // extended-metadata 体积大且不含 track_title；当前曲目在
@@ -1396,7 +1403,7 @@
     if (target.indexOf("/extended-metadata/") >= 0) return;
     const found = Object.create(null);
     collectTracks(fields, found, 0);
-    rememberTracks(found, from);
+    rememberTracks(found);
   }
 
   function patchMeta(buffer, target) {
@@ -1420,7 +1427,7 @@
 
   // 请求阶段只做一件事：抹掉 extended-metadata 请求体里的 etag。
   if (!res) {
-    if (lyricsMetaOn) stripRequestEtags(req, url);
+    if (lyricsOn) stripRequestEtags(req, url);
     else $done({});
     return;
   }
@@ -1443,7 +1450,7 @@
   // 远程配置 / 账号属性在 spoof 或 block_ads 任一打开时都要改写，否则 App
   // 重新拉一次配置就会把 bootstrap 里关掉的开关重新打开。
   let enabled;
-  if (isMeta) enabled = lyricsMetaOn;
+  if (isMeta) enabled = lyricsOn;
   else if (isConfig || isAttr) enabled = spoof || adsOn;
   else enabled = desktop ? spoof || adsOn : spoof;
   if (!enabled) {

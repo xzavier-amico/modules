@@ -1,6 +1,6 @@
 # Spotify Enhance — Egern 模块
 
-- Egern：`egern/spotify/spotify-enhance.yaml` + `js/spotify.js` + `js/spotify.feed.js` + `js/spotify_lyrics.js`
+- Egern：`egern/spotify/spotify-enhance.yaml` + `js/spotify.headers.js` + `js/spotify.js` + `js/spotify.feed.js` + `js/spotify_lyrics.js`
 - Loon：`loon/spotify/spotify-enhance.plugin`
 
 功能：
@@ -21,13 +21,23 @@
 | `enable_lyrics` | true | 补全歌词；关闭后不补元数据、歌词与歌词卡 |
 | `lyrics_source` | auto | 歌词源；`auto` 并发查询网易云 / QQ / LRCLIB，不自动查 Musixmatch |
 | `desktop` | auto | 设备类型；`auto` 按 UA 识别 iPhone / iPad 与 Mac，识别不准时手动指定 |
-| `debug_log` | false | 输出歌词卡与 color-lyrics 的时序日志（含曲名），排查完关闭 |
+| `force_zh_hans` | true | 把 Spotify 请求的 `Accept-Language` 改成简体中文，避免曲名、歌词与元数据按账号或出口地区回繁体 |
+| `spoof_timezone` | true | 按账号地区改写请求里的 `timezone`；识别不到地区时用 `Asia/Hong_Kong` |
+
+## 语言与时区
+
+`js/spotify.headers.js` 挂在请求阶段，只做两件事：
+
+- `force_zh_hans`：把 `Accept-Language` 统一成 `zh-CN,zh-Hans;q=0.9,zh;q=0.8`。Spotify 会按账号地区或出口 IP 回繁体中文，第三方曲库用繁体曲名也更容易查不到；系统语言不是简体、或想保留原文时关闭。
+- `spoof_timezone`：把 URL 里的 `timezone=` 改成账号地区对应的时区。账号地区由 `js/spotify.js` 从 bootstrap / UCS 的 `country` 属性抄到本地存储 `spotify.account.region`；没有记录时看请求里的 `market=XX`，仍然没有就用 `Asia/Hong_Kong`。中国大陆账号会得到 `Asia/Shanghai`，台湾 `Asia/Taipei`，香港 `Asia/Hong_Kong`。
+
+时区只影响请求参数，不改系统时间；关闭后请求原样放行。
 
 ## 歌词
 
-1. `js/spotify.js` 把曲目元数据里的 `has_lyrics` 改为 `true`，客户端才会请求 `color-lyrics`；同时把同一条响应里的曲名、歌手、时长存进本地存储（`spotify.track.meta`，最多 24 首）。
+1. `js/spotify.js` 把曲目元数据里的 `has_lyrics` 改为 `true`，客户端才会请求 `color-lyrics`；同时把同一条响应里的曲名、歌手、时长存进本地存储（`spotify.track.meta.v2`，最多 24 首）。
 2. `js/spotify_lyrics.js` 处理 `color-lyrics/v{N}/track/{id}`：官方有歌词时原样放行；404 / 空歌词时先读上面那份元数据（零外部请求），没有命中才退回公开的 oEmbed / embed 页面，再用第三方歌词合成同结构响应。
-3. 合成结果写入 `spotify.lyrics.cache`：同一首歌再次请求时直接命中，不再重复查源。命中缓存保留 24 小时；查不到或超时不缓存，下次会重新查询；最多 24 首（总大小仍限制在 400KB）。换了歌词源（`auto` ↔ `lrclib`）时会按曲目 id 复用旧缓存。从 oEmbed / embed 拿到的曲名、歌手与封面色也会写回 `spotify.track.meta`，下次连公开页面都不用请求。
+3. 合成结果写入 `spotify.lyrics.cache.v2`：同一首歌再次请求时直接命中，不再重复查源。命中缓存保留 24 小时；查不到或超时不缓存，下次会重新查询；最多 24 首（总大小仍限制在 400KB）。换了歌词源（`auto` ↔ `lrclib`）时会按曲目 id 复用旧缓存。从 oEmbed / embed 拿到的曲名、歌手与封面色也会写回 `spotify.track.meta.v2`，下次连公开页面都不用请求。
 
 合成规则：
 
@@ -35,6 +45,7 @@
 - 候选请求全部并行：LRCLIB 对完整曲名和去掉装饰括号后的曲名各发 `get` + `search`；网易云 / QQ 搜索后同时请求排名前 3 的候选歌词。任一同步歌词先通过校验就直接返回，不再按候选顺序一个个等。
 - 歌名比较会忽略 `feat.` / `ft.` / `with` / `prod.`、`Remastered 2011` / `2011 Remaster`、`Radio Edit`、`Single Version`、`Album Version`、`Bonus Track`、`Deluxe Edition`、`Explicit` / `Clean` 等版本后缀；歌手按 `feat.` / `ft.` / `with` 和多歌手分隔符拆分，任意一位匹配即可。
 - 曲名里带 `()` / `（）` 的装饰信息（影视剧名、节目名、歌手名等）会先去掉再查一次；括号里含 `Live`、`Remix`、`Acoustic`、`伴奏`、`版` 等版本词时保留，避免把现场版查成录音室版。返回结果仍按完整曲名或去掉装饰后的曲名校验。
+- `DJ版` / `DJ Remix` / `(DJ)` / `- DJ` 这类标记会先从曲名里去掉再查，并跳过歌手约束（DJ 版通常挂别人名字）；时长容差放宽到 60 秒，避免混音版比原曲长而匹配失败。
 - LRCLIB 并行候选都没命中时，会再用歌名搜一次；仍按歌手 / 版本 / Live / 时长校验，不会拿别人的同名歌。
 - 第三方请求超时、429、5xx 或所有源都没结果时都不写缓存，下次打开会立即重试。
 - 歌词页总时限 8 秒，单个外部请求 4 秒；scrollsita 补卡**不等歌词**：打开 Now Playing 时客户端先渲染列表，晚到的响应只更新模型、不重绘，所以收到 scroll 就立刻补卡，内容由随后的 color-lyrics 响应填充。
@@ -53,22 +64,6 @@
 crossfade；这两项保持服务端与 App 自己的设置。AutoMix 仍在远程配置里强制关闭
 （`automix_enabled=0`），避免下一首按节拍提前混进来。修改后需要重启 App（或切换
 网络）让客户端重新拉取 bootstrap / 远程配置，旧缓存里的开关才会被覆盖。
-
-### 歌词卡时序排障（debug_log）
-
-在模块设置里打开「排障日志」后，脚本会输出 `[spotify]` 前缀的日志；第二个字段是毫秒时间戳，用来对齐 feed 与 lyrics 两段脚本：
-
-- `lyrics.req`：color-lyrics 请求阶段，`want=` 是客户端请求的格式，`cache=hit/miss`；
-- `lyrics.res`：官方响应状态、实际格式、字节数；`official=` 是官方歌词的命中情况；
-- `lyrics.meta` / `lyrics.source`：曲名 / 歌手来自缓存还是 oEmbed，以及各歌词源的命中结果；`waited=` 是元数据阶段总耗时，`oembed=` / `embed=` 是两次回源各自的耗时（两者并行发出）；
-- `lyrics.served`：歌词响应已经交给客户端（格式 + 曲名）；
-- `lyrics.done`：最终返回的状态 / 字节数；
-- `meta.cache` / `meta.none`：客户端自己的 connect-state / context-resolve / metadata 响应里抄到的曲目元数据；`meta.none` 只在 `metadata/4/track` 里取不到曲名时打印；
-- `feed.scroll`：scroll 请求的曲目、字节数、是否已有官方卡片、是否补卡、总耗时；
-- `feed.card`：删掉几个 section、补卡后列表里有几个 section；
-- `feed.meta`：从 scroll 里抄到的曲名 / 歌手（写进元数据缓存，下次同一首不用回源）。
-
-判断方法：`feed.scroll` 的 `total` 应该是几毫秒到几十毫秒。补卡不等歌词，响应越早越可能赶在客户端第一次渲染之前；如果 `total` 很大，卡片就要收起再展开才出现。日志包含曲名，排查完请关闭。
 
 ### 没有歌词时的排查
 
@@ -99,6 +94,7 @@ crossfade；这两项保持服务端与 App 自己的设置。AutoMix 仍在远�
 - 桌面端广告接口 `/ads/v1|v2/` 由 `url_rewrites` 直接 reject（404）；Loon 插件里对应的是 `reject(404)`。
 - Egern 不支持按参数加载脚本；关闭补全歌词后脚本仍会加载，但会立即返回。
 - 脚本 URL 带 `?v=日期`；客户端元数据有缓存，更新后需重启 App 或打开未缓存的歌单。
-- 已删除的参数（例如 `lyrics_debug`）在旧安装里可能仍显示；需要在客户端删除模块后重新导入，并完全退出 App 再打开。脚本按 URL 缓存，只改 `?v=` 而不重新导入时，旧脚本可能继续运行。
+- 已删除的参数（`lyrics_debug`、`debug_log`、`lyrics_mode`）在旧安装里可能仍显示；需要在客户端删除模块后重新导入，并完全退出 App 再打开。脚本按 URL 缓存，只改 `?v=` 而不重新导入时，旧脚本可能继续运行。
+- 新增 `spotify.headers` 请求脚本；旧安装需要重新导入模块才会带上它，只更新 YAML 而不重新导入时 `Accept-Language` 与时区不会生效。
 - 需开启 MitM：`*-spclient.spotify.com`、`spclient.wg.spotify.com`。
 - 音质、下载与 Spotify Connect 由服务端判定，脚本无法修改。

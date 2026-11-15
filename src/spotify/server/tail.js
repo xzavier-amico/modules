@@ -26,6 +26,5 @@ export function createPatcher(options = {}) {
     unlock_playback: options.unlockPlayback,
     enable_lyrics: options.enableLyrics,
     desktop: options.desktop,
-    lyrics_mode: options.lyricsMode,
   });
 }

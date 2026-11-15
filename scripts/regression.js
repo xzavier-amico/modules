@@ -132,7 +132,7 @@ const scroll = "https://spclient.wg.spotify.com/scrollsita/v1/scroll/" + encodeU
 // feed 脚本补歌词卡前会先等歌词写进缓存；离线测试直接给一份已命中的缓存。
 function lyricsStore(id, source = "auto") {
   const map = {
-    "spotify.lyrics.cache": JSON.stringify({
+    "spotify.lyrics.cache.v2": JSON.stringify({
       [source + "|" + id]: {
         t: Date.now(), m: 0, s: "LINE_SYNCED", p: "LRCLIB", i: "", l: "en",
         c: [-16777216, -1, -1], a: [[0, "line"]],
@@ -155,32 +155,27 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     const withAd = serialize([b(1, concat(serialize([b(1, ad)]), originalList)), v(8, 123n)]);
     const sectionList = (out) => parse(first(parse(out.body), 1).p).filter((f) => f.no === 1);
 
-    for (const mode of ["full", "no_card", "card_only", undefined]) {
-      for (const ads of [true, false]) {
-        const args = { block_ads: ads, enable_lyrics: true, lyrics_mode: mode };
-        const wantCard = mode === undefined || mode === "full" || mode === "card_only";
-        const store = lyricsStore("0VjIjW4GlUZAMYd2vXMi3b");
+    for (const ads of [true, false]) {
+      const args = { block_ads: ads, enable_lyrics: true };
+      const store = lyricsStore("0VjIjW4GlUZAMYd2vXMi3b");
 
-        assert.equal(Object.keys(run(feed, official, scroll, args)).length, 0, "an existing lyrics section must not be duplicated");
+      assert.equal(Object.keys(run(feed, official, scroll, args)).length, 0, "an existing lyrics section must not be duplicated");
 
-        const plain = run(feed, body, scroll, args, { $persistentStore: store });
-        assert.equal(!!plain.body, wantCard);
-        if (wantCard) {
-          const sections = sectionList(plain);
-          assert.equal(sections.length, parse(originalList).filter((f) => f.no === 1).length + 1);
-          const added = parse(sections[0].p);
-          assert.equal(text(first(parse(first(added, 5).p), 1)), track);
-          assert.ok(first(parse(first(added, 23).p), 1), "a synthesized section needs its section id");
-        }
+      const plain = run(feed, body, scroll, args, { $persistentStore: store });
+      assert.ok(plain.body, "lyrics card must be added");
+      const sections = sectionList(plain);
+      assert.equal(sections.length, parse(originalList).filter((f) => f.no === 1).length + 1);
+      const added = parse(sections[0].p);
+      assert.equal(text(first(parse(first(added, 5).p), 1)), track);
+      assert.ok(first(parse(first(added, 23).p), 1), "a synthesized section needs its section id");
 
-        const filtered = run(feed, withAd, scroll, args, { $persistentStore: store });
-        if (!ads) assert.equal(!!filtered.body, wantCard);
-        else {
-          const sections = sectionList(filtered);
-          assert.ok(sections.every((section) => !first(parse(section.p), 30)), "sponsored section must be removed, not emptied");
-          assert.equal(sections.length, wantCard ? 2 : 1);
-          assert.equal(first(parse(filtered.body), 8).v, 123n);
-        }
+      const filtered = run(feed, withAd, scroll, args, { $persistentStore: store });
+      if (!ads) assert.ok(filtered.body);
+      else {
+        const filteredSections = sectionList(filtered);
+        assert.ok(filteredSections.every((section) => !first(parse(section.p), 30)), "sponsored section must be removed, not emptied");
+        assert.equal(filteredSections.length, 2);
+        assert.equal(first(parse(filtered.body), 8).v, 123n);
       }
     }
 
@@ -336,6 +331,29 @@ check("Shadowrocket Spotify feed argument JSON stays valid", () => {
   assert.equal(JSON.parse(raw).enable_lyrics, true);
 });
 
+check("Spotify modules expose the language and timezone switches", () => {
+  const egern = read("egern/spotify/spotify-enhance.yaml");
+  assert.match(egern, /force_zh_hans:/);
+  assert.match(egern, /spoof_timezone:/);
+  assert.ok(egern.includes("spotify.headers.js"), "egern must run the headers script");
+  assert.ok(!egern.includes("debug_log"), "egern must not expose the retired log switch");
+  for (const file of ["loon/spotify/spotify-enhance.plugin", "loon/spotify/spotify-enhance-mac.plugin"]) {
+    const text = read(file);
+    assert.ok(text.includes("force_zh_hans = "), file + " must declare force_zh_hans");
+    assert.ok(text.includes("spoof_timezone = "), file + " must declare spoof_timezone");
+    assert.ok(text.includes("spotify.headers.js"), file + " must run the headers script");
+    assert.ok(!text.includes("debug_log"), file + " must not expose the retired log switch");
+  }
+  const sr = read("shadowrocket/spotify/spotify-enhance.sgmodule");
+  assert.ok(sr.includes("强制简体中文:true"), "shadowrocket must expose the language switch");
+  assert.ok(sr.includes("伪装时区:true"), "shadowrocket must expose the timezone switch");
+  assert.ok(sr.includes("spotify.headers.js"), "shadowrocket must run the headers script");
+  assert.ok(!sr.includes("排障日志"), "shadowrocket must not expose the retired log switch");
+  const headerLine = sr.split("\n").find((line) => line.startsWith("spotify.headers ="));
+  const headerArgs = /argument="(.*)"$/.exec(headerLine)[1].replace(/\{\{\{[^}]*\}\}\}/g, "true");
+  assert.deepEqual(JSON.parse(headerArgs), { force_zh_hans: true, spoof_timezone: true });
+});
+
 check("Egern lyrics script declares body_required", () => {
   // 不开 body_required 时 Egern 既不把 body 交给脚本，也不接受脚本返回的 body，
   // 补出来的歌词会被丢掉。
@@ -439,13 +457,13 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     ]);
     const url = "https://spclient.wg.spotify.com/connect-state/v1/player";
     run(platform + "/spotify/js/spotify.js", context, url, {}, { $persistentStore: store });
-    const cached = JSON.parse(map["spotify.track.meta"])["0VjIjW4GlUZAMYd2vXMi3b"];
+    const cached = JSON.parse(map["spotify.track.meta.v2"])["0VjIjW4GlUZAMYd2vXMi3b"];
     assert.deepEqual(cached.slice(0, 3), ["晚秋", "毛宁", 212000]);
 
     // 同一条元数据重复到达时不重写存储。
-    const before = map["spotify.track.meta"];
+    const before = map["spotify.track.meta.v2"];
     run(platform + "/spotify/js/spotify.js", context, url, {}, { $persistentStore: store });
-    assert.equal(map["spotify.track.meta"], before);
+    assert.equal(map["spotify.track.meta.v2"], before);
 
     // 歌词脚本命中缓存后不再访问 open.spotify.com（oEmbed 与 embed 都不请求）。
     const requests = [];
@@ -473,7 +491,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     ]);
     run(platform + "/spotify/js/spotify.js", entity,
       "https://spclient.wg.spotify.com/metadata/4/track/0VjIjW4GlUZAMYd2vXMi3b?market=from_token", {}, { $persistentStore: store });
-    const cached = JSON.parse(map["spotify.track.meta"])["0VjIjW4GlUZAMYd2vXMi3b"];
+    const cached = JSON.parse(map["spotify.track.meta.v2"])["0VjIjW4GlUZAMYd2vXMi3b"];
     assert.deepEqual(cached.slice(0, 3), ["抽离", "徐良, 吴琼", 210000]);
   });
 }
@@ -500,7 +518,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.equal(JSON.parse(first.body).lyrics.lines[0].words, "Cached lyric", platform);
     assert.ok(calls > 0);
     const afterFirst = calls;
-    assert.ok(map["spotify.lyrics.cache"], platform + " must persist the resolved lyrics");
+    assert.ok(map["spotify.lyrics.cache.v2"], platform + " must persist the resolved lyrics");
     assert.ok(!map["spotify.lyrics.served"], platform + " must not keep the retired served mark");
     assert.ok(!map["spotify.lyrics.pending"], platform + " must clear the pending mark once the response is returned");
 
@@ -537,7 +555,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.equal(Object.keys(miss).length, 0, platform);
     const afterMiss = missCalls;
     assert.ok(afterMiss > 0, platform);
-    const missCache = JSON.parse(map["spotify.lyrics.cache"] || "{}");
+    const missCache = JSON.parse(map["spotify.lyrics.cache.v2"] || "{}");
     assert.equal(missCache["lrclib|missing"], undefined, platform + " must not cache a miss");
     // 乐观补出来的歌词卡需要知道「这次确实没歌词」，短期内不再补空卡。
     const missMark = JSON.parse(map["spotify.lyrics.miss"] || "null");
@@ -549,28 +567,6 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     });
     assert.equal(Object.keys(repeated).length, 0, platform);
     assert.ok(missCalls > afterMiss, platform + " must retry on the next request");
-  });
-
-  check(platform + " Spotify debug log records timing, format and track name when enabled", () => {
-    const logs = [];
-    const map = {};
-    const store = { read: (key) => (key in map ? map[key] : null), write: (value, key) => { map[key] = value; return true; } };
-    const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/id?format=json";
-    const http = {
-      get: (request, callback) => {
-        callback(null, { status: 200 }, JSON.stringify(
-          request.url.includes("oembed")
-            ? { title: "Private Song Title", author_name: "Private Artist" }
-            : { trackName: "Private Song Title", artistName: "Private Artist", syncedLyrics: "[00:01.00]Private lyric text" },
-        ));
-      },
-    };
-    run(platform + "/spotify/js/spotify_lyrics.js", "", url,
-      { lyrics_source: "lrclib", enable_lyrics: true, debug_log: true },
-      { $response: { status: 404, body: "" }, $persistentStore: store, $httpClient: http, console: { log: (line) => logs.push(line) } });
-    assert.ok(logs.some((line) => line.includes("lyrics.served") && line.includes("title=Private Song Title")), platform + " must log the track name");
-    assert.ok(logs.some((line) => line.includes("lyrics.served") && line.includes("format=json")), platform + " must log the served format");
-    assert.ok(logs.some((line) => line.includes("lyrics.done") && line.includes("status=200")), platform + " must log the final response");
   });
 
   check(platform + " Spotify browse drops named ad sections", () => {
@@ -613,7 +609,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     const id = "0VjIjW4GlUZAMYd2vXMi3b";
     const body = serialize([b(1, serialize([b(1, serialize([s(2, "normal-card")]))]))]);
     const args = { block_ads: false, enable_lyrics: true, lyrics_source: "lrclib" };
-    const meta = { "spotify.track.meta": JSON.stringify({ [id]: ["Song", "Artist", 210000, Date.now()] }) };
+    const meta = { "spotify.track.meta.v2": JSON.stringify({ [id]: ["Song", "Artist", 210000, Date.now()] }) };
     const storeFor = (extra = {}) => {
       const map = Object.assign({}, meta, extra);
       return {
@@ -647,18 +643,6 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     const stale = storeFor({ "spotify.lyrics.miss": JSON.stringify({ id: id, at: Date.now() - 10 * 60 * 1000 }) });
     const staleOut = run(file, body, scroll, args, { $persistentStore: stale.store, $httpClient: noHttp, ...noTimer });
     assert.ok(staleOut.body, platform + " expired miss must allow the card again");
-
-    // 4) debug_log 打开时输出曲名、列表结构和补卡决定。
-    const dbg = storeFor();
-    const dbgLogs = [];
-    const dbgOut = run(file, body, scroll, Object.assign({}, args, { debug_log: true }), {
-      $persistentStore: dbg.store, $httpClient: noHttp, ...noTimer,
-      console: { log: (line) => dbgLogs.push(line) },
-    });
-    assert.ok(dbgOut.body, platform);
-    assert.ok(dbgLogs.some((line) => line.includes("feed.scroll") && line.includes("title=Song / Artist")), platform + " must log the track name");
-    assert.ok(dbgLogs.some((line) => line.includes("feed.scroll") && line.includes("card=add")), platform + " must log the card decision");
-    assert.ok(dbgLogs.some((line) => line.includes("feed.card") && line.includes("sections=1->2")), platform + " must log the section count");
   });
 }
 
@@ -684,7 +668,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
       setTimeout: (fn) => { fn(); return 1; },
       clearTimeout: () => {},
     });
-    const cached = JSON.parse(map["spotify.track.meta"] || "{}")[id];
+    const cached = JSON.parse(map["spotify.track.meta.v2"] || "{}")[id];
     assert.ok(cached && cached[0] === "Song" && cached[1] === "Artist", platform + " must cache scroll metadata");
   });
 }
@@ -712,28 +696,6 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.deepEqual(first(nestedTrack, 3).p, gid, "GID must survive the actual Context -> page -> track wrapper");
     assert.equal(nestedTrack.filter((f) => f.no === 3).length, 1);
     assert.equal(Object.keys(run(file, wrapped, url, { enable_lyrics: false })).length, 0);
-  });
-
-  check(platform + " Spotify meta cache logs what it stored when debug_log is on", () => {
-    const file = platform + "/spotify/js/spotify.js";
-    const url = "https://spclient.wg.spotify.com/context-resolve/v1/context";
-    const metadata = (key, value) => b(4, serialize([s(1, key), s(2, value)]));
-    const context = serialize([s(1, track), s(2, "uid"), metadata("track_title", "Song"), metadata("artist_name", "Artist")]);
-    const map = {};
-    const logs = [];
-    const store = { read: (key) => (key in map ? map[key] : null), write: (value, key) => { map[key] = value; return true; } };
-    run(file, context, url, { enable_lyrics: true, debug_log: true }, {
-      console: { log: (line) => logs.push(line) },
-      $persistentStore: store,
-    });
-    assert.ok(logs.some((line) => line.includes("meta.cache") && line.includes("title=Song") && line.includes("from=context")),
-      platform + " must log the cached track metadata");
-    const quiet = [];
-    run(file, context, url, { enable_lyrics: true }, {
-      console: { log: (line) => quiet.push(line) },
-      $persistentStore: { read: () => null, write: () => true },
-    });
-    assert.equal(quiet.length, 0, platform + " must stay quiet without debug_log");
   });
 }
 
@@ -1020,7 +982,7 @@ check("Spotify lyrics handles metadata and source misses without diagnostic logs
   const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/id?format=json";
   for (const scenario of ["metadata-missing", "source-miss", "emit"]) {
     const logs = [];
-    const out = run("loon/spotify/js/spotify_lyrics.js", "", url, ["lrclib", true, "full"], {
+    const out = run("loon/spotify/js/spotify_lyrics.js", "", url, ["lrclib", true, "ios", true], {
       console: { log: (line) => logs.push(line) },
       $response: { status: 404, body: "" },
       $httpClient: { get: (request, callback) => {
@@ -1069,6 +1031,45 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     if (platform !== "egern") assert.equal(requests.length, 5, "synchronous mocks stop after NetEase");
   });
 }
+
+check("Spotify DJ versions drop the marker and artist before querying", () => {
+  const id = "0VjIjW4GlUZAMYd2vXMi3b";
+  const store = {
+    read: (key) => key === "spotify.track.meta.v2"
+      ? JSON.stringify({ [id]: ["晚秋 (DJ版)", "毛宁", 212000, Date.now()] })
+      : null,
+    write: () => true,
+  };
+  const requests = [];
+  const out = run("loon/spotify/js/spotify_lyrics.js", "",
+    "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json", ["auto", true], {
+      $response: { status: 404, body: "" },
+      $persistentStore: store,
+      $httpClient: { get: (request, callback) => {
+        requests.push(request.url);
+        let data;
+        if (request.url.includes("oembed")) data = { title: "晚秋 (DJ版)", author_name: "毛宁" };
+        else if (request.url.includes("/embed/track/")) {
+          const entity = { id, type: "track", title: "晚秋 (DJ版)", artists: [{ name: "毛宁" }], duration: 260000 };
+          callback(null, { status: 200 }, '<script id="__NEXT_DATA__" type="application/json">' +
+            JSON.stringify({ props: { pageProps: { state: { data: { entity } } } } }) + "</script>");
+          return;
+        } else if (request.url.includes("music.163.com/api/search")) {
+          assert.equal(new URL(request.url).searchParams.get("s"), "晚秋",
+            "the DJ marker and artist must be dropped from the query");
+          // 歌手不同、时长差 48 秒：普通曲目会被拒绝，DJ 版本要放宽。
+          data = { result: { songs: [
+            { id: 1, name: "晚秋", artists: [{ name: "其他歌手" }], duration: 260000 },
+          ] } };
+        } else if (request.url.includes("api/song/lyric")) data = { lrc: { lyric: "[00:01.00]DJ lyric" } };
+        else assert.fail("unexpected provider request: " + request.url);
+        callback(null, { status: 200 }, JSON.stringify(data));
+      } },
+    });
+  assert.equal(JSON.parse(out.body).lyrics.provider, "NetEase");
+  assert.equal(JSON.parse(out.body).lyrics.lines[0].words, "DJ lyric");
+  assert.ok(requests.some((url) => url.includes("music.163.com/api/search")));
+});
 
 check("Spotify auto can finish with QQ when NetEase has no match", () => {
   const out = run("loon/spotify/js/spotify_lyrics.js", "", "https://spclient.wg.spotify.com/color-lyrics/v2/track/id?format=json", ["auto", true], {
@@ -1140,7 +1141,7 @@ check("Spotify LRCLIB sends get and search for both titles up front", () => {
   const id = "0VjIjW4GlUZAMYd2vXMi3b";
   const title = "晚秋（电影《晚秋》主题曲）";
   const store = {
-    read: (key) => key === "spotify.track.meta"
+    read: (key) => key === "spotify.track.meta.v2"
       ? JSON.stringify({ [id]: [title, "毛宁", 200000, Date.now()] })
       : null,
     write: () => true,
@@ -1175,7 +1176,7 @@ check("Spotify LRCLIB sends get and search for both titles up front", () => {
 check("Spotify NetEase requests candidate lyrics in parallel", () => {
   const id = "0VjIjW4GlUZAMYd2vXMi3b";
   const store = {
-    read: (key) => key === "spotify.track.meta"
+    read: (key) => key === "spotify.track.meta.v2"
       ? JSON.stringify({ [id]: ["Song", "Artist", 210000, Date.now()] })
       : null,
     write: () => true,
@@ -1535,59 +1536,59 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
 
 }
 
-check("Loon uses normal arguments and retains legacy mode compatibility", () => {
+check("Loon passes arguments in the declared order", () => {
   const plugin = read("loon/spotify/spotify-enhance.plugin");
-  assert.ok(!plugin.includes("lyrics_mode"), "plugin must not expose diagnostic modes");
+  assert.ok(!plugin.includes("lyrics_mode"), "plugin must not expose retired diagnostic modes");
+  assert.ok(!plugin.includes("debug_log"), "plugin must not expose a diagnostic log switch");
   const scriptRules = plugin.split("\n").filter((line) => line.includes('then script("'));
-  assert.equal(scriptRules.length, 7);
+  assert.equal(scriptRules.length, 8);
   for (const line of scriptRules) {
     assert.ok(/\?v=\d{8}-\d+/.test(line), line);
     const tuple = /then script\("[^"]+", (\{.*\})\) with/.exec(line)[1];
     assert.match(tuple, /^\{\$\{\w+\}(?:, \$\{\w+\})*\}$/, "Loon tuple must contain only declared argument references");
     const names = [...tuple.matchAll(/\$\{(\w+)\}/g)].map((match) => match[1]);
     for (const name of names) assert.ok(new RegExp("^" + name + " = ", "m").test(plugin));
-    if (line.includes("spotify_lyrics.js")) {
-      assert.deepEqual(names, ["lyrics_source", "enable_lyrics", "desktop", "debug_log"]);
+    if (line.includes("spotify.headers.js")) {
+      assert.deepEqual(names, ["force_zh_hans", "spoof_timezone"]);
+    } else if (line.includes("spotify_lyrics.js")) {
+      assert.deepEqual(names, ["lyrics_source", "enable_lyrics", "desktop", "force_zh_hans"]);
     } else {
-      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source", "debug_log"]);
+      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source"]);
     }
   }
+  // 位置参数：spoof, ads, unlock, lyrics, desktop, source。
   const context = serialize([s(1, track), s(2, "uid"), b(3, serialize([s(1, "has_lyrics"), s(2, "false")]))]);
   const cards = serialize([b(1, serialize([b(1, serialize([s(2, "ordinary-card")]))]))]);
   const lyricsUrl = "https://spclient.wg.spotify.com/color-lyrics/v2/track/id?format=json";
-  for (const mode of [undefined, "full", "no_card", "metadata_only", "response_only", "card_only"]) {
-    const args = [true, false, true, true, mode];
-    const meta = run("loon/spotify/js/spotify.js", context, "https://spclient.wg.spotify.com/connect-state/v1/player", args);
-    assert.equal(!!meta.body, [undefined, "full", "no_card", "metadata_only"].includes(mode), mode + " metadata");
-    const feed = run("loon/spotify/js/spotify.feed.js", cards, scroll, args, {
-      $persistentStore: lyricsStore("0VjIjW4GlUZAMYd2vXMi3b"),
-    });
-    assert.equal(!!feed.body, [undefined, "full", "card_only"].includes(mode), mode + " lyrics section");
-    let requests = 0;
-    const response = run("loon/spotify/js/spotify_lyrics.js", "", lyricsUrl, ["lrclib", true, mode], {
-      $response: { status: 404, body: "" },
-      $httpClient: { get: (request, callback) => {
-        requests++;
-        callback(null, { status: 200 }, JSON.stringify(request.url.includes("oembed") ? { title: "Song", author_name: "Artist" } : { trackName: "Song", artistName: "Artist", syncedLyrics: "[00:01.00]Hello" }));
-      } },
-    });
-    const responseOn = [undefined, "full", "no_card", "response_only"].includes(mode);
-    assert.equal(!!response.body, responseOn, mode + " response");
-    assert.equal(requests > 0, responseOn, mode + " HTTP calls");
-    args[3] = false;
-    assert.equal(Object.keys(run("loon/spotify/js/spotify.js", context, "https://spclient.wg.spotify.com/connect-state/v1/player", args)).length, 0);
-    assert.equal(Object.keys(run("loon/spotify/js/spotify.feed.js", cards, scroll, args)).length, 0);
-  }
+  const args = [true, false, true, true, "ios", "lrclib"];
+  assert.ok(run("loon/spotify/js/spotify.js", context, "https://spclient.wg.spotify.com/connect-state/v1/player", args).body);
+  assert.ok(run("loon/spotify/js/spotify.feed.js", cards, scroll, args, {
+    $persistentStore: lyricsStore("0VjIjW4GlUZAMYd2vXMi3b"),
+  }).body);
+  let requests = 0;
+  const response = run("loon/spotify/js/spotify_lyrics.js", "", lyricsUrl, ["lrclib", true, "ios", true], {
+    $response: { status: 404, body: "" },
+    $httpClient: { get: (request, callback) => {
+      requests++;
+      callback(null, { status: 200 }, JSON.stringify(request.url.includes("oembed") ? { title: "Song", author_name: "Artist" } : { trackName: "Song", artistName: "Artist", syncedLyrics: "[00:01.00]Hello" }));
+    } },
+  });
+  assert.ok(response.body);
+  assert.ok(requests > 0);
+  // 关闭补全歌词后，元数据与歌词卡都放行。
+  const off = [true, false, true, false, "ios", "lrclib"];
+  assert.equal(Object.keys(run("loon/spotify/js/spotify.js", context, "https://spclient.wg.spotify.com/connect-state/v1/player", off)).length, 0);
+  assert.equal(Object.keys(run("loon/spotify/js/spotify.feed.js", cards, scroll, off)).length, 0);
 });
 
-check("Loon Enhance uses the plugin's original arguments independently of lyric diagnostics", () => {
+check("Loon Enhance applies the main script tuple independently of lyrics", () => {
   const plugin = read("loon/spotify/spotify-enhance.plugin");
   const rule = plugin.split("\n").find((line) => line.includes('tag="Spotify Enhance"'));
   const tuple = /then script\("[^"]+", (\{.*\})\) with/.exec(rule)[1];
   const attributes = serialize([b(1, serialize([s(1, "type"), b(2, serialize([s(4, "free")]))]))]);
   const body = serialize([b(1, serialize([b(3, attributes)]))]);
   for (const lyrics of [true, false]) {
-    const values = { spoof_premium: true, block_ads: true, unlock_playback: true, enable_lyrics: lyrics, desktop: "ios" };
+    const values = { spoof_premium: true, block_ads: true, unlock_playback: true, enable_lyrics: lyrics, desktop: "ios", lyrics_source: "auto" };
     const args = [...tuple.matchAll(/\$\{(\w+)\}/g)].map((match) => values[match[1]]);
     const out = run("loon/spotify/js/spotify.js", body, "https://spclient.wg.spotify.com/user-customization-service/v1/customize", args);
     const ucs = parse(first(parse(out.body), 1).p);
@@ -1655,8 +1656,67 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     const crossfadeValue = parse(first(parse(crossfade.p), 2).p);
     assert.equal(text(first(crossfadeValue, 4)), "0",
       platform + " must not force the crossfade capability on");
+    assert.ok(!entries.some((f) => {
+      const entry = f.no === 1 ? parse(f.p) : null;
+      return entry && text(first(entry, 1)) === "enable-gapless-product-state";
+    }), platform + " must not add a gapless capability");
+  });
+
+  check(platform + " Spotify records the account region for the headers script", () => {
+    const map = {};
+    const store = { read: (key) => (key in map ? map[key] : null), write: (value, key) => { map[key] = value; return true; } };
+    const attrs = serialize([
+      b(1, serialize([s(1, "country"), b(2, serialize([s(4, "TW")]))])),
+      b(1, serialize([s(1, "type"), b(2, serialize([s(4, "free")]))])),
+    ]);
+    const body = serialize([b(1, serialize([b(3, attrs)]))]);
+    run(platform + "/spotify/js/spotify.js", body,
+      "https://spclient.wg.spotify.com/user-customization-service/v1/customize",
+      { spoof_premium: true, block_ads: true, unlock_playback: true, enable_lyrics: false, desktop: "ios", lyrics_source: "auto" },
+      { $persistentStore: store });
+    assert.equal(map["spotify.account.region"], "TW", platform + " must persist the two-letter region");
   });
 }
+
+check("Spotify headers script rewrites language and timezone", () => {
+  const file = "loon/spotify/js/spotify.headers.js";
+  const url = "https://spclient.wg.spotify.com/bootstrap/v1?timezone=Asia/Shanghai&market=TW";
+  const call = (args, store) => {
+    const calls = [];
+    const context = vm.createContext({ TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, console,
+      $request: { url, headers: { "User-Agent": "Spotify/1.0", "Accept-Language": "zh-TW" } },
+      $argument: args, $persistentStore: store, $done: (value) => calls.push(value) });
+    vm.runInContext(read(file), context, { timeout: 10000 });
+    assert.equal(calls.length, 1, "headers script must finish once");
+    return calls[0];
+  };
+  const storeFor = (region) => ({ read: () => region, write: () => true });
+
+  const tw = call(["true", "true"], storeFor("TW"));
+  assert.ok(tw.url.includes("timezone=Asia/Taipei"), "the account region must win over the market param");
+  assert.equal(tw.headers["Accept-Language"], "zh-CN,zh-Hans;q=0.9,zh;q=0.8");
+  assert.equal(tw.headers["User-Agent"], "Spotify/1.0", "other headers must survive");
+
+  const cn = call(["true", "true"], storeFor("CN"));
+  assert.equal(cn.url, undefined, "a mainland account already has Asia/Shanghai in the URL");
+  assert.ok(cn.headers["Accept-Language"], "the language header is still rewritten");
+
+  const market = call(["true", "true"], { read: () => null, write: () => true });
+  assert.ok(market.url.includes("timezone=Asia/Taipei"), "market=XX is the fallback when no region was stored");
+
+  const off = call(["false", "false"], storeFor("TW"));
+  assert.deepEqual(Object.keys(off), [], "both switches off must pass through");
+});
+
+check("Spotify headers script falls back to Asia/Hong_Kong without a region", () => {
+  const calls = [];
+  const context = vm.createContext({ TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, console,
+    $request: { url: "https://spclient.wg.spotify.com/bootstrap/v1?timezone=Europe/London", headers: {} },
+    $argument: ["true", "true"], $persistentStore: { read: () => null, write: () => true },
+    $done: (value) => calls.push(value) });
+  vm.runInContext(read("loon/spotify/js/spotify.headers.js"), context, { timeout: 10000 });
+  assert.ok(calls[0].url.includes("timezone=Asia/Hong_Kong"));
+});
 
 check("Spotify desktop mode follows User-Agent and unlocks playback only on mobile", () => {
   const plugin = read("loon/spotify/spotify-enhance.plugin");

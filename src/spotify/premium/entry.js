@@ -5,7 +5,7 @@
 
   // 请求阶段只做一件事：抹掉 extended-metadata 请求体里的 etag。
   if (!res) {
-    if (lyricsMetaOn) stripRequestEtags(req, url);
+    if (lyricsOn) stripRequestEtags(req, url);
     else $done({});
     return;
   }
@@ -28,7 +28,7 @@
   // 远程配置 / 账号属性在 spoof 或 block_ads 任一打开时都要改写，否则 App
   // 重新拉一次配置就会把 bootstrap 里关掉的开关重新打开。
   let enabled;
-  if (isMeta) enabled = lyricsMetaOn;
+  if (isMeta) enabled = lyricsOn;
   else if (isConfig || isAttr) enabled = spoof || adsOn;
   else enabled = desktop ? spoof || adsOn : spoof;
   if (!enabled) {

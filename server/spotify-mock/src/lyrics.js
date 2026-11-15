@@ -16,7 +16,12 @@
 // All third-party traffic happens here, so iPhone / iPad / Mac clients do not
 // need a response script at all.
 
+// LRCLIB asks callers to identify themselves, so the descriptive UA stays the
+// default. NetEase / QQ Music are web endpoints: a browser UA is what their
+// anti-bot rules expect (and what the client scripts send).
 const USER_AGENT = "xzavier-modules/1.0 (https://github.com/xzavier-amico/modules)";
+const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+const MOBILE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
 
 const SOURCES = ["lrclib", "musixmatch", "netease", "qq"];
 const AUTO_SOURCES = ["lrclib", "musixmatch", "netease", "qq"];
@@ -162,8 +167,9 @@ async function lookupLrclib(title, artist, ctx) {
 }
 
 async function lookupNetease(title, artist, ctx) {
-  const query = encodeURIComponent(queryTitle(title) + (artist ? " " + artist : ""));
-  const headers = { Referer: "https://music.163.com/" };
+  const queryArtist = isDj(title) ? "" : artist;
+  const query = encodeURIComponent(queryTitle(title) + (queryArtist ? " " + queryArtist : ""));
+  const headers = { Referer: "https://music.163.com/", "User-Agent": BROWSER_UA };
   const data = await getJson(
     "https://music.163.com/api/search/get?s=" + query + "&type=1&limit=5&offset=0",
     ctx,
@@ -184,8 +190,9 @@ async function lookupNetease(title, artist, ctx) {
 }
 
 async function lookupQq(title, artist, ctx) {
-  const query = encodeURIComponent(queryTitle(title) + (artist ? " " + artist : ""));
-  const headers = { Referer: "https://y.qq.com/" };
+  const queryArtist = isDj(title) ? "" : artist;
+  const query = encodeURIComponent(queryTitle(title) + (queryArtist ? " " + queryArtist : ""));
+  const headers = { Referer: "https://y.qq.com/", "User-Agent": MOBILE_UA };
   const data = await getJson(
     "https://c.y.qq.com/soso/fcgi-bin/search_for_qq_cp?w=" + query + "&format=json&n=5&p=1",
     ctx,
@@ -331,8 +338,27 @@ const TITLE_DASH_FEAT = /\s*[-–—]\s*(?:feat\.?|ft\.?|featuring|with|prod\.?)
 const TITLE_DASH_EDITION =
   /\s*[-–—]\s*(?:(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?(?:\s+version)?|radio edit|single version|album version|bonus track|deluxe(?: edition)?|explicit|clean|mono|stereo)\s*$/i;
 
-function queryTitle(title) {
+// Spotify often writes "Song (DJ版)" / "Song - DJ Remix" while the lyric
+// databases only list "Song". Drop the DJ marker before searching and skip the
+// artist constraint, since the DJ edit is usually credited to someone else.
+const DJ_VERSION_MARK =
+  /dj\s*(?:版|remix|mix|version|edit|抖音|舞曲|慢摇|house|club)|[（(\[]\s*dj\s*[)）\]]|(?:^|[\s\-–—])dj\s*$/i;
+const TITLE_DASH_DJ =
+  /\s*[-–—]\s*dj\s*(?:版|remix|mix|version|edit|抖音|舞曲|慢摇|house|club).*$|\s*[-–—]\s*dj\s*$/i;
+const TITLE_LEADING_DJ = /^\s*dj\s*(?:版|remix|mix|version|edit|抖音|舞曲|慢摇|house|club)\s*[-–—:]?\s*/i;
+
+function isDj(title) {
+  return DJ_VERSION_MARK.test(String(title || ""));
+}
+
+function stripDjVersion(title) {
   let text = String(title || "");
+  text = text.replace(TITLE_BRACKET_GROUP, (whole, inner) => (DJ_VERSION_MARK.test(inner) ? " " : whole));
+  return text.replace(TITLE_DASH_DJ, "").replace(TITLE_LEADING_DJ, "");
+}
+
+function queryTitle(title) {
+  let text = stripDjVersion(title);
   text = text.replace(TITLE_DASH_FEAT, "").replace(TITLE_DASH_EDITION, "");
   text = text.replace(TITLE_BRACKET_NOISE, "");
   text = text.replace(TITLE_BRACKET_GROUP, (whole, inner) =>

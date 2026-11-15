@@ -431,7 +431,7 @@ test("remote configuration leaves crossfade alone but forces AutoMix off", () =>
   assert.equal(bareValues.automix_enabled, false, "must still add AutoMix off");
 });
 
-test("attribute configuration does not force the crossfade capability on", () => {
+test("attribute configuration does not force the gapless or crossfade capability on", () => {
   const input = concat([
     attrEntry("enable-crossfade-product-state", "0"),
     attrEntry("type", "free"),
@@ -441,7 +441,7 @@ test("attribute configuration does not force the crossfade capability on", () =>
   assert.ok(patched);
   const values = attributeMap(patched);
   assert.equal(values["enable-crossfade-product-state"], "0");
-  assert.equal(values["enable-gapless-product-state"], "1");
+  assert.equal(values["enable-gapless-product-state"], undefined);
   assert.equal(values.type, "premium");
 });
 

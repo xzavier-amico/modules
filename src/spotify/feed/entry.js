@@ -22,7 +22,7 @@
   const isBrowse = BROWSE_URL.test(url);
   const isScroll = SCROLL_URL.test(url);
   const wantAds = adsOn;
-  const wantCard = isScroll && lyricsCardOn;
+  const wantCard = isScroll && lyricsOn;
   if (!(isHome || isBrowse || isScroll) || !(wantAds || wantCard)) {
     $done({});
     return;
@@ -52,28 +52,15 @@
   // 响应；响应晚到只更新模型、不重绘列表，卡片要收起再展开才出现（实测）。
   // 所以立刻补卡，内容由随后的 color-lyrics 响应填充——歌词已经在缓存里时，
   // 客户端拿到卡片就会直接取到内容。
-  const feedStartedAt = Date.now();
   if (isScroll && wantCard) {
     const card = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsCard : null;
     const hasCard = typeof hasLyricsCard === "function" && hasLyricsCard(body);
     const allowed = !!trackId && !hasCard && (typeof card === "function" ? card(trackId) : true);
-    if (debugOn) {
-      spotifyLog("feed.scroll", "track=" + trackId + " title=" + trackLabel(trackId)
-        + " bytes=" + body.length + " hasCard=" + hasCard + " allowed=" + allowed);
-    }
     if (!allowed) {
-      if (debugOn) {
-        spotifyLog("feed.scroll", "track=" + trackId + " card=skip reason=" + (!trackId ? "no-track" : hasCard ? "official-card" : "miss-mark"));
-      }
       finish(patchScroll(body, trackId, wantAds, false));
       return;
     }
-    const out = patchScroll(body, trackId, wantAds, true);
-    if (debugOn) {
-      spotifyLog("feed.scroll", "track=" + trackId + " title=" + trackLabel(trackId)
-        + " card=add patched=" + (out ? 1 : 0) + " total=" + (Date.now() - feedStartedAt) + "ms");
-    }
-    finish(out);
+    finish(patchScroll(body, trackId, wantAds, true));
     return;
   }
 
