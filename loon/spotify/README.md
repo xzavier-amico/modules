@@ -130,6 +130,16 @@ crossfade；这两项保持服务端与 App 自己的设置。AutoMix 仍在远�
 - 桌面端合成歌词必须带 `lyrics.previewLines`（歌词卡预览列表）。客户端对它直接
   `.map()`，缺字段会抛 `TypeError`，整页歌词同样退化成「无法加载」。protobuf 补的是
   字段 17，JSON 也会补同一份数据。
+- 桌面客户端**不显示方案与有效期**：`xpui` 里没有引用 `product-expiry` /
+  `subscription-enddate` / `financial-product`，设置 → 账户 只有登录方式与「管理账户」
+  链接。有效期只在网页账号页（`spotify.com/account` → `your-plan` / `plan-details`），
+  那里是 Spotify 服务端渲染的真实账号数据，代理改不到，所以永远显示免费版的信息。
+  这几个字段照写，是为了让原生层的权益判定与展示串一致，别指望在 App 里看到。
+  客户端 UI 里唯一直接读改写结果的是 `productState.ads`（广告闸门），所以肉眼能看到的
+  变化基本是「广告位 / upsell 消失」，不是「多了个 Premium 标识」。
+- 判断改写是否生效，最可靠的是抓一条 `nebula/v1/configuration/attributes`：
+  `type` 应为 `premium`、`on-demand-trial` / `smart-shuffle` 应被删除、
+  `financial-product` 应为 `pr:premium,tc:0`。客户端内则看广告位与 upsell 是否消失。
 - 桌面端不做请求阶段的缓存直达：凭空造跨域响应要自己补 CORS 头，稍有出入整条请求就
   废；官方请求本身很快（没歌词就是 404），统一走响应阶段合并响应头更稳。iOS 仍按原
   来的请求阶段命中缓存。
