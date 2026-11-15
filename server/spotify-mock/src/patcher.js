@@ -1740,11 +1740,7 @@ function buildPatcher($argument) {
 
     const addCard = wantCard && !!trackId && !hasLyrics;
     if (!removed && !addCard) return null;
-    if (addCard) {
-      // 与客户端脚本保持一致：插在第一个 section 之后，避免顶掉头部 / Event 卡。
-      const at = kept.length ? 1 : 0;
-      kept.splice(at, 0, wireEncodeField(1, 2, lyricsSection(trackId)));
-    }
+    if (addCard) kept.unshift(wireEncodeField(1, 2, lyricsSection(trackId)));
 
     const rebuilt = wireEncodeField(1, 2, wireConcat(kept));
     const parts = [];

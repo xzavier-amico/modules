@@ -2430,12 +2430,7 @@
 
     const addCard = wantCard && !!trackId && !hasLyrics;
     if (!removed && !addCard) return null;
-    if (addCard) {
-      // 插在第一个 section 之后：第 0 位是头部 / Event 卡，插到它前面会把原卡片
-      // 顶掉（实测重新渲染时第 0 张卡片消失）。空列表时才退回第 0 位。
-      const at = kept.length ? 1 : 0;
-      kept.splice(at, 0, wireEncodeField(1, 2, lyricsSection(trackId)));
-    }
+    if (addCard) kept.unshift(wireEncodeField(1, 2, lyricsSection(trackId)));
 
     const rebuilt = wireEncodeField(1, 2, wireConcat(kept));
     const parts = [];

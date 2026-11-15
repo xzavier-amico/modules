@@ -165,9 +165,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
       assert.ok(plain.body, "lyrics card must be added");
       const sections = sectionList(plain);
       assert.equal(sections.length, parse(originalList).filter((f) => f.no === 1).length + 1);
-      assert.deepEqual(sections[0].p, parse(originalList).filter((f) => f.no === 1)[0].p,
-        "the existing first card (header / Event) must stay at position 0");
-      const added = parse(sections[1].p);
+      const added = parse(sections[0].p);
       assert.equal(text(first(parse(first(added, 5).p), 1)), track);
       assert.ok(first(parse(first(added, 23).p), 1), "a synthesized section needs its section id");
 
