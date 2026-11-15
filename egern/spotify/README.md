@@ -48,6 +48,7 @@
 - LRCLIB 并行候选都没命中时，会再用歌名搜一次；仍按歌手 / 版本 / Live / 时长校验，不会拿别人的同名歌。
 - 第三方请求超时、429、5xx 或所有源都没结果时都不写缓存，下次打开会立即重试。
 - 歌词页总时限 4.5 秒（从官方响应到达开始算），单个外部请求 4 秒；纯文本在 3.5 秒兜底。打开 Now Playing 时 feed 可能刚把 scrollsita 里的曲名 / 歌手写进缓存，歌词脚本会每 100ms 看一次元数据、最多 2 秒，命中就直接查歌词，不必等 open.spotify.com。scrollsita 补卡**不等歌词**：打开 Now Playing 时客户端先渲染列表，晚到的响应只更新模型、不重绘，所以收到 scroll 就立刻补卡，内容由随后的 color-lyrics 响应填充。
+- 慢请求诊断：响应超过 2.5 秒时脚本日志会打一行 `[spotify.lyrics.slow]`（wait / lookup / meta / 各源首个结果）；feed 处理超过 500ms 或跳过补卡时打 `[spotify.feed.slow]`。平时不输出。
 - protobuf 补齐官方字段（含歌词卡使用的 `previewLines`），并将歌词额度限制归一为可显示状态。
 - 配色：未激活行黑字，当前 / 已唱行白字；命中元数据缓存时不再请求 embed，用缓存里的封面色，没有缓存时用默认中灰底。
 - scrollsita 列表缺少歌词 section 时立刻补一格：读到 `spotify.lyrics.miss` 不补（有歌词请求在路上时旧标记不作数）；补在头部 section 之后；官方已有则不重复补。

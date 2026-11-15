@@ -634,6 +634,8 @@ const SPOTIFY_HAN_VARIANTS = (() => {
   const req = typeof $request !== "undefined" && $request ? $request : null;
   const res = typeof $response !== "undefined" && $response ? $response : null;
   const url = (res && res.url) || (req && req.url) || "";
+  // 慢请求诊断用的起点：只在响应超过 2.5s 时往脚本日志打一行。
+  const startedAt = Date.now();
 
   // Loon 传位置数组，Egern 传 JSON 字符串。
   let opt = {};
@@ -1019,11 +1021,35 @@ const SPOTIFY_HAN_VARIANTS = (() => {
   let plainTimer;
   let plainFallback = null;
   let cacheKey = "";
+  // 慢请求诊断：记录元数据来源、各源首个结果，响应超过 2.5s 时打一行日志。
+  // 平时不输出，也不影响任何分支。
+  const SLOW_LOG_MS = 2500;
+  const traceMeta = { text: "" };
+  const traceSource = Object.create(null);
+  let officialStatus = 0;
+  let protoHint = 0;
   const finish = (value) => {
     if (settled) return;
     settled = true;
     if (deadline !== undefined && typeof clearTimeout === "function") clearTimeout(deadline);
     if (plainTimer !== undefined && typeof clearTimeout === "function") clearTimeout(plainTimer);
+    if (res && typeof console !== "undefined" && console.log) {
+      const lookup = Date.now() - startedAt;
+      const mark = readMark(PENDING_KEY);
+      const wait = mark && Number(mark.at) ? Date.now() - Number(mark.at) : 0;
+      if (wait >= SLOW_LOG_MS || lookup >= SLOW_LOG_MS) {
+        const sources = [];
+        for (const name in traceSource) sources.push(name + traceSource[name]);
+        try {
+          console.log("[spotify.lyrics.slow] id=" + trackId + " wait=" + wait + "ms lookup=" + lookup +
+            "ms official=" + officialStatus + " proto=" + protoHint +
+            " meta=" + (traceMeta.text || "none") + " src=" + (sources.join(",") || "none") +
+            " result=" + (value && value.status ? value.status : "pass"));
+        } catch (e) {
+          // 日志失败不影响响应。
+        }
+      }
+    }
     // 请求阶段没有 $response：Loon / Egern / Shadowrocket 用 { response } 直接
     // 返回合成结果，跳过官方 color-lyrics 请求。
     if (!res) {
@@ -1129,6 +1155,8 @@ const SPOTIFY_HAN_VARIANTS = (() => {
   const protoMode = status === 200 && hasBody
     ? trimmed.charAt(0) !== "{"
     : requestedProtoMode();
+  officialStatus = status;
+  protoHint = protoMode ? 1 : 0;
 
   // 不把登录、限流或服务端错误伪装成有歌词。
   if (status !== 200 && status !== 404) {
@@ -1227,6 +1255,7 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     };
     const cached = cachedTrackMeta(trackId);
     if (cached) {
+      traceMeta.text = "cache@" + (Date.now() - startedAt);
       startWith(cached, () => cached.color || null);
       return;
     }
@@ -1263,6 +1292,7 @@ const SPOTIFY_HAN_VARIANTS = (() => {
       }
       started = true;
       rememberTrackMeta(trackId, info.title, info.artist, info.duration ? info.duration * 1000 : 0, colorOf());
+      if (!traceMeta.text) traceMeta.text = "public@" + (Date.now() - startedAt);
       startWith({ title: info.title, artist: info.artist, duration: info.duration }, colorOf);
     };
     // embed 提供封面主色与兜底元数据；与 oEmbed 并行发出，谁先到用谁。
@@ -1320,6 +1350,7 @@ const SPOTIFY_HAN_VARIANTS = (() => {
           const hit = cachedTrackMeta(trackId);
           if (hit) {
             started = true;
+            traceMeta.text = "feed@" + (Date.now() - startedAt);
             startWith(hit, () => (embed && embed.color) || hit.color || null);
             return;
           }
@@ -1361,7 +1392,9 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     };
     for (const name of order) {
       if (settled || finished) return;
+      traceSource[name] = "0";
       lookup(name, title, artist, duration, (record) => {
+        traceSource[name] = (record ? "+" : "-") + (Date.now() - startedAt);
         if (settled) {
           // deadline 超时放行：歌词晚到时写缓存，下次请求阶段直接命中。
           if (record && colorOf) record.albumColor = colorOf();
