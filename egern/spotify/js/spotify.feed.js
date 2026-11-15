@@ -925,16 +925,20 @@ export default async function (ctx) {
     if (!lines.length) return null;
     const signed = (value) => (value > 0x7fffffff ? value - 0x100000000 : value);
     const provider = String(entry.p || "LRCLIB");
+    const rebuilt = lines.map((pair) => ({
+      startTimeMs: String(Number(pair && pair[0]) || 0),
+      words: String((pair && pair[1]) || ""),
+      syllables: [],
+      endTimeMs: "0",
+    }));
     return {
       payload: {
         lyrics: {
           syncType: entry.s === "UNSYNCED" ? "UNSYNCED" : "LINE_SYNCED",
-          lines: lines.map((pair) => ({
-            startTimeMs: String(Number(pair && pair[0]) || 0),
-            words: String((pair && pair[1]) || ""),
-            syllables: [],
-            endTimeMs: "0",
-          })),
+          lines: rebuilt,
+          // 缓存里只存了行，重建时一样要补 previewLines：桌面端直接对它
+          // .map()，缺字段会抛 TypeError，命中缓存的歌一律变成「无法加载」。
+          previewLines: rebuilt.slice(0, PREVIEW_LINES),
           provider: provider,
           providerLyricsId: entry.i === undefined || entry.i === null ? "" : String(entry.i),
           providerDisplayName: provider,

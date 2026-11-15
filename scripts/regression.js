@@ -389,6 +389,10 @@ check("Spotify request phase returns cached lyrics without hitting providers", (
     const payload = JSON.parse(out.response.body);
     assert.equal(payload.lyrics.lines[0].words, "line", platform);
     assert.equal(payload.lyrics.provider, "LRCLIB", platform);
+    // 缓存命中重建 payload 时也必须带 previewLines：桌面端直接 .map()，
+    // 缺字段会抛 TypeError，整页歌词变「无法加载」。
+    assert.ok(Array.isArray(payload.lyrics.previewLines), platform + " cached previewLines");
+    assert.equal(payload.lyrics.previewLines[0].words, "line", platform + " cached preview line");
   }
 });
 
