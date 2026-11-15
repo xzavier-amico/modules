@@ -579,7 +579,24 @@
     // 歌词相关开关保持开启：客户端只有在这些开关打开时才会请求 color-lyrics。
     ["ios-feature-lyrics","is_lyrics_card_element_enabled",2,1,"","misc"],
     ["ios-feature-lyrics","is_get_lyrics_v2_enabled",2,1,"","misc"],
-    ["ios-feature-lyrics","enable_lyrics",2,1,"","misc"]
+    ["ios-feature-lyrics","enable_lyrics",2,1,"","misc"],
+    // 桌面端（1.3.9 起 remote-config-resolver 返回 JSON，属性在 desktop-ui
+    // scope 里，命名与 iOS 那套完全不同）的广告 / 推广 / 升级位开关。只列名字
+    // 里明确是广告 / 赞助 / 升级的项，其余桌面特性不动。
+    ["desktop-ui","enableEmbeddedAdHtmlDisplay",2,0,"","ad"],
+    ["desktop-ui","enable_ad_feedback_in_stream",2,0,"","ad"],
+    ["desktop-ui","enable_ad_feedback_milestone_1",2,0,"","ad"],
+    ["desktop-ui","enable_ad_feedback_milestone_3",2,0,"","ad"],
+    ["desktop-ui","enable_ad_reporting",2,0,"","ad"],
+    ["desktop-ui","showAdBreakTimeRemaining",2,0,"","ad"],
+    ["desktop-ui","embeddedAdsPrioritizeCanvas",2,0,"","ad"],
+    ["desktop-ui","enableSponsoredPlaylistV2",2,0,"","ad"],
+    ["desktop-ui","enableSponsoredPlaylistV2ScrollCard",2,0,"","ad"],
+    ["desktop-ui","enableSponsoredPlaylistHorizontalVideo",2,0,"","ad"],
+    ["desktop-ui","enableSponsorshipLabelsOnSearch",2,0,"","ad"],
+    ["desktop-ui","enableSponsorshipLabelsOnPlaylistCards",2,0,"","ad"],
+    ["desktop-ui","enableLyricsUpsell",2,0,"","ad"],
+    ["desktop-ui","canYourDJUserBeConvertedToPremium",2,0,"","ad"]
   ];
 
   // -------------------------------------------------------------- attributes
@@ -714,6 +731,86 @@
     return serialize(out);
   }
 
+  // ------------------------------------------------------- JSON 账号属性
+  //
+  // 桌面端（1.3.9 起）`nebula/v1/configuration/attributes` 返回 JSON：
+  //
+  //   { "attributes": { "type": { "stringValue": "free" },
+  //                     "ads": { "boolValue": false },
+  //                     "estimated-age": { "longValue": 33 }, … } }
+  //
+  // protobuf 那套改写看不见它，桌面端的 type / catalogue / name /
+  // financial-product 会一直停在 free，试听相关属性也删不掉。这里按同一份
+  // forced / STRIPPED 表处理，值类型跟着原属性走（bool → boolValue、
+  // string → stringValue、数字 → longValue）。
+
+  const JSON_ATTR_KINDS = ["boolValue", "stringValue", "longValue", "intValue", "doubleValue"];
+
+  function jsonAttributeValue(value) {
+    if (typeof value === "string") return { stringValue: value };
+    if (typeof value === "number") return { longValue: value };
+    return { boolValue: !!value };
+  }
+
+  function jsonAttributeKind(entry) {
+    if (!entry || "object" !== typeof entry || Array.isArray(entry)) return null;
+    for (const kind of JSON_ATTR_KINDS) {
+      if (Object.prototype.hasOwnProperty.call(entry, kind)) return kind;
+    }
+    return null;
+  }
+
+  // headers 脚本要用账号地区挑时区；JSON 里叫 country_code。
+  function rememberRegionJson(attributes) {
+    const store = cacheStore();
+    if (!store) return;
+    for (const key of Object.keys(attributes)) {
+      const lower = key.toLowerCase();
+      if (REGION_ATTR_KEYS.indexOf(lower) < 0 && lower !== "country_code") continue;
+      const entry = attributes[key];
+      const value = entry && typeof entry.stringValue === "string" ? entry.stringValue : "";
+      if (!/^[A-Za-z]{2}$/.test(value)) continue;
+      const next = value.toUpperCase();
+      try {
+        if (store.read(REGION_KEY) === next) return;
+        store.write(next, REGION_KEY);
+      } catch (e) {
+        // 存储写失败不影响响应改写。
+      }
+      return;
+    }
+  }
+
+  // 只改写认得出的属性集合；结构不对就整份放行，避免把别的 JSON 接口写坏。
+  function patchAttributesJson(attributes) {
+    if (!attributes || "object" !== typeof attributes || Array.isArray(attributes)) return null;
+    const keys = Object.keys(attributes);
+    for (const key of keys) {
+      if (!jsonAttributeKind(attributes[key])) return null;
+    }
+    rememberRegionJson(attributes);
+    let changed = false;
+    const seen = Object.create(null);
+    for (const key of keys) {
+      if (has(key)) {
+        attributes[key] = jsonAttributeValue(forced[key]);
+        seen[key] = true;
+        changed = true;
+        continue;
+      }
+      if (stripped(key)) {
+        delete attributes[key];
+        changed = true;
+      }
+    }
+    for (const key in forced) {
+      if (seen[key]) continue;
+      attributes[key] = jsonAttributeValue(forced[key]);
+      changed = true;
+    }
+    return changed ? attributes : null;
+  }
+
   // ------------------------------------------------------------ remote config
 
   const boolValue = (on) => (on ? serialize([fieldVarint(1, 1)]) : new Uint8Array(0));
@@ -816,33 +913,6 @@
     return assigned.size ? assigned : null;
   }
 
-  function patchConfigurationResponse(buffer) {
-    const fields = parse(buffer);
-    if (!fields || !same(serialize(fields), buffer)) return null;
-    let target = buffer;
-    let wrapper = null;
-    let targetFields = fields;
-    let assigned = null;
-    if (fields.length === 1 && fields[0].no === 1 && fields[0].w === 2) {
-      const inner = parse(fields[0].p);
-      const description = inner && describeConfiguration(inner);
-      if (description && same(serialize(inner), fields[0].p)) {
-        wrapper = fields;
-        target = fields[0].p;
-        targetFields = inner;
-        assigned = description;
-      }
-    }
-    assigned = assigned || describeConfiguration(targetFields);
-    if (!assigned) return null;
-    const patched = patchConfiguration(target, targetFields, assigned);
-    if (!patched || same(patched, target)) return null;
-    if (wrapper) {
-      wrapper[0].p = patched;
-      return serialize(wrapper);
-    }
-    return patched;
-  }
 
   function looksLikeAttributes(buffer, fields = parse(buffer)) {
     if (!fields || !fields.length) return false;
@@ -868,12 +938,207 @@
     return entries > 0;
   }
 
+  // JSON 远程配置。规则语义与 protobuf 一一对应：
+  //   0 -> 删掉这条 AssignedValue
+  //   1 -> 只改已存在的 boolValue
+  //   2 -> 强制 bool（没有就补一条）
+  //   其它 -> 改成字符串枚举（enumValue）
+  const JSON_CONFIG_SCALARS = ["boolValue", "enumValue", "stringValue", "intValue",
+    "longValue", "doubleValue", "floatValue"];
+
+  function jsonAssignedList(data) {
+    if (!data || "object" !== typeof data) return null;
+    const configuration = data.configuration;
+    if (configuration && "object" === typeof configuration && Array.isArray(configuration.assignedValues)) {
+      return { owner: configuration, list: configuration.assignedValues };
+    }
+    if (Array.isArray(data.assignedValues)) return { owner: data, list: data.assignedValues };
+    return null;
+  }
+
+  function setJsonBool(entry, on) {
+    for (const key of JSON_CONFIG_SCALARS) {
+      if (key !== "boolValue") delete entry[key];
+    }
+    entry.boolValue = { value: !!on };
+  }
+
+  function setJsonEnum(entry, value) {
+    for (const key of JSON_CONFIG_SCALARS) {
+      if (key !== "enumValue") delete entry[key];
+    }
+    entry.enumValue = { value: value };
+  }
+
+  function patchConfigurationJson(data) {
+    const target = jsonAssignedList(data);
+    if (!target) return null;
+    const byName = new Map();
+    const wildcard = [];
+    for (let i = 0; i < RULES.length; i++) {
+      const rule = RULES[i];
+      if ((rule[5] === "ad" && !adsOn) || (rule[5] === "cap" && !playOn)) continue;
+      if (!rule[1]) wildcard.push(i);
+      else {
+        if (!byName.has(rule[1])) byName.set(rule[1], []);
+        byName.get(rule[1]).push(i);
+      }
+    }
+    const present = Object.create(null);
+    const scopes = Object.create(null);
+    const kept = [];
+    let changed = false;
+    for (const entry of target.list) {
+      const propertyId = entry && "object" === typeof entry ? entry.propertyId : null;
+      const scope = propertyId && "string" === typeof propertyId.scope ? propertyId.scope : "";
+      const name = propertyId && "string" === typeof propertyId.name ? propertyId.name : "";
+      if (!name) {
+        kept.push(entry);
+        continue;
+      }
+      let removed = false;
+      let touched = false;
+      const named = byName.get(name) || [];
+      let ni = 0;
+      let wi = 0;
+      while (ni < named.length || wi < wildcard.length) {
+        const index = wi >= wildcard.length || (ni < named.length && named[ni] < wildcard[wi]) ? named[ni++] : wildcard[wi++];
+        const rule = RULES[index];
+        if (rule[0] && rule[0] !== scope) continue;
+        if (rule[1] && rule[1] !== name) continue;
+        if (rule[2] === 0) {
+          removed = true;
+          break;
+        }
+        if (rule[2] === 1) {
+          if (!entry.boolValue) continue;
+          setJsonBool(entry, rule[3]);
+          touched = true;
+        } else if (rule[2] === 2) {
+          setJsonBool(entry, rule[3]);
+          touched = true;
+        } else {
+          setJsonEnum(entry, rule[4]);
+          touched = true;
+        }
+      }
+      if (removed) {
+        changed = true;
+        continue;
+      }
+      present[scope + "\u0000" + name] = true;
+      scopes[scope] = true;
+      if (touched) changed = true;
+      kept.push(entry);
+    }
+    for (const rule of RULES) {
+      if (rule[2] !== 2 || !rule[0] || !rule[1]) continue;
+      if (rule[5] === "ad" && !adsOn) continue;
+      // JSON 这条只补「响应里本来就有的 scope」，避免把 iOS 那批 scope 的开关
+      // 塞进桌面端响应里（客户端不认，纯噪声）。
+      if (!scopes[rule[0]]) continue;
+      if (present[rule[0] + "\u0000" + rule[1]]) continue;
+      kept.push({ propertyId: { scope: rule[0], name: rule[1] }, boolValue: { value: !!rule[3] } });
+      changed = true;
+    }
+    if (!changed) return null;
+    target.owner.assignedValues = kept;
+    return data;
+  }
+
+  function patchConfigurationJsonText(text) {
+    let data = null;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      return null;
+    }
+    const patched = patchConfigurationJson(data);
+    return patched ? JSON.stringify(patched) : null;
+  }
+
+  function patchAttributesJsonResponse(text) {
+    let data = null;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      return null;
+    }
+    if (!data || "object" !== typeof data) return null;
+    const attributes = data.attributes;
+    if (!attributes || "object" !== typeof attributes) return null;
+    const patched = patchAttributesJson(attributes);
+    return patched ? JSON.stringify(data) : null;
+  }
+
   function patchAttributesResponse(buffer) {
+    const text = asJsonText(buffer);
+    if (text) {
+      const out = patchAttributesJsonResponse(text);
+      return out ? WIRE_TEXT.encode(out) : null;
+    }
     const fields = parse(buffer);
     if (!fields || !same(serialize(fields), buffer)) return null;
     if (!looksLikeAttributes(buffer, fields)) return null;
     const patched = patchAttributes(buffer, fields);
     if (!patched || same(patched, buffer)) return null;
+    return patched;
+  }
+
+  // ------------------------------------------------- JSON 远程配置 / 属性
+  //
+  // 新版桌面客户端把两个接口都改成了 JSON：
+  //   remote-config-resolver/v3/configuration  -> {"configuration":{"assignedValues":[…]}}
+  //   nebula/v1/configuration/attributes       -> {"attributes":{…}}
+  // 这里按内容嗅探分流：以 { 开头的按 JSON 处理，其余仍走 protobuf，
+  // iOS 的响应格式没变，走的还是原来那条路径。
+
+  function asJsonText(buffer) {
+    if (!buffer || !buffer.length) return null;
+    let i = 0;
+    while (i < buffer.length) {
+      const b = buffer[i];
+      if (b !== 32 && b !== 9 && b !== 10 && b !== 13) break;
+      i++;
+    }
+    if (buffer[i] !== 123) return null;
+    try {
+      return WIRE_UTF8.decode(buffer);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function patchConfigurationResponse(buffer) {
+    const text = asJsonText(buffer);
+    if (text) {
+      const data = patchConfigurationJsonText(text);
+      return data ? WIRE_TEXT.encode(data) : null;
+    }
+    const fields = parse(buffer);
+    if (!fields || !same(serialize(fields), buffer)) return null;
+    let target = buffer;
+    let wrapper = null;
+    let targetFields = fields;
+    let assigned = null;
+    if (fields.length === 1 && fields[0].no === 1 && fields[0].w === 2) {
+      const inner = parse(fields[0].p);
+      const description = inner && describeConfiguration(inner);
+      if (description && same(serialize(inner), fields[0].p)) {
+        wrapper = fields;
+        target = fields[0].p;
+        targetFields = inner;
+        assigned = description;
+      }
+    }
+    assigned = assigned || describeConfiguration(targetFields);
+    if (!assigned) return null;
+    const patched = patchConfiguration(target, targetFields, assigned);
+    if (!patched || same(patched, target)) return null;
+    if (wrapper) {
+      wrapper[0].p = patched;
+      return serialize(wrapper);
+    }
     return patched;
   }
 

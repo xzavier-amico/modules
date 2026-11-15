@@ -129,3 +129,83 @@
     for (const key in forced) if (!seen[key]) out.push(attributeEntry(key, forced[key]));
     return serialize(out);
   }
+
+  // ------------------------------------------------------- JSON 账号属性
+  //
+  // 桌面端（1.3.9 起）`nebula/v1/configuration/attributes` 返回 JSON：
+  //
+  //   { "attributes": { "type": { "stringValue": "free" },
+  //                     "ads": { "boolValue": false },
+  //                     "estimated-age": { "longValue": 33 }, … } }
+  //
+  // protobuf 那套改写看不见它，桌面端的 type / catalogue / name /
+  // financial-product 会一直停在 free，试听相关属性也删不掉。这里按同一份
+  // forced / STRIPPED 表处理，值类型跟着原属性走（bool → boolValue、
+  // string → stringValue、数字 → longValue）。
+
+  const JSON_ATTR_KINDS = ["boolValue", "stringValue", "longValue", "intValue", "doubleValue"];
+
+  function jsonAttributeValue(value) {
+    if (typeof value === "string") return { stringValue: value };
+    if (typeof value === "number") return { longValue: value };
+    return { boolValue: !!value };
+  }
+
+  function jsonAttributeKind(entry) {
+    if (!entry || "object" !== typeof entry || Array.isArray(entry)) return null;
+    for (const kind of JSON_ATTR_KINDS) {
+      if (Object.prototype.hasOwnProperty.call(entry, kind)) return kind;
+    }
+    return null;
+  }
+
+  // headers 脚本要用账号地区挑时区；JSON 里叫 country_code。
+  function rememberRegionJson(attributes) {
+    const store = cacheStore();
+    if (!store) return;
+    for (const key of Object.keys(attributes)) {
+      const lower = key.toLowerCase();
+      if (REGION_ATTR_KEYS.indexOf(lower) < 0 && lower !== "country_code") continue;
+      const entry = attributes[key];
+      const value = entry && typeof entry.stringValue === "string" ? entry.stringValue : "";
+      if (!/^[A-Za-z]{2}$/.test(value)) continue;
+      const next = value.toUpperCase();
+      try {
+        if (store.read(REGION_KEY) === next) return;
+        store.write(next, REGION_KEY);
+      } catch (e) {
+        // 存储写失败不影响响应改写。
+      }
+      return;
+    }
+  }
+
+  // 只改写认得出的属性集合；结构不对就整份放行，避免把别的 JSON 接口写坏。
+  function patchAttributesJson(attributes) {
+    if (!attributes || "object" !== typeof attributes || Array.isArray(attributes)) return null;
+    const keys = Object.keys(attributes);
+    for (const key of keys) {
+      if (!jsonAttributeKind(attributes[key])) return null;
+    }
+    rememberRegionJson(attributes);
+    let changed = false;
+    const seen = Object.create(null);
+    for (const key of keys) {
+      if (has(key)) {
+        attributes[key] = jsonAttributeValue(forced[key]);
+        seen[key] = true;
+        changed = true;
+        continue;
+      }
+      if (stripped(key)) {
+        delete attributes[key];
+        changed = true;
+      }
+    }
+    for (const key in forced) {
+      if (seen[key]) continue;
+      attributes[key] = jsonAttributeValue(forced[key]);
+      changed = true;
+    }
+    return changed ? attributes : null;
+  }

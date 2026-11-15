@@ -247,5 +247,22 @@
     // 歌词相关开关保持开启：客户端只有在这些开关打开时才会请求 color-lyrics。
     ["ios-feature-lyrics","is_lyrics_card_element_enabled",2,1,"","misc"],
     ["ios-feature-lyrics","is_get_lyrics_v2_enabled",2,1,"","misc"],
-    ["ios-feature-lyrics","enable_lyrics",2,1,"","misc"]
+    ["ios-feature-lyrics","enable_lyrics",2,1,"","misc"],
+    // 桌面端（1.3.9 起 remote-config-resolver 返回 JSON，属性在 desktop-ui
+    // scope 里，命名与 iOS 那套完全不同）的广告 / 推广 / 升级位开关。只列名字
+    // 里明确是广告 / 赞助 / 升级的项，其余桌面特性不动。
+    ["desktop-ui","enableEmbeddedAdHtmlDisplay",2,0,"","ad"],
+    ["desktop-ui","enable_ad_feedback_in_stream",2,0,"","ad"],
+    ["desktop-ui","enable_ad_feedback_milestone_1",2,0,"","ad"],
+    ["desktop-ui","enable_ad_feedback_milestone_3",2,0,"","ad"],
+    ["desktop-ui","enable_ad_reporting",2,0,"","ad"],
+    ["desktop-ui","showAdBreakTimeRemaining",2,0,"","ad"],
+    ["desktop-ui","embeddedAdsPrioritizeCanvas",2,0,"","ad"],
+    ["desktop-ui","enableSponsoredPlaylistV2",2,0,"","ad"],
+    ["desktop-ui","enableSponsoredPlaylistV2ScrollCard",2,0,"","ad"],
+    ["desktop-ui","enableSponsoredPlaylistHorizontalVideo",2,0,"","ad"],
+    ["desktop-ui","enableSponsorshipLabelsOnSearch",2,0,"","ad"],
+    ["desktop-ui","enableSponsorshipLabelsOnPlaylistCards",2,0,"","ad"],
+    ["desktop-ui","enableLyricsUpsell",2,0,"","ad"],
+    ["desktop-ui","canYourDJUserBeConvertedToPremium",2,0,"","ad"]
   ];

@@ -1847,6 +1847,83 @@ check("Loon Enhance applies the main script tuple independently of lyrics", () =
 });
 
 for (const platform of ["loon", "egern", "shadowrocket"]) {
+  check(platform + " Spotify rewrites the desktop JSON account attributes", () => {
+    // 桌面端 1.3.9 起 nebula/v1/configuration/attributes 返回 JSON，
+    // protobuf 那套改写看不见它，账号状态会一直停在 free。
+    const enc = new TextEncoder();
+    const dec = new TextDecoder();
+    const body = enc.encode(JSON.stringify({
+      attributes: {
+        type: { stringValue: "free" },
+        catalogue: { stringValue: "free" },
+        name: { stringValue: "Spotify Free" },
+        ads: { boolValue: true },
+        "on-demand-trial": { stringValue: "trial_with_offline_active" },
+        "estimated-age": { longValue: "33" },
+        country_code: { stringValue: "US" },
+      },
+    }));
+    const args = { spoof_premium: true, block_ads: true, unlock_playback: false, enable_lyrics: true, desktop: "macos", lyrics_source: "auto" };
+    const out = run(platform + "/spotify/js/spotify.js", body, "https://spclient.wg.spotify.com/nebula/v1/configuration/attributes", args);
+    const attributes = JSON.parse(dec.decode(out.body)).attributes;
+    assert.equal(attributes.type.stringValue, "premium", platform);
+    assert.equal(attributes.catalogue.stringValue, "premium", platform);
+    assert.equal(attributes.name.stringValue, "Spotify Premium", platform);
+    assert.equal(attributes.ads.boolValue, false, platform);
+    assert.equal(attributes["on-demand-trial"], undefined, "trial keys must be stripped");
+    assert.equal(attributes["estimated-age"].longValue, "33", "unknown attributes stay");
+    assert.equal(attributes.country_code.stringValue, "US");
+
+    // 不伪装 Premium 时不碰账号属性。
+    args.spoof_premium = false;
+    args.block_ads = false;
+    assert.equal(Object.keys(run(platform + "/spotify/js/spotify.js", body, "https://spclient.wg.spotify.com/nebula/v1/configuration/attributes", args)).length, 0, platform);
+
+    // 不认识的 JSON 结构必须原样放行。
+    const other = enc.encode(JSON.stringify({ hello: { world: 1 } }));
+    assert.equal(Object.keys(run(platform + "/spotify/js/spotify.js", other, "https://spclient.wg.spotify.com/nebula/v1/configuration/attributes", args)).length, 0);
+  });
+
+  check(platform + " Spotify rewrites the desktop JSON remote config", () => {
+    const enc = new TextEncoder();
+    const dec = new TextDecoder();
+    const entry = (scope, name, value, extra) => Object.assign(
+      { propertyId: { scope, name }, metadata: { policyId: "1" } },
+      typeof value === "boolean" ? { boolValue: { value } } : { enumValue: { value } },
+      extra || {},
+    );
+    const body = enc.encode(JSON.stringify({
+      configuration: {
+        configurationAssignmentId: "x:1",
+        assignedValues: [
+          entry("desktop-ui", "enableLyricsUpsell", true),
+          entry("desktop-ui", "enableEmbeddedAdHtmlDisplay", true),
+          entry("desktop-ui", "enableFullscreenMode", true),
+          entry("desktop-ui", "enableSearchResultsAsList", "LIST_WITH_TOP_RESULT"),
+        ],
+        policySnapshotId: "0",
+      },
+    }));
+    const args = { spoof_premium: true, block_ads: true, unlock_playback: false, enable_lyrics: true, desktop: "macos", lyrics_source: "auto" };
+    const out = run(platform + "/spotify/js/spotify.js", body, "https://spclient.wg.spotify.com/remote-config-resolver/v3/configuration", args);
+    const configuration = JSON.parse(dec.decode(out.body)).configuration;
+    const by = (name) => configuration.assignedValues.find((item) => item.propertyId.name === name);
+    assert.equal(by("enableLyricsUpsell").boolValue.value, false, platform);
+    assert.equal(by("enableEmbeddedAdHtmlDisplay").boolValue.value, false, platform);
+    assert.equal(by("enableFullscreenMode").boolValue.value, true, "unrelated switches stay");
+    assert.equal(by("enableSearchResultsAsList").enumValue.value, "LIST_WITH_TOP_RESULT", "enum values stay");
+    assert.equal(by("enableLyricsUpsell").metadata.policyId, "1", "metadata stays");
+    assert.equal(configuration.policySnapshotId, "0", "wrapper fields stay");
+    assert.equal(configuration.assignedValues.filter((item) => item.propertyId.name === "enableLyricsUpsell").length, 1, "no duplicate entries");
+    assert.ok(configuration.assignedValues.every((item) => item.propertyId.scope === "desktop-ui"), "only desktop-ui scopes are appended");
+
+    // 关掉去广告后广告开关不再改，整份配置原样放行。
+    const off = Object.assign({}, args, { block_ads: false });
+    assert.equal(Object.keys(run(platform + "/spotify/js/spotify.js", body, "https://spclient.wg.spotify.com/remote-config-resolver/v3/configuration", off)).length, 0, platform);
+  });
+}
+
+for (const platform of ["loon", "egern", "shadowrocket"]) {
   check(platform + " Spotify leaves crossfade settings alone but forces AutoMix off", () => {
     const assigned = (scope, name, on) =>
       b(3, serialize([b(1, serialize([s(1, scope), s(2, name)])), b(3, on ? serialize([v(1, 1)]) : new Uint8Array(0))]));

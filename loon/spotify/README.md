@@ -101,10 +101,23 @@ crossfade；这两项保持服务端与 App 自己的设置。AutoMix 仍在远�
   跳歌」没有复现。但只有两段短样本，且免费号的属性块里 `type` / `catalogue` 仍是
   free，无法确认客户端真正吃到的就是 premium 播放授权，所以桌面端默认仍然关闭，
   保持现状。
-- 同一轮还发现：1.3.9 的桌面端 `remote-config-resolver/v3/configuration` 返回的是
-  **JSON**（`{"configuration":{...}}`，属性在 `desktop-ui` scope 里），脚本只按
-  protobuf 解析，所以远程配置里那批 `cap` / 广告规则的删除对桌面端目前是空转，只有
-  账号属性的改写在生效。要做桌面端「去限制」得另起一条 JSON 改写路径。
+- 同一轮还发现：1.3.9 的桌面端 `remote-config-resolver/v3/configuration` 返回
+  **JSON**（`{"configuration":{"assignedValues":[…]}}`，属性在 `desktop-ui` scope），
+  `nebula/v1/configuration/attributes` 也换成了 JSON
+  （`{"attributes":{"type":{"stringValue":"free"},…}}`）。脚本现在按首字节嗅探分流：
+  以 `{` 开头的走 JSON 改写，其余仍走原来的 protobuf 路径，iOS 不受影响。
+  - 账号属性：按同一份 `forced` / `STRIPPED` 表处理，`type` / `catalogue` /
+    `name` / `ads` 等照写，`on-demand-trial` 之类的试用键照删；值类型跟着原属性走
+    （`boolValue` / `stringValue` / `longValue`），`country_code` 也会被记进
+    `spotify.account.region` 供时区伪装使用（桌面端只有这个键，没有 protobuf 那套
+    `country`）。
+  - 远程配置：规则语义与 protobuf 一一对应（0 删除、1 改已存在的 bool、2 强制
+    bool、其它改字符串枚举），缺的强制项只补「响应里本来就有的 scope」，不会把
+    iOS 那批 scope 塞进桌面端响应。桌面端新增了一小批 `desktop-ui` 的广告 /
+    赞助 / 升级位开关（`enableSponsorshipLabelsOn*`、`enableSponsoredPlaylist*`、
+    `enable_ad_feedback_*`、`enableLyricsUpsell` 等），只关名字里明确是广告 /
+    赞助 / 升级的项。
+  - 结构对不上的 JSON 一律原样放行，避免把别的接口写坏。
 
 - 桌面端歌词页走 `color-lyrics/v2/track/{id}/image/{封面}`：官方客户端把歌词和封面色
   合到一个「image」路径上，格式仍由 `?format=json` 决定。桌面端跑在 CEF 里，这条请求
