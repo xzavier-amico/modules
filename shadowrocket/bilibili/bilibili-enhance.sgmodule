@@ -28,6 +28,6 @@ bilibili.quality.grpc = type=http-request,pattern=^https?:\/\/(?:app|grpc)\.bili
 bilibili.grpc = type=http-response,pattern=^https?:\/\/(?:grpc\.biliapi\.net|grpc\.bilibili\.com|app\.biliapi\.net|app\.bilibili\.com)\/bilibili\.(?:app\.(?:view\.v1\.View\/(?:View|RelatesFeed|PlayerRelates|ViewProgress|TFInfo)|viewunite\.v1\.View\/(?:View|AIRelateAsync|RelatesFeed|ViewProgress|PlayPause|ViewEndPage)|dynamic\.v2\.Dynamic\/(?:DynAll|DynVideo))|main\.community\.reply\.v1\.Reply\/MainList)$,requires-body=1,binary-body-mode=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/bilibili/js/bilibili_grpc.js?v=20261114-3,argument="{"block_ads":{{{去广告}}}}"
 
 [MITM]
-hostname = %APPEND% app.bilibili.com, api.bilibili.com, api.live.bilibili.com, app.biliapi.net, api.biliapi.net, grpc.biliapi.net, grpc.bilibili.com
+hostname = %APPEND% app.bilibili.com, api.bilibili.com, api.live.bilibili.com, app.biliapi.net, grpc.biliapi.net, grpc.bilibili.com
 # B 站接口强制 HTTP/2，不开 h2 MITM 时并发请求处理会变慢（详情页 / 评论区 / 播放加载）。
 h2 = true

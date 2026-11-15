@@ -100,10 +100,13 @@ gRPC 帧的 flag 是 1 表示消息体 gzip（帧级压缩，不是 `Content-Enc
 ## 注意
 
 - 需开启 MitM：`app.bilibili.com`、`api.bilibili.com`、`api.live.bilibili.com`、
-  `app.biliapi.net`、`api.biliapi.net`、`grpc.biliapi.net`、`grpc.bilibili.com`。
+  `app.biliapi.net`、`grpc.biliapi.net`、`grpc.bilibili.com`。
 - Egern 内核的 MITM 默认支持 HTTP/2 并复用连接，不需要 Loon 那样的「MitM over HTTP/2」
   开关；B 站接口强制 HTTP/2，如果换到不支持 h2 MITM 的客户端，详情页 / 评论区 / 播放
   加载会明显变慢。
+- Egern 2.21.0 修过一批和这里直接相关的问题：HTTP/2 握手失败后后续请求一直挂起、
+  服务器断开空闲连接后下一个请求失败、脚本启动 / 改写延迟、`requires-body` 大响应内存、
+  头部大小写与压缩正文。详情页、评论区明显变慢时先确认版本不低于 2.21.0。
 - `auto_quality` 会把播放请求提到 4K（qn=120）。带宽不足时起播会变慢，可以关掉这个开关，
   服务端仍按账号权限返回 1080P。
 - 详情页 / 评论区依赖 gRPC 的 MITM。如果客户端对 HTTP/2 gRPC 的
@@ -120,3 +123,16 @@ gRPC 帧的 flag 是 1 表示消息体 gzip（帧级压缩，不是 `Content-Enc
   `grpc-status`，不读 HTTP/2 trailers；脚本会按客户端类型补齐 `grpc-status: 0`（国际版则去掉），
   避免改写 gRPC 响应后详情页、评论区一直转圈。匹配规则只挂实际处理的 gRPC 方法，
   不再给整个 service 的响应强行缓冲 body。
+
+## 加载慢怎么排查
+
+视频流走 `*.bilivideo.com`，模块不拦；详情页和评论区走 `grpc.biliapi.net` 的
+`viewunite.v1.View/View` 与 `reply.v1.Reply/MainList`，这两条会被脚本改写。
+所以「视频很快、播放页和评论区慢」时，先按下面三步分清原因：
+
+1. 在 Egern 里把 BiliBili Enhance 模块整个停用，后台划掉 B 站再打开，看播放页 / 评论区。
+   如果一样慢，说明是 B 站服务端或线路，和模块无关。
+2. 停用后明显变快：把模块重新打开，只关「去广告」，再看一次。仍然慢说明是 gRPC 的
+   MITM / 脚本执行本身，不是广告过滤逻辑。
+3. 还可以在 Egern 的脚本日志里看 `bilibili.grpc` 有没有超时或报错；2.21.0 起脚本超时
+   会直接发通知。

@@ -36,7 +36,7 @@ request if ${url} ~= /^https?:\/\/(?:app|grpc)\.bili(?:bili\.com|api\.net)\/bili
 response if ${url} ~= /^https?:\/\/(?:grpc\.biliapi\.net|grpc\.bilibili\.com|app\.biliapi\.net|app\.bilibili\.com)\/bilibili\.(?:app\.(?:view\.v1\.View\/(?:View|RelatesFeed|PlayerRelates|ViewProgress|TFInfo)|viewunite\.v1\.View\/(?:View|AIRelateAsync|RelatesFeed|ViewProgress|PlayPause|ViewEndPage)|dynamic\.v2\.Dynamic\/(?:DynAll|DynVideo))|main\.community\.reply\.v1\.Reply\/MainList)$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/bilibili/js/bilibili_grpc.js?v=20261114-3", {${block_ads}}) with requires_body=true, binary_body_mode=true, tag="BiliBili Enhance gRPC", timeout=20
 
 [MitM]
-hostname = app.bilibili.com, api.bilibili.com, api.live.bilibili.com, app.biliapi.net, api.biliapi.net, grpc.biliapi.net, grpc.bilibili.com
+hostname = app.bilibili.com, api.bilibili.com, api.live.bilibili.com, app.biliapi.net, grpc.biliapi.net, grpc.bilibili.com
 # B 站接口强制 HTTP/2。MITM 不按 HTTP/2 解密时，并发请求会被串行化处理，
 # 详情页 / 评论区 / 播放加载会明显变慢。h2 = true 是通用写法，部分 Loon 版本
 # 可能忽略，以 MitM 页面里的「MitM over HTTP/2」「QUIC 回退保护」开关为准。

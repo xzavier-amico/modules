@@ -144,6 +144,5 @@ mitm:
       - "api.bilibili.com"
       - "api.live.bilibili.com"
       - "app.biliapi.net"
-      - "api.biliapi.net"
       - "grpc.biliapi.net"
       - "grpc.bilibili.com"

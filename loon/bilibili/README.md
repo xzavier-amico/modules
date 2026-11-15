@@ -78,7 +78,7 @@
 ## 注意
 
 - 需开启 MitM：`app.bilibili.com`、`api.bilibili.com`、`api.live.bilibili.com`、
-  `app.biliapi.net`、`api.biliapi.net`、`grpc.biliapi.net`、`grpc.bilibili.com`。
+  `app.biliapi.net`、`grpc.biliapi.net`、`grpc.bilibili.com`。
 - **务必在 Loon 的 MitM 页面打开「MitM over HTTP/2」和「QUIC 回退保护」。** B 站接口强制走
   HTTP/2，只按 HTTP/1.1 做 MITM 时并发请求会被串行化，表现为详情页、评论区、播放加载明显
   变慢甚至转圈。插件里的 `h2 = true` 是通用写法，部分 Loon 版本可能不读，以 MitM 页面的
