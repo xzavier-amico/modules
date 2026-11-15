@@ -459,3 +459,53 @@ test("browse and scroll ad routes accept versioned paths", async () => {
     assert.equal(response.headers.get("x-spotify-mock-ads"), "none", url);
   }
 });
+
+test("desktop JSON attributes and remote config are rewritten", async () => {
+  // The desktop client (1.3.9+) returns JSON from nebula attributes and from
+  // remote-config-resolver; both used to pass through untouched.
+  const attributes = JSON.stringify({
+    attributes: {
+      type: { stringValue: "free" },
+      catalogue: { stringValue: "free" },
+      "on-demand-trial": { stringValue: "trial_with_offline_active" },
+      "estimated-age": { longValue: "33" },
+    },
+  });
+  stubFetch(() => new Response(attributes, { status: 200, headers: { "content-type": "application/json" } }));
+  let response = await handle(
+    new Request("http://localhost/music/nebula/v1/configuration/attributes", {
+      headers: { authorization: "Bearer test-token" },
+    }),
+    {},
+  );
+  let body = await response.json();
+  assert.equal(body.attributes.type.stringValue, "premium");
+  assert.equal(body.attributes.catalogue.stringValue, "premium");
+  assert.equal(body.attributes["on-demand-trial"], undefined);
+  assert.equal(body.attributes["estimated-age"].longValue, "33");
+  assert.equal(response.headers.get("x-spotify-mock"), "patched");
+
+  const configuration = JSON.stringify({
+    configuration: {
+      assignedValues: [
+        { propertyId: { scope: "desktop-ui", name: "enableLyricsUpsell" }, boolValue: { value: true } },
+        { propertyId: { scope: "desktop-ui", name: "enableFullscreenMode" }, boolValue: { value: true } },
+      ],
+      policySnapshotId: "0",
+    },
+  });
+  stubFetch(() => new Response(configuration, { status: 200, headers: { "content-type": "application/json; charset=utf-8" } }));
+  response = await handle(
+    new Request("http://localhost/music/remote-config-resolver/v3/configuration", {
+      method: "POST",
+      headers: { authorization: "Bearer test-token" },
+      body: Uint8Array.from([1]),
+    }),
+    {},
+  );
+  body = await response.json();
+  const byName = (name) => body.configuration.assignedValues.find((item) => item.propertyId.name === name);
+  assert.equal(byName("enableLyricsUpsell").boolValue.value, false);
+  assert.equal(byName("enableFullscreenMode").boolValue.value, true);
+  assert.equal(body.configuration.policySnapshotId, "0");
+});

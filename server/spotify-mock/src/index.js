@@ -88,6 +88,7 @@ const AD_KINDS = new Set(["home", "browse", "scroll", "configuration", "attribut
 const PASSTHROUGH = { kind: "passthrough" };
 
 const BINARY_TYPE = /(protobuf|octet-stream|application\/x-protobuf)/i;
+const JSON_TYPE = /application\/json/i;
 const HOP_BY_HOP = [
   "connection",
   "keep-alive",
@@ -254,7 +255,11 @@ function sanitizeResponseHeaders(input, patched) {
 function patchResponse(patcher, desktopPatcher, route, targetPath, bytes, contentType, scrollCard) {
   if (!bytes.length) return null;
   // A JSON error / HTML login page must never be walked as a protobuf tree.
-  if (contentType && !BINARY_TYPE.test(contentType)) return null;
+  // The desktop client serves remote config and account attributes as JSON
+  // (1.3.9+), so those two routes are allowed through with a JSON body; the
+  // patcher sniffs the first byte and only rewrites what it recognises.
+  const jsonRoute = route.kind === "configuration" || route.kind === "attributes";
+  if (contentType && !BINARY_TYPE.test(contentType) && !(jsonRoute && JSON_TYPE.test(contentType))) return null;
 
   try {
     if (route.kind === "bootstrap") {
