@@ -765,10 +765,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // 并行发出，超时不会让整条链路多等一轮；卡住不返回的请求最多拖 2.5 秒。
   const META_TIMEOUT_MS = 2500;
   // feed 在 scrollsita 里顺手回填曲名 / 歌手；首次进 Now Playing 时它可能比
-  // 歌词脚本晚一点点。挂一个 200ms 的检查，命中后立刻开始查歌词，不用等
-  // open.spotify.com 的 oEmbed（实测慢的时候 2.6 秒）。定时器只是优化：
-  // 没命中时仍按原来的 oEmbed / embed 流程走。
-  const META_WAIT_MS = 200;
+  // 歌词脚本晚一点点。100ms 看一次缓存，最多 2s；命中后立刻开始查歌词，
+  // 不用等 open.spotify.com 的 oEmbed（实测慢的时候 2.6 秒）。定时器只是优化：
+  // 没命中时仍按原来的 oEmbed / embed 流程走，不会多等。
+  const META_WAIT_MS = 2000;
+  const META_POLL_MS = 100;
 
   // 确认没有歌词的曲目，短期内不再补空卡。
   const MISS_KEY = "spotify.lyrics.miss";
@@ -1324,16 +1325,24 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       metaDone = true;
       maybeStart();
     }, null, META_TIMEOUT_MS);
-    // feed 回填的元数据可能比 oEmbed 先就绪：200ms 后再看一眼缓存。命中就直接
-    // 开始查歌词，oEmbed / embed 晚到只补封面配色；没命中则保持原流程。
+    // feed 回填的元数据可能比 oEmbed 先就绪：100ms 看一次缓存，最多 2s。
+    // 命中就直接开始查歌词，oEmbed / embed 晚到只补封面配色；没命中则保持原流程。
     if (storeBackend() && typeof setTimeout === "function") {
-      setTimeout(() => {
-        if (started || settled) return;
-        const hit = cachedTrackMeta(trackId);
-        if (!hit) return;
-        started = true;
-        startWith(hit, () => (embed && embed.color) || hit.color || null);
-      }, META_WAIT_MS);
+      let waited = 0;
+      const poll = () => {
+        setTimeout(() => {
+          if (started || settled) return;
+          const hit = cachedTrackMeta(trackId);
+          if (hit) {
+            started = true;
+            startWith(hit, () => (embed && embed.color) || hit.color || null);
+            return;
+          }
+          waited += META_POLL_MS;
+          if (waited < META_WAIT_MS) poll();
+        }, META_POLL_MS);
+      };
+      poll();
     }
   }
 

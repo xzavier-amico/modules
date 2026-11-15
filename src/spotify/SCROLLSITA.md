@@ -32,7 +32,7 @@ section {
 
 歌词脚本取曲名 / 歌手要先读 `spotify.track.meta.v2`；没命中就只能回源 `open.spotify.com`
 （oEmbed 与 embed 并行，实测各 2.6 秒）。首次进 Now Playing 时 feed 可能刚写好这份缓存：
-歌词脚本会在 200ms 后再看一次，命中就直接开始查歌词，不必等 oEmbed。滚动页的当前曲目 section 里本来就带着
+歌词脚本会每 100ms 看一次、最多 2 秒，命中就直接开始查歌词，不必等 oEmbed。滚动页的当前曲目 section 里本来就带着
 `track_title` / `artist_name` 的 metadata map，feed 顺手抄一份写进同一个缓存，
 下次同一首再进 Now Playing 就是零请求。
 

@@ -1291,7 +1291,7 @@ check("Spotify starts provider lookups from feed metadata before oEmbed returns"
   });
   vm.runInContext(read("loon/spotify/js/spotify_lyrics.js"), context);
   assert.equal(requests.filter((url) => url.includes("lrclib")).length, 0, "providers wait for metadata");
-  // timers[0] 是 deadline，timers[1] 是 200ms 的 feed 元数据检查。
+  // timers[0] 是 deadline，timers[1] 是第一次 100ms 的 feed 元数据检查。
   timers[1]();
   const lrclib = requests.filter((url) => url.includes("lrclib"));
   assert.ok(lrclib.length > 0, "feed metadata must start provider lookups before oEmbed returns");
