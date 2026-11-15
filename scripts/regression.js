@@ -1196,9 +1196,10 @@ check("Spotify auto queries the three sources concurrently, skips Musixmatch and
   vm.runInContext(read("loon/spotify/js/spotify_lyrics.js"), context);
   assert.equal(done, undefined);
   const providers = requests.filter((url) => !url.includes("oembed") && !url.includes("/embed/"));
-  assert.equal(providers.length, 4, "LRCLIB get + search and the other two sources are all requested up front");
+  assert.equal(providers.length, 5, "LRCLIB get / search / 歌名兜底 and the other two sources are all requested up front");
   assert.ok(providers.some((url) => url.includes("lrclib.net/api/get")));
   assert.ok(providers.some((url) => url.includes("lrclib.net/api/search")));
+  assert.ok(providers.some((url) => url.endsWith("lrclib.net/api/search?track_name=Song")), "name-only search is in the first batch");
   assert.ok(providers.some((url) => url.includes("music.163.com/api/search")));
   assert.ok(providers.some((url) => url.includes("search_for_qq_cp")));
   assert.ok(!providers.some((url) => url.includes("client_search_cp")), "the legacy QQ search endpoint is unreliable");
@@ -1245,11 +1246,12 @@ check("Spotify LRCLIB sends get and search for both titles up front", () => {
     } },
   });
   vm.runInContext(read("loon/spotify/js/spotify_lyrics.js"), context);
-  assert.equal(requests.length, 4, "get and search for both titles are sent before any response");
+  assert.equal(requests.length, 5, "get / search for both titles and the name-only fallback are sent before any response");
   assert.ok(requests[0].includes("/api/get?") && requests[0].includes(encodeURIComponent(title)));
   assert.ok(requests[1].includes("/api/search?") && requests[1].includes(encodeURIComponent(title)));
   assert.ok(requests[2].includes("/api/get?") && requests[2].includes(encodeURIComponent("晚秋") + "&"));
   assert.ok(requests[3].includes("/api/search?") && requests[3].includes(encodeURIComponent("晚秋") + "&"));
+  assert.ok(requests[4].endsWith("/api/search?track_name=" + encodeURIComponent("晚秋")), "name-only fallback");
   const [, search] = [...pending.entries()].find(([url]) =>
     url.includes("/api/search?") && url.includes(encodeURIComponent("晚秋") + "&"));
   search(null, { status: 200 }, JSON.stringify([
@@ -1257,6 +1259,81 @@ check("Spotify LRCLIB sends get and search for both titles up front", () => {
   ]));
   assert.ok(done);
   assert.equal(JSON.parse(done.body).lyrics.lines[0].words, "秋");
+});
+
+check("Spotify starts provider lookups from feed metadata before oEmbed returns", () => {
+  const id = "0VjIjW4GlUZAMYd2vXMi3b";
+  const meta = JSON.stringify({ [id]: ["缓存曲名", "缓存歌手", 200000, Date.now()] });
+  let reads = 0;
+  const store = {
+    // 第一次读还没有（歌词脚本先到），200ms 后 feed 已经写进来了。
+    read: (key) => {
+      if (key !== "spotify.track.meta.v2") return null;
+      reads += 1;
+      return reads > 1 ? meta : null;
+    },
+    write: () => true,
+  };
+  const timers = [];
+  const requests = [];
+  const pending = new Map();
+  let done;
+  const context = vm.createContext({ TextEncoder, TextDecoder, Uint8Array, ArrayBuffer,
+    $request: { url: "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json" },
+    $response: { status: 404, body: "" }, $argument: ["lrclib", true], $persistentStore: store,
+    setTimeout: (fn) => { timers.push(fn); return timers.length; }, clearTimeout() {},
+    $done: (value) => { done = value; },
+    $httpClient: { get: (request, callback) => {
+      requests.push(request.url);
+      if (request.url.includes("lrclib")) { pending.set(request.url, callback); return; }
+      // oEmbed / embed 故意不回调：provider 查询不应等它们。
+    } },
+  });
+  vm.runInContext(read("loon/spotify/js/spotify_lyrics.js"), context);
+  assert.equal(requests.filter((url) => url.includes("lrclib")).length, 0, "providers wait for metadata");
+  // timers[0] 是 deadline，timers[1] 是 200ms 的 feed 元数据检查。
+  timers[1]();
+  const lrclib = requests.filter((url) => url.includes("lrclib"));
+  assert.ok(lrclib.length > 0, "feed metadata must start provider lookups before oEmbed returns");
+  assert.ok(lrclib.every((url) => url.includes(encodeURIComponent("缓存曲名"))), "queries use the feed metadata");
+  const [, search] = [...pending.entries()].find(([url]) =>
+    url.includes("/api/search?") && url.includes("artist_name=" + encodeURIComponent("缓存歌手")));
+  search(null, { status: 200 }, JSON.stringify([
+    { trackName: "缓存曲名", artistName: "缓存歌手", duration: 200000, syncedLyrics: "[00:01.00]缓存歌词" },
+  ]));
+  assert.ok(done);
+  assert.equal(JSON.parse(done.body).lyrics.lines[0].words, "缓存歌词");
+});
+
+check("Spotify LRCLIB asks for the folded script in the first batch", () => {
+  const id = "0VjIjW4GlUZAMYd2vXMi3b";
+  const store = {
+    read: (key) => key === "spotify.track.meta.v2"
+      ? JSON.stringify({ [id]: ["說謊", "林宥嘉", 270000, Date.now()] })
+      : null,
+    write: () => true,
+  };
+  const requests = [];
+  const pending = new Map();
+  let done;
+  const context = vm.createContext({ TextEncoder, TextDecoder, Uint8Array, ArrayBuffer,
+    $request: { url: "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json" },
+    $response: { status: 404, body: "" }, $argument: ["lrclib", true], $persistentStore: store,
+    setTimeout: () => 1, clearTimeout() {}, $done: (value) => { done = value; },
+    $httpClient: { get: (request, callback) => { requests.push(request.url); pending.set(request.url, callback); } },
+  });
+  vm.runInContext(read("loon/spotify/js/spotify_lyrics.js"), context);
+  assert.ok(requests.some((url) => url.includes("track_name=" + encodeURIComponent("說謊"))));
+  // 繁体「說謊」与折叠后的「说谎」必须同批发出，不能等第一轮全空再串行重查。
+  const folded = requests.filter((url) => url.includes("track_name=" + encodeURIComponent("说谎")));
+  assert.ok(folded.length >= 2, "folded title gets get + search up front");
+  const [, search] = [...pending.entries()].find(([url]) =>
+    url.includes("/api/search?") && url.includes(encodeURIComponent("说谎")));
+  search(null, { status: 200 }, JSON.stringify([
+    { trackName: "说谎", artistName: "林宥嘉", duration: 270000, syncedLyrics: "[00:01.00]说谎" },
+  ]));
+  assert.ok(done);
+  assert.equal(JSON.parse(done.body).lyrics.lines[0].words, "说谎");
 });
 
 check("Spotify NetEase requests candidate lyrics in parallel", () => {
@@ -1537,13 +1614,17 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
           else if (request.url.endsWith("/artist/3698")) data = { artist: { id: 3698, name: "罗文", alias: ["Roman Tam"] } };
           else if (request.url.endsWith("/artist/6498")) data = { artist: { id: sample.id, name: sample.translated, alias: [sample.alias] } };
           else {
-            fetched.push(new URL(request.url).searchParams.get("id"));
-            data = { lrc: { lyric: "[00:32.00]红花会豪杰" } };
+            const id = new URL(request.url).searchParams.get("id");
+            fetched.push(id);
+            // 两个候选的歌词不同，用来确认最终采用的是 alias 确认后的那一首。
+            data = { lrc: { lyric: id === "194499" ? "[00:32.00]红花会豪杰" : "[00:01.00]其他歌手" } };
           }
           callback(null, { status: 200 }, JSON.stringify(data));
         } },
       });
-      assert.deepEqual(fetched, sample.accept ? ["194499"] : []);
+      // 歌名 / 时长都匹配、只差歌手时，两个候选的歌词会与 alias 查询并行预取；
+      // 最终是否采用仍由 alias 校验决定。
+      assert.deepEqual(fetched.sort(), ["1", "194499"], "speculative fetch covers both title+duration matches");
       assert.equal(!!out.body, sample.accept);
       if (out.body) assert.equal(JSON.parse(out.body).lyrics.lines[0].words, "红花会豪杰");
     }

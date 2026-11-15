@@ -628,11 +628,19 @@
   const LYRICS_CACHE_HIT_TTL = 24 * 60 * 60 * 1000;
   const LYRICS_CACHE_MAX_LINES = 400;
   const LYRICS_CACHE_MAX_BYTES = 400 * 1024;
-  const LYRICS_DEADLINE_MS = 8000;
-  const PLAIN_FALLBACK_MS = 6000;
+  // 4.5s 是「官方响应到达后」的预算：客户端大约 5s 就不再刷新 Now Playing，
+  // 再等下去结果也显示不出来。只有真的在等第三方轮次时才会用满；所有源都
+  // 快速返回「没有」时仍会立刻放行。
+  const LYRICS_DEADLINE_MS = 4500;
+  const PLAIN_FALLBACK_MS = 3500;
   // 元数据回源（open.spotify.com 的 oEmbed / embed 页面）单次上限。两个请求
   // 并行发出，超时不会让整条链路多等一轮；卡住不返回的请求最多拖 2.5 秒。
   const META_TIMEOUT_MS = 2500;
+  // feed 在 scrollsita 里顺手回填曲名 / 歌手；首次进 Now Playing 时它可能比
+  // 歌词脚本晚一点点。挂一个 200ms 的检查，命中后立刻开始查歌词，不用等
+  // open.spotify.com 的 oEmbed（实测慢的时候 2.6 秒）。定时器只是优化：
+  // 没命中时仍按原来的 oEmbed / embed 流程走。
+  const META_WAIT_MS = 200;
 
   // 确认没有歌词的曲目，短期内不再补空卡。
   const MISS_KEY = "spotify.lyrics.miss";
@@ -641,7 +649,7 @@
   // 歌词请求进度：请求阶段写 pending。feed 补卡时据此判断「这首歌的歌词正在查」，
   // 有请求在路上时旧的 miss 标记不作数，避免把这次可能成功的歌词挡掉。
   const PENDING_KEY = "spotify.lyrics.pending";
-  // 歌词脚本自己的 deadline 是 8s；超过 10s 还没清掉就是脚本被杀了，按失效处理。
+  // 歌词脚本自己的 deadline 是 4.5s；超过 10s 还没清掉就是脚本被杀了，按失效处理。
   const PENDING_TTL_MS = 10 * 1000;
 
   const storeBackend = () =>
@@ -1063,8 +1071,8 @@
   }
 
   // 总时限；超时后用纯文本兜底，没有就放行。超时不写 miss 标记：第三方歌词
-  // 可能还在路上，后续到达的歌词会写进缓存供 feed 轮询命中。只有所有第三方源
-  // 都确认没歌词时才写 miss。
+  // 可能还在路上，后续到达的歌词会写进缓存，用户重新进歌词页时请求阶段直接命中。
+  // 只有所有第三方源都确认没歌词时才写 miss。
   if (typeof setTimeout === "function") deadline = setTimeout(() => {
     if (settled) return;
     if (plainFallback) {
@@ -1077,8 +1085,8 @@
   }, LYRICS_DEADLINE_MS);
   resolveLyrics((payload) => {
     if (settled) {
-      // deadline 超时放行后，所有源都确认没歌词时补写 miss 标记，
-      // feed 轮询读到 miss 就不再乐观补空卡。拿到了歌词则由 runSource 写缓存。
+      // deadline 超时放行后，所有源都确认没歌词时补写 miss 标记；feed 补卡时
+      // 读到 miss 就不再乐观补空卡。拿到了歌词则由 runSource 写缓存。
       if (!payload) writeMark(MISS_KEY, { id: trackId, at: Date.now() });
       return;
     }
@@ -1100,9 +1108,12 @@
   function resolvePublicLyrics(cb) {
     // 客户端拉过的元数据优先：命中时直接查歌词，open.spotify.com 一次都不请求，
     // 歌词页背景用默认底色（不再为封面配色抓 embed 页面）。
+    const startWith = (info, colorOf) => {
+      runSource(sourceOrder(info.title, info.artist), info.title, info.artist, cb, info.duration, colorOf);
+    };
     const cached = cachedTrackMeta(trackId);
     if (cached) {
-      runSource(sourceOrder(cached.title, cached.artist), cached.title, cached.artist, cb, cached.duration, () => cached.color || null);
+      startWith(cached, () => cached.color || null);
       return;
     }
     const oembedUrl = "https://open.spotify.com/oembed?url=" + encodeURIComponent("https://open.spotify.com/track/" + trackId);
@@ -1138,8 +1149,7 @@
       }
       started = true;
       rememberTrackMeta(trackId, info.title, info.artist, info.duration ? info.duration * 1000 : 0, colorOf());
-      runSource(sourceOrder(info.title, info.artist), info.title, info.artist,
-        (payload) => cb(payload), info.duration, colorOf);
+      startWith({ title: info.title, artist: info.artist, duration: info.duration }, colorOf);
     };
     // embed 提供封面主色与兜底元数据；与 oEmbed 并行发出，谁先到用谁。
     const beginEmbed = () => {
@@ -1186,6 +1196,17 @@
       metaDone = true;
       maybeStart();
     }, null, META_TIMEOUT_MS);
+    // feed 回填的元数据可能比 oEmbed 先就绪：200ms 后再看一眼缓存。命中就直接
+    // 开始查歌词，oEmbed / embed 晚到只补封面配色；没命中则保持原流程。
+    if (storeBackend() && typeof setTimeout === "function") {
+      setTimeout(() => {
+        if (started || settled) return;
+        const hit = cachedTrackMeta(trackId);
+        if (!hit) return;
+        started = true;
+        startWith(hit, () => (embed && embed.color) || hit.color || null);
+      }, META_WAIT_MS);
+    }
   }
 
   // ---- 歌词源 -----------------------------------------------------------
@@ -1200,9 +1221,8 @@
   }
 
   // 并发查询所有来源：首个通过校验的同步歌词胜出；只有纯文本时等全部结束。
-  // settled 后不再 emit（响应已放行），但仍然写缓存：feed 脚本的轮询窗口比
-  // deadline 长，后续到达的歌词写进缓存供轮询命中。全部源都确认没歌词时
-  // 写 miss 标记，feed 轮询读到 miss 就不再乐观补空卡。
+  // settled 后不再 emit（响应已放行），但仍然写缓存：用户重新进歌词页时
+  // 请求阶段就能直接命中。全部源都确认没歌词时才写 miss 标记。
   function runSource(order, title, artist, done, duration, colorOf) {
     if (settled) return;
     if (!order.length) {
@@ -1221,7 +1241,7 @@
       if (settled || finished) return;
       lookup(name, title, artist, duration, (record) => {
         if (settled) {
-          // deadline 超时放行：歌词晚到时写缓存供 feed 轮询命中。
+          // deadline 超时放行：歌词晚到时写缓存，下次请求阶段直接命中。
           if (record && colorOf) record.albumColor = colorOf();
           const latePayload = buildPayload(record);
           if (latePayload) writeLyricsCache(cacheKey, latePayload);
@@ -1240,7 +1260,7 @@
         if (payload && !plainFallback) {
           plainFallback = payload;
           // 有纯文本但同步歌词还在路上时，先把纯文本发出去，后续结果不再覆盖。
-          // deadline 超时放行后仍然写缓存，供 feed 轮询命中。
+          // deadline 超时放行后仍然写缓存，供下次请求命中。
           if (typeof setTimeout === "function") plainTimer = setTimeout(() => {
             if (!plainFallback) return;
             writeLyricsCache(cacheKey, plainFallback);
@@ -1261,19 +1281,37 @@
     cb(null);
   }
 
-  // LRCLIB：/api/get 与 /api/search 都会带回歌词。完整曲名和去掉装饰括号后的
-  // 曲名各发 get + search，四路并行；首个通过校验的同步歌词立即返回，只有全都
-  // 没命中时才用歌名再搜一次（歌手写法不一致的兜底）。
+  // LRCLIB：/api/get 与 /api/search 都会带回歌词。完整曲名、去掉装饰括号后的
+  // 曲名、以及繁→简折叠后的写法，各发 get + search；歌名-only 的搜索也放进
+  // 同一批。全部并行，首个通过校验的同步歌词立即返回——不再有串行的兜底轮次。
   function lookupLrclib(title, artist, duration, cb) {
     const cleanTitle = queryTitle(title);
-    const names = cleanTitle && cleanTitle !== title ? [title, cleanTitle] : [title];
     // DJ 版本常换制作人署名，查询时不带歌手；pickRecord 仍会拿 artist 做打分。
     const queryArtist = isDj(title) ? "" : artist;
+    const fold = (value) => (foldHanVariants && typeof SPOTIFY_HAN_VARIANTS !== "undefined"
+      ? SPOTIFY_HAN_VARIANTS.fold(String(value || ""))
+      : String(value || ""));
+
+    // 每个曲名配对应的歌手写法；繁简折叠后的曲名配折叠后的歌手。
+    const variants = [];
+    const addVariant = (name, singer) => {
+      const text = String(name || "").trim();
+      if (!text) return;
+      const key = text + "\n" + String(singer || "");
+      if (variants.some((item) => item.key === key)) return;
+      variants.push({ key: key, name: text, artist: String(singer || "") });
+    };
+    addVariant(title, queryArtist);
+    addVariant(cleanTitle, queryArtist);
+    if (foldHanVariants && typeof SPOTIFY_HAN_VARIANTS !== "undefined") {
+      const foldedArtist = fold(queryArtist);
+      addVariant(fold(title), foldedArtist);
+      addVariant(fold(cleanTitle), foldedArtist);
+    }
+
     const lists = [];
     const records = [];
-    let pending = names.length * 2;
     let done = false;
-
     const all = () => lists.concat(records);
     const syncedPick = () => {
       const synced = [];
@@ -1285,59 +1323,28 @@
       return pickRecord(synced, title, duration, artist);
     };
 
-    const search = (name, singer, next) => {
+    // 先把所有请求列出来再统一发出：同步回调（测试 / 命中）不会在批次中途把
+    // pending 减到 0，避免提前判定「都没命中」。
+    const specs = [];
+    const addSpec = (path, name, singer) => {
       const query = "track_name=" + encodeURIComponent(name) + (singer ? "&artist_name=" + encodeURIComponent(singer) : "");
-      httpGetJson("https://lrclib.net/api/search?" + query, next);
+      const url = "https://lrclib.net/api/" + path + "?" + query;
+      if (specs.some((item) => item.url === url)) return;
+      specs.push({ url: url, path: path });
     };
-
-    // 繁简兜底：LRCLIB 里两种写法都有。原写法全部没命中时，再用折叠后的
-    // 歌名 / 歌手搜一次；pickRecord 仍按原曲名、歌手、时长校验。
-    const foldedQuery = () => {
-      if (!foldHanVariants || typeof SPOTIFY_HAN_VARIANTS === "undefined") return null;
-      const name = SPOTIFY_HAN_VARIANTS.fold(names[names.length - 1]);
-      const singer = SPOTIFY_HAN_VARIANTS.fold(queryArtist);
-      return name === names[names.length - 1] && singer === queryArtist ? null : { name: name, artist: singer };
-    };
-
-    const finish = () => {
-      if (done || pending) return;
-      done = true;
-      const picked = pickRecord(all(), title, duration, artist);
-      if (picked) {
-        cb(withProvider(picked, "LRCLIB"));
-        return;
-      }
-      // 歌手写法不一致（feat. / 多歌手 / 翻译名）时，用歌名再搜一次；
-      // pickRecord 仍会按 artist 过滤，不会把别人的同名歌当成结果。
-      if (!queryArtist) {
-        const retry = foldedQuery();
-        if (!retry) {
-          cb(null);
-          return;
-        }
-        search(retry.name, retry.artist, (list) => {
-          const hit = pickRecord(list, title, duration, artist);
-          cb(hit ? withProvider(hit, "LRCLIB") : null);
-        });
-        return;
-      }
-      search(names[names.length - 1], queryArtist, (list) => {
-        const fallback = pickRecord(list, title, duration, artist);
-        if (fallback) {
-          cb(withProvider(fallback, "LRCLIB"));
-          return;
-        }
-        const retry = foldedQuery();
-        if (!retry) {
-          cb(null);
-          return;
-        }
-        search(retry.name, retry.artist, (list2) => {
-          const hit = pickRecord(list2, title, duration, artist);
-          cb(hit ? withProvider(hit, "LRCLIB") : null);
-        });
-      });
-    };
+    for (const item of variants) {
+      addSpec("get", item.name, item.artist);
+      addSpec("search", item.name, item.artist);
+    }
+    // 歌手写法不一致（feat. / 多歌手 / 翻译名）时的兜底也并进首轮。
+    addSpec("search", cleanTitle || title, "");
+    const foldedName = fold(cleanTitle || title);
+    if (foldedName !== (cleanTitle || title)) addSpec("search", foldedName, "");
+    if (!specs.length) {
+      cb(null);
+      return;
+    }
+    let pending = specs.length;
 
     const settle = () => {
       pending -= 1;
@@ -1348,17 +1355,19 @@
         cb(withProvider(hit, "LRCLIB"));
         return;
       }
-      finish();
+      if (pending) return;
+      done = true;
+      const picked = pickRecord(all(), title, duration, artist);
+      cb(picked ? withProvider(picked, "LRCLIB") : null);
     };
 
-    for (const name of names) {
-      const query = "track_name=" + encodeURIComponent(name) + (queryArtist ? "&artist_name=" + encodeURIComponent(queryArtist) : "");
-      httpGetJson("https://lrclib.net/api/get?" + query, (record) => {
-        if (record && "object" === typeof record) records.push(record);
-        settle();
-      });
-      httpGetJson("https://lrclib.net/api/search?" + query, (list) => {
-        if (Array.isArray(list)) lists.push(list);
+    for (const spec of specs) {
+      httpGetJson(spec.url, (data) => {
+        if (spec.path === "get") {
+          if (data && "object" === typeof data) records.push(data);
+        } else if (Array.isArray(data)) {
+          lists.push(data);
+        }
         settle();
       });
     }
@@ -1369,38 +1378,62 @@
     const queryArtist = isDj(title) ? "" : artist;
     const query = encodeURIComponent(queryTitle(title) + (queryArtist ? " " + queryArtist : ""));
     const headers = { Referer: "https://music.163.com/", "User-Agent": BROWSER_UA };
+    const artistOf = (item) => (item.artists || []).reduce((names, a) => names.concat(artistNames(a)), []);
+    const durationOf = (item) => Number(item.duration) / 1000;
     httpGetJson("https://music.163.com/api/search/get?s=" + query + "&type=1&limit=10&offset=0", (data) => {
       const songs = data && data.result && data.result.songs;
-      const select = () => {
-        const candidates = rankSongs(songs, title, artist, duration, (item) => item.name,
-          (item) => (item.artists || []).reduce((names, a) => names.concat(artistNames(a)), []), (item) => Number(item.duration) / 1000);
-        tryCandidates(candidates, (picked, next) => {
-          httpGetJson("https://music.163.com/api/song/lyric?id=" + picked.id + "&lv=-1&kv=-1&tv=-1", (lyric) => {
-            const text = lyric && lyric.lrc && lyric.lrc.lyric;
-            next(text ? { provider: "NetEase", providerId: String(picked.id), syncedLyrics: text } : null);
-          }, headers);
-        }, cb);
+      // 同一首歌的歌词只取一次：alias 补全期间的预取和正式候选会并行，
+      // 后到的调用合并到在途请求上，不重复打接口。
+      const lyrics = Object.create(null);
+      const waiting = Object.create(null);
+      const fetchLyric = (song, next) => {
+        const id = String(song.id);
+        if (lyrics[id] !== undefined) {
+          next(lyrics[id]);
+          return;
+        }
+        if (waiting[id]) {
+          waiting[id].push(next);
+          return;
+        }
+        waiting[id] = [next];
+        httpGetJson("https://music.163.com/api/song/lyric?id=" + id + "&lv=-1&kv=-1&tv=-1", (lyric) => {
+          const text = lyric && lyric.lrc && lyric.lrc.lyric;
+          const record = text ? { provider: "NetEase", providerId: id, syncedLyrics: text } : null;
+          lyrics[id] = record;
+          const callbacks = waiting[id] || [];
+          delete waiting[id];
+          for (const fn of callbacks) fn(record);
+        }, headers);
       };
-      // 搜索结果可能缺少歌手别名：只对匹配的曲目按歌手 ID 补全，最多 3 次请求。
-      const pending = [];
-      if (rankSongs(songs, title, artist, duration, (item) => item.name,
-          (item) => (item.artists || []).reduce((names, a) => names.concat(artistNames(a)), []), (item) => Number(item.duration) / 1000).length) {
-        select();
+      const ranked = rankSongs(songs, title, artist, duration, (item) => item.name, artistOf, durationOf);
+      if (ranked.length) {
+        tryCandidates(ranked, fetchLyric, cb);
         return;
       }
+      // 搜索结果可能缺少歌手别名：只对匹配的曲目按歌手 ID 补全，最多 3 次请求。
+      const pending = [];
       if (artist && Array.isArray(songs)) {
+        const speculative = [];
         for (const song of songs) {
-          if (!song || !matchesSong(title, "", duration, song.name, "", Number(song.duration) / 1000)) continue;
+          if (!song || !matchesSong(title, "", duration, song.name, "", durationOf(song))) continue;
           const people = Array.isArray(song.artists) ? song.artists : [];
-          if (matchesArtist(artist, people.reduce((names, a) => names.concat(artistNames(a)), []))) continue;
+          if (matchesArtist(artist, artistOf(song))) continue;
+          // 歌名 / 时长已对上、只差歌手写法：先把歌词取回来，alias 确认后直接复用。
+          if (speculative.length < 2) speculative.push(song);
           for (const person of people) {
             if (!person || !/^\d+$/.test(String(person.id)) || pending.some((p) => p.id === person.id)) continue;
             if (pending.length < 3) pending.push(person);
           }
         }
+        // 预取与歌手详情并行发出；晚到的结果由 fetchLyric 合并。
+        for (const song of speculative) fetchLyric(song, () => {});
       }
       const resolve = () => {
-        if (!pending.length) { select(); return; }
+        if (!pending.length) {
+          tryCandidates(rankSongs(songs, title, artist, duration, (item) => item.name, artistOf, durationOf), fetchLyric, cb);
+          return;
+        }
         // 歌手详情请求并行发出，全部回来后再统一补 alias；旧实现一个个等，
         // 最多 3 个歌手会串成 3 个 RTT。
         let left = pending.length;
@@ -1415,7 +1448,9 @@
               }
             }
             left -= 1;
-            if (!left) select();
+            if (!left) {
+              tryCandidates(rankSongs(songs, title, artist, duration, (item) => item.name, artistOf, durationOf), fetchLyric, cb);
+            }
           }, headers);
         }
       };
