@@ -332,7 +332,7 @@ function buildPatcher($argument) {
 
   // ------------------------------------------------------------ remote config
 
-  // 播放衔接：不再改写交叉淡入淡出 / Gapless 相关开关。免费号被强制打开
+  // 播放衔接：不改写交叉淡入淡出 / Gapless 相关开关。免费号被强制打开
   // crossfade 后，App 会直接按本地滑杆（常见默认 4 秒）把下一首提前混进来，
   // 表现为倒计时结束又响了 1–2 秒。只强制关闭 AutoMix，它才是按节拍提前
   // 混入下一首的元凶；Crossfade 仍由 App 自己的设置决定。
@@ -1520,7 +1520,7 @@ function buildPatcher($argument) {
     return changed ? wireConcat(parts) : null;
   }
 
-  // 兼容旧入口：首页与浏览页共用同一套 section 过滤。
+  // 首页与浏览页共用同一套 section 过滤。
   function stripHomeAds(buffer) {
     return stripSectionAds(buffer);
   }
@@ -1577,7 +1577,7 @@ function buildPatcher($argument) {
   // 一项，避免留下「有 id、没有内容」的空卡片。实际拼接在 feed/lyrics.js 的
   // patchScroll 里和补歌词 section 一起做，只遍历一次。
   // 服务端在歌词查询完成后传入 trackId / wantCard；客户端则由 feed/entry.js 在
-  // 预热歌词缓存后传入。默认只删广告，保持旧调用方的行为。
+  // 预热歌词缓存后传入。默认只删广告。
   function hideScrollAds(buffer, trackId, wantCard) {
     return patchScroll(buffer, trackId || "", true, !!wantCard);
   }
@@ -1630,7 +1630,7 @@ function buildPatcher($argument) {
   // ---- 曲目元数据回填 ---------------------------------------------------
   //
   // 歌词脚本取曲名 / 歌手要先读 spotify.track.meta；没命中就只能回源
-  // open.spotify.com（oEmbed / embed，实测 2.6s），整条歌词链路跟着变慢。
+  // open.spotify.com（oEmbed / embed），整条歌词链路跟着变慢。
   // scrollsita 的当前曲目 section 里本来就带着 track_title / artist_name
   // 的 metadata map，顺手抄一份写进同一个缓存：下次同一首再进 Now Playing
   // 就是零请求。

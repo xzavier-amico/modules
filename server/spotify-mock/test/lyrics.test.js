@@ -575,3 +575,28 @@ test("LYRICS_PARALLEL=false keeps the official request first", async () => {
   assert.ok(calls[0].includes("spclient.wg.spotify.com"), "official request must be sent before any provider lookup");
   assert.ok(calls.some((url) => url.includes("lrclib.net/api/get")));
 });
+
+test("desktop color-lyrics JSON carries preview lines", async () => {
+  // The desktop client (CEF/xpui) maps lyrics.previewLines directly; a missing
+  // field throws and the whole lyrics page falls back to "couldn't load".
+  globalThis.fetch = async (url) => {
+    const target = String(url);
+    if (target.includes("spclient.wg.spotify.com")) {
+      return upstreamResponse(new Uint8Array(0), 404, "application/json");
+    }
+    if (target.includes("open.spotify.com/oembed")) {
+      return upstreamResponse(JSON.stringify({ title: "Hello", author_name: "Adele" }), 200, "application/json");
+    }
+    if (target.includes("lrclib.net/api/get")) {
+      return upstreamResponse(JSON.stringify({ syncedLyrics: "[00:01.00]Hello\n[00:02.00]world" }), 200, "application/json");
+    }
+    return new Response("not found", { status: 404 });
+  };
+
+  const response = await handle(lyricsRequest({ query: "?format=json" }), { DESKTOP: "true" });
+  const payload = JSON.parse(await response.text());
+  assert.equal(response.headers.get("content-type"), "application/json; charset=utf-8");
+  assert.deepEqual(payload.lyrics.previewLines.map((line) => line.words), ["Hello", "world"]);
+  assert.equal(typeof payload.colors.text, "number");
+  assert.equal(typeof payload.colors.background, "number");
+});

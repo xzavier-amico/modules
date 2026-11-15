@@ -34,6 +34,8 @@ const REQUEST_TIMEOUT_MS = 4000;
 
 // Lyrics screen colours, ARGB. The client defaults to 0 (fully transparent),
 // so synthesized responses must always include them.
+// Official responses carry at most 5 preview lines for the lyrics card.
+const PREVIEW_LINES = 5;
 const COLOR_BG = 0xff121212;
 const COLOR_LINE = 0xb3ffffff;
 const COLOR_ACTIVE = 0xffffffff;
@@ -698,6 +700,9 @@ export function buildJsonPayload(lyrics, options = {}) {
   payload.alternatives = [];
   payload.isRtlLanguage = false;
   payload.fullscreenAction = "FULLSCREEN_LYRICS";
+  // The desktop client maps lyrics.previewLines directly (for the lyrics card);
+  // a missing field throws and the whole page falls back to "couldn't load".
+  payload.previewLines = payload.lines.slice(0, PREVIEW_LINES);
   return {
     lyrics: payload,
     colors: {
