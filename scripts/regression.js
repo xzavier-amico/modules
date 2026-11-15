@@ -1847,6 +1847,58 @@ check("Loon Enhance applies the main script tuple independently of lyrics", () =
 });
 
 for (const platform of ["loon", "egern", "shadowrocket"]) {
+  check(platform + " Spotify desktop writes display attributes but no playback licence by default", () => {
+    // 桌面端默认只写展示 / 广告属性；播放授权字段（player-license 等）必须等
+    // unlock_playback 打开才写，否则客户端会以为有 Premium 播放权。
+    const attributes = serialize([
+      b(1, serialize([s(1, "type"), b(2, serialize([s(4, "free")]))])),
+    ]);
+    const body = serialize([b(1, serialize([b(3, attributes)]))]);
+    const read = (out) => {
+      const values = {};
+      const ucs = parse(first(parse(out.body), 1).p);
+      for (const f of parse(first(ucs, 3).p)) {
+        if (f.no !== 1) continue;
+        const entry = parse(f.p);
+        const key = text(first(entry, 1));
+        const value = first(entry, 2);
+        const fields = value && value.w === 2 ? parse(value.p) : [];
+        const str = first(fields, 4);
+        const bool = first(fields, 2);
+        values[key] = str ? text(str) : bool ? bool.v === 1n : "";
+      }
+      return values;
+    };
+    const base = { spoof_premium: true, block_ads: true, unfreeze: true };
+
+    const off = run(platform + "/spotify/js/spotify.js", body,
+      "https://spclient.wg.spotify.com/user-customization-service/v1/customize",
+      Object.assign({}, base, { unlock_playback: false, enable_lyrics: false, desktop: "macos", lyrics_source: "auto" }));
+    const display = read(off);
+    assert.equal(display.type, "premium", platform);
+    assert.equal(display.product, "premium", platform);
+    assert.equal(display.catalogue, "premium", platform);
+    assert.equal(display.name, "Spotify Premium", platform);
+    assert.equal(display["financial-product"], "pr:premium,tc:0", platform);
+    assert.equal(display["payments-initial-campaign"], "default", platform);
+    assert.match(String(display["product-expiry"]), /^\d{4}-\d\d-\d\dT/, platform + " expiry");
+    assert.match(String(display["subscription-enddate"]), /^\d{4}-\d\d-\d\dT/, platform + " enddate");
+    assert.equal(display["com.spotify.madprops.use.ucs.product.state"], true, platform);
+    for (const key of ["player-license", "player-license-v2", "streaming-rules", "on-demand", "high-bitrate"]) {
+      assert.equal(display[key], undefined, platform + " must not write " + key);
+    }
+
+    const on = run(platform + "/spotify/js/spotify.js", body,
+      "https://spclient.wg.spotify.com/user-customization-service/v1/customize",
+      Object.assign({}, base, { unlock_playback: true, enable_lyrics: false, desktop: "macos", lyrics_source: "auto" }));
+    const play = read(on);
+    assert.equal(play["player-license"], "premium", platform + " unlock");
+    assert.equal(play["streaming-rules"], "", platform + " streaming-rules");
+    assert.equal(play["high-bitrate"], true, platform + " high-bitrate");
+  });
+}
+
+for (const platform of ["loon", "egern", "shadowrocket"]) {
   check(platform + " Spotify rewrites the desktop JSON account attributes", () => {
     // 桌面端 1.3.9 起 nebula/v1/configuration/attributes 返回 JSON，
     // protobuf 那套改写看不见它，账号状态会一直停在 free。
@@ -1869,6 +1921,8 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.equal(attributes.type.stringValue, "premium", platform);
     assert.equal(attributes.catalogue.stringValue, "premium", platform);
     assert.equal(attributes.name.stringValue, "Spotify Premium", platform);
+    assert.equal(attributes["financial-product"].stringValue, "pr:premium,tc:0", platform);
+    assert.match(String(attributes["product-expiry"].stringValue), /^\d{4}-\d\d-\d\dT/, platform);
     assert.equal(attributes.ads.boolValue, false, platform);
     assert.equal(attributes["on-demand-trial"], undefined, "trial keys must be stripped");
     assert.equal(attributes["estimated-age"].longValue, "33", "unknown attributes stay");

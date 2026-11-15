@@ -769,6 +769,10 @@ export default async function (ctx) {
   // macOS 桌面端只写展示 / 广告属性。播放授权（player-license、streaming-rules、
   // on-demand、high-bitrate …）由服务端判定；强行写会让客户端以为有 Premium
   // 播放权，几秒后拿不到音频密钥就跳歌。需要时由 unlock_playback 单独打开。
+  //
+  // 展示侧要和 iOS 对齐，否则「设置 → 账号」「你的方案」这些页面还是免费版的
+  // 样子，看不出模块有没有生效：账单产品串、首次付费活动、以及到期 / 订阅结束
+  // 日期都属于纯展示字段（不参与播放授权判定），这里一起写。
   const MAC_ATTR = {
     "ads": false,
     "name": "Spotify Premium",
@@ -777,22 +781,24 @@ export default async function (ctx) {
     "type": "premium",
     "product": "premium",
     "catalogue": "premium",
+    "financial-product": "pr:premium,tc:0",
+    "payments-initial-campaign": "default",
+    "product-expiry": yearOn,
+    "subscription-enddate": yearOn,
     // 让桌面客户端优先采用 UCS 下发的 product state，这样才会相信改写的
     // product / catalogue，而不是回头再查账号状态。只影响展示与远程配置。
     "com.spotify.madprops.delivered.by.ucs": true,
     "com.spotify.madprops.use.ucs.product.state": true
   };
 
+  // 真正的播放授权字段，只在 unlock_playback 打开时写。
   const MAC_PLAY_ATTR = {
     "player-license": "premium",
     "player-license-v2": "premium",
     "streaming-rules": "",
     "on-demand": true,
     "unrestricted": true,
-    "high-bitrate": true,
-    "financial-product": "pr:premium,tc:0",
-    "product-expiry": yearOn,
-    "subscription-enddate": yearOn
+    "high-bitrate": true
   };
 
   // 会让客户端重新向服务端确认状态或弹出试用提示的属性，删除后避免回退到免费版。
