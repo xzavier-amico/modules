@@ -733,6 +733,21 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return;
   }
 
+  // 桌面端（macOS / Windows 新版播放器）跑在 CEF 里，歌词请求是跨域 fetch：
+  // 先发 OPTIONS 预检，再发 GET。预检响应只带 CORS 头、没有 body，脚本一旦
+  // 把它当成「官方没歌词」回一份歌词 JSON，Access-Control-Allow-* 就被顶掉，
+  // 浏览器直接判 PreflightMissingAllowOriginHeader，GET 根本发不出去，
+  // App 显示「无法加载这首歌曲的歌词，请稍后再试」。
+  // 所以：预检一律原样放行；带预检标记头（Allow-Methods / Max-Age）的响应
+  // 也不碰，避免误判。iOS 客户端不发 OPTIONS，这条分支对移动端不生效。
+  const requestMethod = String((req && req.method) || "").toUpperCase();
+  const preflightResponse = !!res && (headerValue(res.headers, "access-control-allow-methods") !== ""
+    || headerValue(res.headers, "access-control-max-age") !== "");
+  if (!HELPER && (requestMethod === "OPTIONS" || preflightResponse)) {
+    $done({});
+    return;
+  }
+
   // LRCLIB 要求请求方在 UA 里说明自己是谁，所以默认保留这个描述性 UA。
   // 网易云 / QQ 音乐用的是网页接口，按接口形态换成浏览器 UA：
   // 非浏览器 UA 目前也能拿到数据，但更容易被风控或后续加白名单时挡掉。
@@ -1069,8 +1084,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   // 请求阶段：缓存命中直接返回合成歌词，跳过官方请求；未命中立即放行。
+  // 桌面端不做请求阶段合成：凭空造一份跨域响应要自己补 CORS 头，稍有出入浏览器
+  // 就整条请求失败；桌面端的官方歌词请求本身很快（没有就 404），留到响应阶段
+  // 合并原有响应头更稳。iOS 仍然走原来的缓存直达逻辑。
   if (!res) {
-    if (!HELPER && trackId && flag(opt.enable_lyrics, true)) {
+    if (!HELPER && !desktop && trackId && flag(opt.enable_lyrics, true)) {
       cacheKey = lyricsCacheKey(trackId);
       const cached = readLyricsCache(cacheKey, trackId);
       const proto = requestedProtoMode();
@@ -1090,7 +1108,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
           const body = JSON.stringify(cached.payload);
           finish({
             status: 200,
-            headers: { "Content-Type": "application/json; charset=utf-8" },
+            headers: syntheticHeaders("application/json; charset=utf-8", encoder.encode(body).length),
             body: body,
           });
         }
@@ -1181,7 +1199,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     } else if (hasLyrics(trimmed)) {
       const cleaned = stripRestrictionJson(trimmed);
       if (cleaned) {
-        finish({ status: 200, headers: { "Content-Type": "application/json; charset=utf-8" }, body: cleaned });
+        finish(jsonResponse(cleaned));
       } else {
         finish({});
       }
@@ -1940,12 +1958,56 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       return;
     }
 
-    const body = JSON.stringify(payload);
-    finish({
-      status: 200,
-      headers: { "Content-Type": "application/json; charset=utf-8" },
-      body: body,
-    });
+    // 桌面端是跨域 fetch：合成响应必须带上原响应的 CORS 头，否则浏览器判定
+    // 实际响应不可读，App 显示「无法加载这首歌曲的歌词」。
+    finish(jsonResponse(JSON.stringify(payload)));
+  }
+
+  // 请求阶段合成没有官方响应头可抄。只有请求带 Origin（浏览器 / CEF 桌面端）
+  // 时才补 CORS 头；iOS 原生客户端不带 Origin，返回的响应头和以前完全一致。
+  function syntheticHeaders(contentType, length) {
+    const headers = { "Content-Type": contentType };
+    if (length !== undefined) headers["Content-Length"] = String(length);
+    const origin = headerValue(req && req.headers, "origin");
+    if (origin) {
+      headers["Access-Control-Allow-Origin"] = origin;
+      headers["Access-Control-Allow-Credentials"] = "true";
+      headers["Vary"] = "Origin";
+    }
+    return headers;
+  }
+
+  // 用官方响应头做底、只换 body：CORS 头（Access-Control-Allow-Origin 等）
+  // 原样保留，Content-Length 按新 body 重算，Content-Encoding 去掉（脚本拿到的
+  // 已经是解压后的字节，再声明 gzip / br 浏览器会解析失败）。
+  function jsonResponse(body) {
+    const headers = {};
+    const source = res && res.headers;
+    if (source && "object" == typeof source) {
+      for (const key in source) {
+        const lower = String(key).toLowerCase();
+        if (lower === "content-length" || lower === "content-encoding"
+          || lower === "content-type" || lower === "transfer-encoding") continue;
+        headers[key] = source[key];
+      }
+    }
+    let hasOrigin = false;
+    for (const key in headers) {
+      if (String(key).toLowerCase() === "access-control-allow-origin") hasOrigin = true;
+    }
+    if (!hasOrigin) {
+      // 预检通过后，实际响应仍要回一条 Allow-Origin；带 authorization 头的
+      // 请求按凭据模式处理，还需要 Allow-Credentials。
+      const origin = headerValue(req && req.headers, "origin");
+      headers["Access-Control-Allow-Origin"] = origin || "*";
+      if (origin) {
+        headers["Access-Control-Allow-Credentials"] = "true";
+        headers["Vary"] = "Origin";
+      }
+    }
+    headers["Content-Type"] = "application/json; charset=utf-8";
+    headers["Content-Length"] = String(encoder.encode(body).length);
+    return { status: 200, headers: headers, body: body };
   }
 
   // ---- protobuf ---------------------------------------------------------
@@ -2233,6 +2295,10 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         language: language,
         isRtlLanguage: false,
         fullscreenAction: "FULLSCREEN_LYRICS",
+        // 桌面端（CEF / xpui）直接读 previewLines 做歌词卡预览，缺这个字段会抛
+        // TypeError（undefined.map），整页歌词退化成「无法加载」。官方 JSON
+        // 一直带它，这里按同样的前 N 行补齐；iOS 走 protobuf，不受影响。
+        previewLines: lines.slice(0, PREVIEW_LINES),
       },
       colors: {
         background: signed(palette.background),

@@ -93,8 +93,20 @@ crossfade；这两项保持服务端与 App 自己的设置。AutoMix 仍在远�
   授权由服务端判定，强行写会让客户端以为有 Premium 播放权，几秒后拿不到音频密钥
   就跳歌。
 - `unlock_playback=auto` 在桌面端默认关闭；需要尝试时手动改成 `true`。
-- 桌面端歌词页走 `color-lyrics/v2/track/{id}`。没有 body 时按 `Content-Type` /
-  `Accept` 判断客户端要 JSON 还是 protobuf，桌面端默认 JSON。
+- 桌面端歌词页走 `color-lyrics/v2/track/{id}/image/{封面}`：官方客户端把歌词和封面色
+  合到一个「image」路径上，格式仍由 `?format=json` 决定。桌面端跑在 CEF 里，这条请求
+  是跨域 fetch，**先发 OPTIONS 预检再发 GET**：预检响应只有 CORS 头、没有 body，
+  脚本如果当成「官方没歌词」回一份歌词 JSON，`Access-Control-Allow-*` 就被顶掉，
+  浏览器判 `PreflightMissingAllowOriginHeader`，歌词页直接显示「无法加载这首歌曲的
+  歌词，请稍后再试」。所以歌词脚本对 `OPTIONS`（以及任何带 `Allow-Methods` /
+  `Max-Age` 的响应）一律原样放行；合成响应时以原响应头为底、只换 body，保证 CORS 头
+  和 `Vary: Origin` 留着。
+- 桌面端合成歌词必须带 `lyrics.previewLines`（歌词卡预览列表）。客户端对它直接
+  `.map()`，缺字段会抛 `TypeError`，整页歌词同样退化成「无法加载」。protobuf 补的是
+  字段 17，JSON 也会补同一份数据。
+- 桌面端不做请求阶段的缓存直达：凭空造跨域响应要自己补 CORS 头，稍有出入整条请求就
+  废；官方请求本身很快（没歌词就是 404），统一走响应阶段合并响应头更稳。iOS 仍按原
+  来的请求阶段命中缓存。
 - `bootstrap` / `user-customization-service` 的外层结构可能和 iOS 不同，脚本会先走
   已知路径，再递归找 `UcsResponse`；只有确认是 UCS 才改写。
 

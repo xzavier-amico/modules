@@ -57,3 +57,27 @@ section {
 滚动页的赞助卡独占一个 section：section 里通常是 section id（字段 23）和广告内容（字段 30）。
 
 过滤时删除整个 section，而不是只改字段号，避免客户端拿到一张「有 id、没有内容」的空卡片。
+
+## 桌面端（macOS / Windows 新版播放器）
+
+新版桌面客户端是 CEF 里的 xpui，歌词请求和 iOS 不一样：
+
+- 歌词正文走 `color-lyrics/v2/track/{id}/image/{封面}?format=json`（官方把歌词和
+  封面色合在「image」这个路径上），返回的是同一份歌词 JSON。
+- 这条请求是**跨域 fetch**：先发 `OPTIONS` 预检，再发 `GET`，请求带
+  `Origin: https://xpui.app.spotify.com` 与 `Access-Control-Request-Headers`。
+
+因此歌词脚本有两条桌面端专属约束：
+
+1. `OPTIONS` 预检（以及任何带 `Access-Control-Allow-Methods` / `Max-Age` 的响应）
+   一律原样放行。预检响应没有 body，一旦被当成「官方没歌词」回一份歌词 JSON，
+   `Access-Control-Allow-Origin` 就没了，浏览器报
+   `PreflightMissingAllowOriginHeader`，`GET` 根本发不出去，App 显示
+   「无法加载这首歌曲的歌词，请稍后再试」。症状是 Loon 的脚本记录里只有
+   `OPTIONS`、没有对应的 `GET`。
+2. 合成响应以官方响应头为底，只替换 body：保留 CORS 头、重算 `Content-Length`、
+   去掉 `Content-Encoding`；JSON 里必须带 `lyrics.previewLines`（客户端直接
+   `.map()`，缺了抛 `TypeError`，同样显示「无法加载」）。
+
+桌面端不在请求阶段回缓存歌词：跨域响应要自己补 CORS 头，风险比省下的那次请求大，
+统一在响应阶段合成。

@@ -404,6 +404,83 @@ check("Spotify request phase passes through when the cache is empty", () => {
   }
 });
 
+check("Spotify lyrics leave the desktop CORS preflight untouched", () => {
+  // 桌面端（macOS / Windows 新版播放器跑在 CEF 里）先发 OPTIONS 预检再发 GET。
+  // 预检响应没有 body，脚本如果当成「官方没歌词」回一份歌词 JSON，CORS 头就被
+  // 顶掉，浏览器判 PreflightMissingAllowOriginHeader，歌词页报「无法加载」。
+  const id = "0VjIjW4GlUZAMYd2vXMi3b";
+  const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id
+    + "/image/spotify%3Aimage%3Aab67616d0000b273d6dbe22a1e76bce856461820?format=json&vocalRemoval=false&market=from_token";
+  for (const platform of ["loon", "shadowrocket"]) {
+    const out = run(platform + "/spotify/js/spotify_lyrics.js", "", url, ["auto", true, "macos"], {
+      $response: undefined,
+      $request: { url, method: "OPTIONS", headers: { origin: "https://xpui.app.spotify.com" } },
+      $persistentStore: lyricsStore(id),
+      $httpClient: { get: () => assert.fail(platform + " preflight must not be rewritten") },
+    });
+    assert.equal(Object.keys(out).length, 0, platform + " preflight");
+  }
+  // 兜底：即使拿不到请求方法，带预检标记头的响应也不改写。
+  const out = run("loon/spotify/js/spotify_lyrics.js", "", url, ["auto", true, "macos"], {
+    $response: { status: 200, headers: { "access-control-allow-methods": "GET, OPTIONS", "access-control-max-age": "600" }, body: "" },
+    $persistentStore: { read: () => null, write: () => true },
+    $httpClient: { get: () => assert.fail("preflight response must not trigger a lookup") },
+  });
+  assert.equal(Object.keys(out).length, 0);
+});
+
+check("Spotify desktop lyrics keep CORS headers and preview lines", () => {
+  const id = "desktopprev";
+  const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id
+    + "/image/spotify%3Aimage%3Aabc?format=json&vocalRemoval=false&market=from_token";
+  const map = { "spotify.track.meta.v2": JSON.stringify({ [id]: ["Song", "Artist", 200000, Date.now()] }) };
+  const store = { read: (key) => (key in map ? map[key] : null), write: (value, key) => { map[key] = value; return true; } };
+  const http = {
+    get: (request, callback) => callback(null, { status: 200 }, JSON.stringify(
+      request.url.includes("/api/get") ? { trackName: "Song", artistName: "Artist", syncedLyrics: "[00:01.00]a\n[00:02.00]b" } : [],
+    )),
+  };
+  const out = run("loon/spotify/js/spotify_lyrics.js", "", url, ["lrclib", true, "macos"], {
+    $response: {
+      status: 404,
+      headers: {
+        "access-control-allow-origin": "https://xpui.app.spotify.com",
+        "access-control-allow-credentials": "true",
+        "content-encoding": "gzip",
+        "content-length": "12",
+      },
+      body: "",
+    },
+    $request: { url, method: "GET", headers: { origin: "https://xpui.app.spotify.com", accept: "application/json" } },
+    $persistentStore: store,
+    $httpClient: http,
+  });
+  const headers = {};
+  for (const key in out.headers) headers[String(key).toLowerCase()] = out.headers[key];
+  assert.equal(out.status, 200);
+  assert.equal(headers["access-control-allow-origin"], "https://xpui.app.spotify.com", "CORS header must survive");
+  assert.equal(headers["access-control-allow-credentials"], "true");
+  assert.equal(headers["content-encoding"], undefined, "content-encoding must be dropped");
+  assert.equal(headers["content-length"], String(new TextEncoder().encode(out.body).length), "content-length must follow the new body");
+  const payload = JSON.parse(out.body);
+  // 桌面端读 lyrics.previewLines 做歌词卡预览，缺字段会抛 TypeError。
+  assert.deepEqual(payload.lyrics.previewLines.map((line) => line.words), ["a", "b"]);
+  assert.equal(payload.colors.text, -16777216);
+});
+
+check("Spotify desktop request phase never fabricates a cross-origin response", () => {
+  // 凭空造跨域响应要自己补 CORS 头，稍有出入整条请求就废；桌面端留给响应阶段。
+  const id = "0VjIjW4GlUZAMYd2vXMi3b";
+  const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json&vocalRemoval=false";
+  const out = run("loon/spotify/js/spotify_lyrics.js", "", url, ["auto", true, "macos"], {
+    $response: undefined,
+    $request: { url, method: "GET", headers: {} },
+    $persistentStore: lyricsStore(id),
+    $httpClient: { get: () => assert.fail("desktop request phase must not query providers") },
+  });
+  assert.equal(Object.keys(out).length, 0);
+});
+
 check("Spotify han variant table folds traditional text with phrase exceptions", () => {
   const context = vm.createContext({});
   vm.runInContext(read("src/spotify/t2s.js") + "\nglobalThis.han = SPOTIFY_HAN_VARIANTS;", context);
