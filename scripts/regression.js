@@ -611,6 +611,40 @@ check("Spotify official protobuf preserves opaque 64-bit and fixed-width fields"
   assert.equal(Object.keys(run("loon/spotify/js/spotify_lyrics.js", new Uint8Array([10, 127]), "https://spclient.wg.spotify.com/color-lyrics/v2/track/id")).length, 0);
 });
 
+check("Spotify desktop JSON track metadata gets has_lyrics", () => {
+  // 桌面端拉 metadata/4/track 时 accept 是 application/json，响应是
+  // { gid, name, has_lyrics, ... }；只按 protobuf 改不到它。
+  const body = JSON.stringify({
+    gid: "000f22c0461543e4a19bc1ec119d2c4e",
+    name: "書劍恩仇錄",
+    has_lyrics: false,
+    duration: 189753,
+    artist: [{ gid: "abc", name: "鄭少秋" }],
+    album: { name: "鄭少秋精選" },
+  });
+  const url = "https://spclient.wg.spotify.com/metadata/4/track/000f22c0461543e4a19bc1ec119d2c4e?market=from_token";
+  const args = { spoof_premium: true, block_ads: true, unlock_playback: false, enable_lyrics: true, desktop: "macos", lyrics_source: "auto" };
+  const out = run("loon/spotify/js/spotify.js", body, url, args, {
+    $request: { url, method: "GET", headers: { accept: "application/json", origin: "https://xpui.app.spotify.com" } },
+    $response: {
+      status: 200,
+      headers: { "content-type": "application/json; charset=utf-8", "content-length": "10",
+        "access-control-allow-origin": "https://xpui.app.spotify.com" },
+      body,
+    },
+    $persistentStore: { read: () => null, write: () => true },
+  });
+  assert.ok(out && out.body, "JSON metadata must be patched");
+  const patched = JSON.parse(new TextDecoder().decode(out.body));
+  assert.equal(patched.has_lyrics, true, "has_lyrics must be true");
+  assert.equal(patched.name, "書劍恩仇錄", "other fields stay");
+  assert.deepEqual(patched.artist, [{ gid: "abc", name: "鄭少秋" }]);
+  const headers = {};
+  for (const key in out.headers) headers[String(key).toLowerCase()] = out.headers[key];
+  assert.equal(headers["content-type"], "application/json; charset=utf-8", "JSON content-type must stay");
+  assert.equal(headers["access-control-allow-origin"], "https://xpui.app.spotify.com");
+});
+
 check("Spotify patched responses keep CORS headers for the desktop client", () => {
   // 元数据改写后如果只回 body，Loon 会把 Access-Control-Allow-* 顶掉，桌面端
   // 这条跨域 fetch 直接失败 → has_lyrics 拿不到 → 客户端认为没有歌词。

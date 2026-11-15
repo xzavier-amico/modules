@@ -1721,7 +1721,43 @@
     rememberTracks(found);
   }
 
+  // 桌面端（CEF）拉 track 元数据时要的是 JSON：accept: application/json，
+  // 响应是 { gid, name, has_lyrics, ... }。只按 protobuf 改的话 has_lyrics 永远是
+  // 服务端给的原值（false），客户端就认为这首歌没有歌词、连 color-lyrics 都不请求。
+  function patchMetaJson(text, target) {
+    let data = null;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      return null;
+    }
+    if (!data || "object" !== typeof data || Array.isArray(data)) return null;
+    if (typeof data.gid !== "string" && typeof data.uri !== "string") return null;
+    let changed = false;
+    if (data.has_lyrics !== true) {
+      data.has_lyrics = true;
+      changed = true;
+    }
+    // 顺手把曲名 / 歌手 / 时长写进缓存，歌词脚本查源时零请求。
+    const store = cacheStore();
+    const id = /\/metadata\/4\/track\/([A-Za-z0-9]{22})/.exec(target);
+    if (store && id && typeof data.name === "string") {
+      const artist = Array.isArray(data.artist) ? data.artist.map((item) => item && item.name).filter(Boolean)[0] : null;
+      if (artist) {
+        const found = Object.create(null);
+        found[id[1]] = [data.name, artist, Number(data.duration) || 0];
+        rememberTracks(found);
+      }
+    }
+    return changed ? JSON.stringify(data) : null;
+  }
+
   function patchMeta(buffer, target) {
+    const json = asJsonText(buffer);
+    if (json) {
+      const patched = patchMetaJson(json, target);
+      return patched ? WIRE_TEXT.encode(patched) : null;
+    }
     const fields = parse(buffer);
     if (!fields) return null;
     // 元数据缓存只读字段，不要求整包可逐字节重建：先把曲名 / 歌手 / 时长
