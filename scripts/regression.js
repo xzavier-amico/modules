@@ -331,27 +331,26 @@ check("Shadowrocket Spotify feed argument JSON stays valid", () => {
   assert.equal(JSON.parse(raw).enable_lyrics, true);
 });
 
-check("Spotify modules expose the language and timezone switches", () => {
+check("Spotify modules always spoof the timezone and leave Accept-Language alone", () => {
   const egern = read("egern/spotify/spotify-enhance.yaml");
-  assert.match(egern, /force_zh_hans:/);
-  assert.match(egern, /spoof_timezone:/);
+  assert.ok(!egern.includes("force_zh_hans"), "egern must not expose the retired language switch");
+  assert.ok(!egern.includes("spoof_timezone"), "egern must not expose the retired timezone switch");
   assert.ok(egern.includes("spotify.headers.js"), "egern must run the headers script");
   assert.ok(!egern.includes("debug_log"), "egern must not expose the retired log switch");
   for (const file of ["loon/spotify/spotify-enhance.plugin", "loon/spotify/spotify-enhance-mac.plugin"]) {
     const text = read(file);
-    assert.ok(text.includes("force_zh_hans = "), file + " must declare force_zh_hans");
-    assert.ok(text.includes("spoof_timezone = "), file + " must declare spoof_timezone");
+    assert.ok(!text.includes("force_zh_hans = "), file + " must not expose the retired language switch");
+    assert.ok(!text.includes("spoof_timezone = "), file + " must not expose the retired timezone switch");
     assert.ok(text.includes("spotify.headers.js"), file + " must run the headers script");
     assert.ok(!text.includes("debug_log"), file + " must not expose the retired log switch");
   }
   const sr = read("shadowrocket/spotify/spotify-enhance.sgmodule");
-  assert.ok(sr.includes("强制简体中文:true"), "shadowrocket must expose the language switch");
-  assert.ok(sr.includes("伪装时区:true"), "shadowrocket must expose the timezone switch");
+  assert.ok(!sr.includes("强制简体中文:true"), "shadowrocket must not expose the retired language switch");
+  assert.ok(!sr.includes("伪装时区:true"), "shadowrocket must not expose the retired timezone switch");
   assert.ok(sr.includes("spotify.headers.js"), "shadowrocket must run the headers script");
   assert.ok(!sr.includes("排障日志"), "shadowrocket must not expose the retired log switch");
   const headerLine = sr.split("\n").find((line) => line.startsWith("spotify.headers ="));
-  const headerArgs = /argument="(.*)"$/.exec(headerLine)[1].replace(/\{\{\{[^}]*\}\}\}/g, "true");
-  assert.deepEqual(JSON.parse(headerArgs), { force_zh_hans: true, spoof_timezone: true });
+  assert.ok(!headerLine.includes("argument="), "the headers script takes no arguments");
 });
 
 check("Egern lyrics script declares body_required", () => {
@@ -1544,14 +1543,16 @@ check("Loon passes arguments in the declared order", () => {
   assert.equal(scriptRules.length, 8);
   for (const line of scriptRules) {
     assert.ok(/\?v=\d{8}-\d+/.test(line), line);
+    if (line.includes("spotify.headers.js")) {
+      assert.ok(!line.includes('", {'), "the headers script takes no arguments");
+      continue;
+    }
     const tuple = /then script\("[^"]+", (\{.*\})\) with/.exec(line)[1];
     assert.match(tuple, /^\{\$\{\w+\}(?:, \$\{\w+\})*\}$/, "Loon tuple must contain only declared argument references");
     const names = [...tuple.matchAll(/\$\{(\w+)\}/g)].map((match) => match[1]);
     for (const name of names) assert.ok(new RegExp("^" + name + " = ", "m").test(plugin));
-    if (line.includes("spotify.headers.js")) {
-      assert.deepEqual(names, ["force_zh_hans", "spoof_timezone"]);
-    } else if (line.includes("spotify_lyrics.js")) {
-      assert.deepEqual(names, ["lyrics_source", "enable_lyrics", "desktop", "force_zh_hans"]);
+    if (line.includes("spotify_lyrics.js")) {
+      assert.deepEqual(names, ["lyrics_source", "enable_lyrics", "desktop"]);
     } else {
       assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source"]);
     }
@@ -1678,41 +1679,39 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
   });
 }
 
-check("Spotify headers script rewrites language and timezone", () => {
+check("Spotify headers script rewrites only the timezone", () => {
   const file = "loon/spotify/js/spotify.headers.js";
   const url = "https://spclient.wg.spotify.com/bootstrap/v1?timezone=Asia/Shanghai&market=TW";
-  const call = (args, store) => {
+  const call = (store, target = url) => {
     const calls = [];
     const context = vm.createContext({ TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, console,
-      $request: { url, headers: { "User-Agent": "Spotify/1.0", "Accept-Language": "zh-TW" } },
-      $argument: args, $persistentStore: store, $done: (value) => calls.push(value) });
+      $request: { url: target, headers: { "User-Agent": "Spotify/1.0", "Accept-Language": "zh-TW" } },
+      $persistentStore: store, $done: (value) => calls.push(value) });
     vm.runInContext(read(file), context, { timeout: 10000 });
     assert.equal(calls.length, 1, "headers script must finish once");
     return calls[0];
   };
   const storeFor = (region) => ({ read: () => region, write: () => true });
 
-  const tw = call(["true", "true"], storeFor("TW"));
+  const tw = call(storeFor("TW"));
   assert.ok(tw.url.includes("timezone=Asia/Taipei"), "the account region must win over the market param");
-  assert.equal(tw.headers["Accept-Language"], "zh-CN,zh-Hans;q=0.9,zh;q=0.8");
-  assert.equal(tw.headers["User-Agent"], "Spotify/1.0", "other headers must survive");
+  assert.ok(!("headers" in tw), "the script must not touch Accept-Language or any other header");
 
-  const cn = call(["true", "true"], storeFor("CN"));
-  assert.equal(cn.url, undefined, "a mainland account already has Asia/Shanghai in the URL");
-  assert.ok(cn.headers["Accept-Language"], "the language header is still rewritten");
+  const cn = call(storeFor("CN"));
+  assert.equal(Object.keys(cn).length, 0, "a mainland account already has Asia/Shanghai in the URL");
 
-  const market = call(["true", "true"], { read: () => null, write: () => true });
+  const market = call({ read: () => null, write: () => true });
   assert.ok(market.url.includes("timezone=Asia/Taipei"), "market=XX is the fallback when no region was stored");
 
-  const off = call(["false", "false"], storeFor("TW"));
-  assert.deepEqual(Object.keys(off), [], "both switches off must pass through");
+  const plain = call(storeFor("TW"), "https://spclient.wg.spotify.com/bootstrap/v1");
+  assert.equal(Object.keys(plain).length, 0, "requests without a timezone param pass through");
 });
 
 check("Spotify headers script falls back to Asia/Hong_Kong without a region", () => {
   const calls = [];
   const context = vm.createContext({ TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, console,
     $request: { url: "https://spclient.wg.spotify.com/bootstrap/v1?timezone=Europe/London", headers: {} },
-    $argument: ["true", "true"], $persistentStore: { read: () => null, write: () => true },
+    $persistentStore: { read: () => null, write: () => true },
     $done: (value) => calls.push(value) });
   vm.runInContext(read("loon/spotify/js/spotify.headers.js"), context, { timeout: 10000 });
   assert.ok(calls[0].url.includes("timezone=Asia/Hong_Kong"));

@@ -42,8 +42,8 @@
     try {
       const raw = typeof $argument !== "undefined" ? $argument : undefined;
       if (Array.isArray(raw)) {
-        // Loon 位置参数：歌词源, 补全歌词, 设备类型, 强制简体中文。
-        opt = { lyrics_source: raw[0], enable_lyrics: raw[1], desktop: raw[2], force_zh_hans: raw[3] };
+        // Loon 位置参数：歌词源, 补全歌词, 设备类型。
+        opt = { lyrics_source: raw[0], enable_lyrics: raw[1], desktop: raw[2] };
       }
       else if (typeof raw === "string") {
         try {
@@ -106,7 +106,6 @@
   const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
   // search_for_qq_cp 是 QQ 音乐的移动端入口，配移动浏览器 UA 更一致。
   const MOBILE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
-  const ACCEPT_LANGUAGE = "zh-CN,zh-Hans;q=0.9,zh;q=0.8";
   const utf8 = new TextDecoder("utf-8");
   const encoder = new TextEncoder();
 
@@ -1168,8 +1167,6 @@
     };
     try {
       const headers = { "User-Agent": USER_AGENT, Accept: target.indexOf("/embed/track/") >= 0 ? "text/html" : "application/json" };
-      // oEmbed / embed 会按请求语言返回曲名；不强制时保留服务端默认行为。
-      if (flag(opt.force_zh_hans, true)) headers["Accept-Language"] = ACCEPT_LANGUAGE;
       if (extraHeaders) {
         for (const key in extraHeaders) {
           if (Object.prototype.hasOwnProperty.call(extraHeaders, key)) headers[key] = extraHeaders[key];

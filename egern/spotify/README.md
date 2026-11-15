@@ -21,17 +21,12 @@
 | `enable_lyrics` | true | 补全歌词；关闭后不补元数据、歌词与歌词卡 |
 | `lyrics_source` | auto | 歌词源；`auto` 并发查询网易云 / QQ / LRCLIB，不自动查 Musixmatch |
 | `desktop` | auto | 设备类型；`auto` 按 UA 识别 iPhone / iPad 与 Mac，识别不准时手动指定 |
-| `force_zh_hans` | true | 把 Spotify 请求的 `Accept-Language` 改成简体中文，避免曲名、歌词与元数据按账号或出口地区回繁体 |
-| `spoof_timezone` | true | 按账号地区改写请求里的 `timezone`；识别不到地区时用 `Asia/Hong_Kong` |
 
-## 语言与时区
+## 时区
 
-`js/spotify.headers.js` 挂在请求阶段，只做两件事：
+`js/spotify.headers.js` 挂在请求阶段，固定把 URL 里的 `timezone=` 改成账号地区对应的时区。账号地区由 `js/spotify.js` 从 bootstrap / UCS 的 `country` 属性抄到本地存储 `spotify.account.region`；没有记录时看请求里的 `market=XX`，仍然没有就用 `Asia/Hong_Kong`。中国大陆账号会得到 `Asia/Shanghai`，台湾 `Asia/Taipei`，香港 `Asia/Hong_Kong`。
 
-- `force_zh_hans`：把 `Accept-Language` 统一成 `zh-CN,zh-Hans;q=0.9,zh;q=0.8`。Spotify 会按账号地区或出口 IP 回繁体中文，第三方曲库用繁体曲名也更容易查不到；系统语言不是简体、或想保留原文时关闭。
-- `spoof_timezone`：把 URL 里的 `timezone=` 改成账号地区对应的时区。账号地区由 `js/spotify.js` 从 bootstrap / UCS 的 `country` 属性抄到本地存储 `spotify.account.region`；没有记录时看请求里的 `market=XX`，仍然没有就用 `Asia/Hong_Kong`。中国大陆账号会得到 `Asia/Shanghai`，台湾 `Asia/Taipei`，香港 `Asia/Hong_Kong`。
-
-时区只影响请求参数，不改系统时间；关闭后请求原样放行。
+时区只影响请求参数，不改系统时间。脚本不再改 `Accept-Language`：Spotify 的歌词语言由账号 / 客户端语言配置决定，改请求头只能影响接口的本地化文案，改不了歌词文本。
 
 ## 歌词
 
@@ -94,7 +89,7 @@ crossfade；这两项保持服务端与 App 自己的设置。AutoMix 仍在远�
 - 桌面端广告接口 `/ads/v1|v2/` 由 `url_rewrites` 直接 reject（404）；Loon 插件里对应的是 `reject(404)`。
 - Egern 不支持按参数加载脚本；关闭补全歌词后脚本仍会加载，但会立即返回。
 - 脚本 URL 带 `?v=日期`；客户端元数据有缓存，更新后需重启 App 或打开未缓存的歌单。
-- 已删除的参数（`lyrics_debug`、`debug_log`、`lyrics_mode`）在旧安装里可能仍显示；需要在客户端删除模块后重新导入，并完全退出 App 再打开。脚本按 URL 缓存，只改 `?v=` 而不重新导入时，旧脚本可能继续运行。
-- 新增 `spotify.headers` 请求脚本；旧安装需要重新导入模块才会带上它，只更新 YAML 而不重新导入时 `Accept-Language` 与时区不会生效。
+- 已删除的参数（`lyrics_debug`、`debug_log`、`lyrics_mode`、`force_zh_hans`、`spoof_timezone`）在旧安装的模块引用里可能仍以 env 形式保留并显示；模块文件本身已经没有这些键。需要在该模块的环境变量里删掉它们，或删除模块引用后重新添加。脚本按 URL 缓存，只改 `?v=` 而不重新导入时，旧脚本可能继续运行。
+- `spotify.headers` 请求脚本固定伪装时区；旧安装需要重新导入模块才会带上它，只更新 YAML 而不重新导入时不会生效。脚本不再改 `Accept-Language`。
 - 需开启 MitM：`*-spclient.spotify.com`、`spclient.wg.spotify.com`。
 - 音质、下载与 Spotify Connect 由服务端判定，脚本无法修改。
