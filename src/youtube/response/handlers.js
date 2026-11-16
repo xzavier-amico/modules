@@ -75,6 +75,8 @@
         return;
       }
 
+      if (options.probe) probeAppCards(node);
+
       // 画质上限或编码偏好任一开启都要刷新缓存：request 阶段按缓存 itag 改写。
       if (false !== options.autoHd || "any" !== options.videoCodec) {
         const players = (function () {

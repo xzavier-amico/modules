@@ -153,11 +153,19 @@
     return false;
   }
 
-  // 新闻 / 图文卡片的版式名。item 本身可能不带 renderInfo，留给字节标记兜底。
-  function isFeedCardLayout(node) {
+  // 版式名：列表项本身通常没有 renderInfo，得往下钻两层
+  // （item → videoWithContextRenderer → videoRendererContent → renderInfo）。
+  function itemLayouts(node, depth = 0, out = []) {
+    if (!node || "object" != typeof node || ArrayBuffer.isView(node) || depth > 3) return out;
     const eml = node.renderInfo?.layoutRender?.eml || node.layoutRender?.eml;
-    const layout = eml && String(eml).split("|")[0];
-    return !!layout && FEED_CARD_LAYOUT.test(layout);
+    if (eml) out.push(String(eml).split("|")[0]);
+    for (const key of ["videoWithContextRenderer", "videoRendererContent", "elementRenderer", "content"]) itemLayouts(node[key], depth + 1, out);
+    return out;
+  }
+
+  // 新闻 / 图文卡片的版式名。item 本身可能不带 renderInfo，往下钻几层一起看。
+  function isFeedCardLayout(node) {
+    return itemLayouts(node).some((layout) => FEED_CARD_LAYOUT.test(layout));
   }
 
   const CONTAINER_KEYS = new Set(["richItemContents", "overlays"]);

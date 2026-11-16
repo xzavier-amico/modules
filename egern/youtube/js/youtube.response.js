@@ -766,6 +766,7 @@ export default async function (ctx) {
     video_codec: "videoCodec",
     web_cleanup: "webCleanup",
     music_cleanup: "musicCleanup",
+    probe: "probe",
   };
 
   // 旧版插件的 26 个参数顺序。Loon 旧版按位置传数组时用它还原；
@@ -800,7 +801,7 @@ export default async function (ctx) {
     "stripHotHash",
   ];
 
-  // 当前 Loon 位置数组（20 项）。末尾追加的新参数按这个顺序还原；
+  // 当前 Loon 位置数组（21 项）。末尾追加的新参数按这个顺序还原；
   // 旧长度的位置数组走下面按长度分的兼容表。
   const CURRENT_ARG_ORDER = [
     "block_ads",
@@ -823,6 +824,7 @@ export default async function (ctx) {
     "video_codec",
     "web_cleanup",
     "music_cleanup",
+    "probe",
   ];
 
   // 只加过 block_feed_cards 的那一版（13 项）：客户端缓存旧插件时仍按它的顺序还原。
@@ -1090,6 +1092,8 @@ export default async function (ctx) {
     // 网页版 topbar 按钮与 YouTube Music 首页推荐。
     options.webCleanup = asBool(options.webCleanup, false);
     options.musicCleanup = asBool(options.musicCleanup, false);
+    // 排障日志：打印推荐流卡片的真实结构，默认关闭。
+    options.probe = asBool(options.probe, false);
 
     const result = { ...defaults, ...options };
     if (noDefaults) OPTIONS_CACHE = result;
@@ -1839,11 +1843,19 @@ export default async function (ctx) {
     return false;
   }
 
-  // 新闻 / 图文卡片的版式名。item 本身可能不带 renderInfo，留给字节标记兜底。
-  function isFeedCardLayout(node) {
+  // 版式名：列表项本身通常没有 renderInfo，得往下钻两层
+  // （item → videoWithContextRenderer → videoRendererContent → renderInfo）。
+  function itemLayouts(node, depth = 0, out = []) {
+    if (!node || "object" != typeof node || ArrayBuffer.isView(node) || depth > 3) return out;
     const eml = node.renderInfo?.layoutRender?.eml || node.layoutRender?.eml;
-    const layout = eml && String(eml).split("|")[0];
-    return !!layout && FEED_CARD_LAYOUT.test(layout);
+    if (eml) out.push(String(eml).split("|")[0]);
+    for (const key of ["videoWithContextRenderer", "videoRendererContent", "elementRenderer", "content"]) itemLayouts(node[key], depth + 1, out);
+    return out;
+  }
+
+  // 新闻 / 图文卡片的版式名。item 本身可能不带 renderInfo，往下钻几层一起看。
+  function isFeedCardLayout(node) {
+    return itemLayouts(node).some((layout) => FEED_CARD_LAYOUT.test(layout));
   }
 
   const CONTAINER_KEYS = new Set(["richItemContents", "overlays"]);
@@ -2363,6 +2375,87 @@ export default async function (ctx) {
     }
 
     return changed;
+  }
+
+  //=====================================================================================
+  // §12 排障：把推荐流里卡片的真实结构打到日志
+  //
+  // 只读不改，默认关闭，靠 probe 参数打开。用来回答「这张卡片在响应里长什么样」：
+  //   App（protobuf）：每个列表项打一行——字段号、已建模的键、.eml 版式名、
+  //                    以及卡片里出现的可疑内部标识。
+  //   网页版（JSON）：每个列表打一行——数组键 → 单键包装链，例如
+  //                    richItemContents -> richItemRenderer.content.postRenderer
+  // 同一份签名在一次响应里只打一次，避免刷屏。
+  //=====================================================================================
+
+  const PROBE_MAX_LINES = 40;
+  const PROBE_EML = /[a-z0-9_]{3,}\.eml(?:-js)?(?:-fe)?/g;
+  const PROBE_IDENTIFIER = /[a-z][a-z0-9]{1,}(?:_[a-z0-9]+){1,4}/g;
+
+  function probeLog(lines, line) {
+    if (lines.size >= PROBE_MAX_LINES || lines.has(line)) return;
+    lines.add(line);
+    console.log("[YT probe] " + line);
+  }
+
+  // App：按列表项打印字段号与标识。
+  function probeAppCards(root) {
+    const lines = new Set();
+    try {
+      walkObjects(root, (node) => {
+        for (const key of LIST_KEYS) {
+          const list = node[key];
+          if (!Array.isArray(list)) continue;
+          for (const item of list) {
+            const state = item && item[WIRE_STATE];
+            if (!state || !state.bytes || !state.bytes.length) continue;
+            const text = looseUtf8.decode(state.bytes);
+            const eml = [...new Set(text.match(PROBE_EML) ?? [])].slice(0, 6);
+            const ids = [...new Set(text.match(PROBE_IDENTIFIER) ?? [])].slice(0, 10);
+            const fields = (state.fields ?? []).map((field) => field.no).slice(0, 10);
+            probeLog(lines, `${key} fields=[${fields.join(",")}] keys=[${Object.keys(item).join(",")}] eml=[${eml.join(",")}] ids=[${ids.join(",")}]`);
+          }
+        }
+      });
+    } catch (e) {
+      console.log("[YT probe] app cards failed: " + (e && e.message));
+    }
+  }
+
+  // 网页版：按列表打印「数组键 → 单键包装链」。
+  function probeJsonCards(root) {
+    const lines = new Set();
+    const chain = (node) => {
+      const keys = [];
+      let current = node;
+      for (let depth = 0; depth < 5 && current && "object" == typeof current && !Array.isArray(current); depth++) {
+        const names = Object.keys(current);
+        if (1 !== names.length) break;
+        keys.push(names[0]);
+        current = current[names[0]];
+      }
+      return keys.join(".");
+    };
+
+    try {
+      (function visit(node) {
+        if (!node || "object" != typeof node) return;
+        if (Array.isArray(node)) {
+          for (const item of node) visit(item);
+          return;
+        }
+        for (const key of Object.keys(node)) {
+          const value = node[key];
+          if (Array.isArray(value) && value.length) {
+            const chains = [...new Set(value.filter((item) => item && "object" == typeof item).map((item) => chain(item) || "?"))].slice(0, 6);
+            if (chains.length) probeLog(lines, `${key} -> ${chains.join(" | ")}`);
+          }
+          visit(value);
+        }
+      })(root);
+    } catch (e) {
+      console.log("[YT probe] json cards failed: " + (e && e.message));
+    }
   }
 
   //=====================================================================================
@@ -3023,6 +3116,8 @@ export default async function (ctx) {
 
     // browse / next / search / reel/reel_watch_sequence 共用同一套 renderer 过滤；
     // 侧栏偶尔也塞在 browse 响应里，所以 guide 过滤一起跑。
+    if (options.probe) probeJsonCards(data);
+
     let changed = jsonPruneTree(data, options);
     changed = jsonFilterGuide(data, options) || changed;
     if (options.blockRelatedVideos) changed = jsonDropRelated(data) || changed;
@@ -3852,6 +3947,8 @@ export default async function (ctx) {
         $done({});
         return;
       }
+
+      if (options.probe) probeAppCards(node);
 
       // 画质上限或编码偏好任一开启都要刷新缓存：request 阶段按缓存 itag 改写。
       if (false !== options.autoHd || "any" !== options.videoCodec) {

@@ -76,6 +76,7 @@ const TARGETS = [
       "response/schema.js",
       "response/codec.js",
       "response/filter.js",
+      "response/probe.js",
       "response/json.js",
       "response/quality.js",
       "response/ump.js",

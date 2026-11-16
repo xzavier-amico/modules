@@ -656,6 +656,8 @@
 
     // browse / next / search / reel/reel_watch_sequence 共用同一套 renderer 过滤；
     // 侧栏偶尔也塞在 browse 响应里，所以 guide 过滤一起跑。
+    if (options.probe) probeJsonCards(data);
+
     let changed = jsonPruneTree(data, options);
     changed = jsonFilterGuide(data, options) || changed;
     if (options.blockRelatedVideos) changed = jsonDropRelated(data) || changed;
