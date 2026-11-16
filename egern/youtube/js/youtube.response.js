@@ -1855,20 +1855,13 @@ export default async function (ctx) {
     return itemLayouts(node).some((layout) => FEED_CARD_LAYOUT.test(layout));
   }
 
-  // 列表项里是否带视频 id（/vi/xxxxxxxxxxx/）：带的就是视频卡片，别当图文删。
-  function hasVideoIdMark(node) {
-    const state = node && node[WIRE_STATE];
-    if (!state || !state.bytes || !state.bytes.length) return false;
-    return /\/vi\/[A-Za-z0-9_-]{11}\//.test(looseUtf8.decode(state.bytes));
-  }
-
-  // 新闻 / 图文卡片。前两条是版式名和 element 标识；最后一条是结构兜底：
-  // 列表项解出来既没有已建模的视频卡片字段（videoWithContextRenderer），
-  // 也不带视频 id，那它就是帖子 / 新闻 / 轮播这类非视频卡片——renderer 叫
-  // 什么名字都能删，不用去猜。
+  // 新闻 / 图文卡片：只认已知的版式名和 element 标识。
+  //
+  // 这里**不能**加「结构兜底」（比如「不是视频卡片就删」）：richItemContents 这个
+  // 容器在评论、我的页面、视频信息里都会用到，按结构删会把这些列表项一起误删。
+  // 真机上遇到没被删掉的图文卡片，都应该补版式名 / 标识，而不是放宽结构判断。
   function isFeedCard(node) {
-    if (isFeedCardLayout(node) || hasMarker(node, FEED_CARD_MARKERS)) return true;
-    return !node.videoWithContextRenderer && !hasVideoIdMark(node);
+    return isFeedCardLayout(node) || hasMarker(node, FEED_CARD_MARKERS);
   }
 
   const CONTAINER_KEYS = new Set(["richItemContents", "overlays"]);

@@ -1507,6 +1507,43 @@ check("YouTube Music cleanup locks the highest audio bitrate", () => {
   }
 });
 
+check("YouTube feed cards never touch comment or library list items", () => {
+  // 评论区、我的页面里的列表项也是 richItemContents 里的元素，同样没有视频 id。
+  // 之前按「不是视频卡片就删」的结构兜底会把它们一起删掉，这条测试锁住这个坑。
+  const enc = (text) => new TextEncoder().encode(text);
+  const elem = (marker) => serialize([b(999, enc(marker))]);
+  const videoItem = serialize([b(153515154, elem("video_lockup_with_attachment.eml"))]);
+  const postItem = serialize([b(153515154, elem("post_shelf"))]);
+  const commentItem = serialize([b(114077601, serialize([b(1, enc("comment thread body"))]))]);
+  const libraryItem = serialize([b(113335114, serialize([b(1, enc("library shortcut"))]))]);
+
+  const itemSection = serialize([b(1, videoItem), b(1, postItem), b(1, commentItem), b(1, libraryItem)]);
+  const sectionList = serialize([b(1, serialize([b(50195462, itemSection)]))]);
+  const body = serialize([b(7, serialize([b(51779735, serialize([b(1, serialize([b(49399797, sectionList)]))]))]))]);
+  const url = "https://youtubei.googleapis.com/youtubei/v1/next";
+
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const file = platform + "/youtube/js/youtube.response.js";
+    const runNext = (args) => run(file, body, url, args, { $request: { url }, $response: { url, status: 200, headers: {}, body } });
+
+    assert.deepEqual(Object.keys(runNext({ blockAds: false, blockFeedCards: false })), [], platform + " must keep every item when the switch is off");
+
+    const out = runNext({ blockAds: false, blockFeedCards: true });
+    const top = parse(out.body);
+    const nextResult = parse(first(parse(first(top, 7).p), 51779735).p);
+    const sectionListOut = parse(first(parse(first(nextResult, 1).p), 49399797).p);
+    const supported = parse(sectionListOut.filter((field) => field.no === 1)[0].p);
+    const items = parse(first(supported, 50195462).p).filter((field) => field.no === 1);
+    const remaining = items.map((field) => Buffer.from(field.p).toString("latin1"));
+
+    assert.equal(items.length, 3, platform + " must drop the post card only");
+    assert.ok(remaining[0].includes("video_lockup_with_attachment.eml"), platform + " must keep the video card");
+    assert.ok(!remaining.some((item) => item.includes("post_shelf")), platform + " must drop the post card");
+    assert.ok(remaining.some((item) => item.includes("comment thread body")), platform + " must keep the comment item");
+    assert.ok(remaining.some((item) => item.includes("library shortcut")), platform + " must keep the library item");
+  }
+});
+
 check("Bilibili web endpoints strip ads behind the web toggle", () => {
   const base = "https://api.bilibili.com";
   const cases = [
