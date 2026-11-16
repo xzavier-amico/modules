@@ -120,6 +120,11 @@
     const kept = [];
     let removed = 0;
     let hasLyrics = false;
+    // 认出来的卡片数量：section 里带 section id（23）/ 曲目引用（5）/ 广告内容（30）
+    // 才算一列卡片。形状对不上说明这不是滚动页的卡片列表（或者客户端换了结构），
+    // 这时插一个 section 进去会把整包结构写坏 —— 客户端解析失败后整页空白，
+    // 比「没有歌词卡」严重得多，所以只删广告、不插卡。
+    let recognized = 0;
     const trackRef = trackId ? new TextEncoder().encode("spotify:track:" + trackId) : null;
     for (const section of sections) {
       if (section.no !== 1 || section.wire !== 2) {
@@ -141,6 +146,7 @@
       } catch (e) {
         return null;
       }
+      if (ad || hasTrack || hasSectionId) recognized += 1;
       // 官方歌词 section 的真实字节：和 lyricsSection() 的合成结果对比用。
       if (hasTrack && hasSectionId) hasLyrics = true;
       // 当前曲目的 section 里通常带 track_title / artist_name，抄进元数据缓存。
@@ -154,7 +160,12 @@
       kept.push(section.raw);
     }
 
-    const addCard = wantCard && !!trackId && !hasLyrics;
+    // 只往「确实是一列卡片」的响应里插卡：列表形状对不上时插进去会把整包
+    // 结构写坏，客户端解析失败后整页空白，比不补卡严重得多。
+    // 判定条件放宽到「认出了任意一列卡片」或者「body 里确实有当前曲目的引用」，
+    // 后者能兜住客户端换 section 结构、但列表确实属于这首歌的情况。
+    const addCard = wantCard && !!trackId && !hasLyrics
+      && (recognized > 0 || (trackRef && containsBytes(buffer, trackRef)));
     if (!removed && !addCard) return null;
     if (addCard) kept.unshift(wireEncodeField(1, 2, lyricsSection(trackId)));
 

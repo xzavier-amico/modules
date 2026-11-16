@@ -21,10 +21,13 @@
 | `block_ads` | true | 关闭广告属性、广告与推广位配置 |
 | `unlock_playback` | auto | `auto` 移动端开启、桌面端关闭；强制 `true` / `false` 覆盖。桌面端写播放授权容易跳歌 |
 | `enable_lyrics` | true | 补全歌词；关闭后不加载歌词脚本 |
-| `lyrics_source` | auto | 歌词源；`auto` 并发查询网易云 / QQ / LRCLIB，不自动查 Musixmatch |
+| `lyrics_source` | auto | 歌词源；`auto` 并发查询网易云 / QQ / LRCLIB / Musixmatch（官方上游，排最后兜底） |
 | `desktop` | auto | `auto` 按 User-Agent 识别 iPhone / iPad 与 Loon for Mac；识别不准时手动指定 `ios` / `macos` |
 | `lyrics_script` | hans | 补全的第三方歌词默认转简体（`hans`）；`source` 保持歌词源原文。官方歌词不受影响 |
 | `ignore_han_variants` | true | 查歌词时把繁体曲名 / 歌手按简体比较；关闭后繁简写法必须完全一致 |
+| `sync_plain_lyrics` | true | 只有纯文本歌词时按歌曲时长把每行均分出时间轴（伪同步），让它能跟着滚动；关闭则保持整屏纯文本 |
+| `lyrics_isrc` | true | 前面几轮都搜不到时，用 Deezer 公开接口反查 ISRC，再用 ISRC 直查 Musixmatch、并用 Deezer 的规范曲名重查一遍曲库 |
+| `prefetch_lyrics` | true | 打开 Now Playing 时顺手把队列里下一首的歌词查好写进缓存，切歌后直接命中；fire-and-forget，不阻塞卡片渲染 |
 
 ## 时区
 
@@ -40,7 +43,7 @@
 
 合成规则：
 
-- `auto` 同时请求网易云、QQ、LRCLIB，首个通过歌名 / 歌手 / Live 校验的同步歌词胜出；只有纯文本时等全部结束，或在 5 秒后先发纯文本，避免一直等到总超时。
+- `auto` 同时请求网易云、QQ、LRCLIB、Musixmatch，首个通过歌名 / 歌手 / Live 校验的同步歌词胜出；Musixmatch 是 Spotify 的官方歌词上游、能用 `track_spotify_id` 直查，排在最后只做兜底。只有纯文本时等全部结束，或在 5 秒后先发纯文本，避免一直等到总超时。
 - 候选请求全部并行：LRCLIB 对完整曲名和去掉装饰括号后的曲名各发 `get` + `search`；网易云 / QQ 搜索后同时请求排名前 3 的候选歌词。任一同步歌词先通过校验就直接返回。
 - 歌名比较会忽略 `feat.` / `ft.` / `with` / `prod.`、`Remastered 2011` / `2011 Remaster`、`Radio Edit`、`Single Version`、`Album Version`、`Bonus Track`、`Deluxe Edition`、`Explicit` / `Clean` 等版本后缀；歌手按 `feat.` / `ft.` / `with` 和多歌手分隔符拆分，任意一位匹配即可。
 - 曲名 / 歌手比较默认做繁→简折叠（OpenCC t2s 表）：Spotify 的中文元数据常是繁体，网易云 / QQ 返回简体，不折叠时「說謊」对不上「说谎」、「周杰倫」对不上「周杰伦」。关闭 `ignore_han_variants` 后恢复逐字比较。
@@ -48,17 +51,37 @@
 - 曲名里带 `()` / `（）` 的装饰信息（影视剧名、节目名、歌手名等）会先去掉再查一次；括号里含 `Live`、`Remix`、`Acoustic`、`伴奏`、`版` 等版本词时保留，避免把现场版查成录音室版。返回结果仍按完整曲名或去掉装饰后的曲名校验。
 - `DJ版` / `DJ Remix` / `(DJ)` / `- DJ` 这类标记会先从曲名里去掉再查，并跳过歌手约束（DJ 版通常挂别人名字）；时长容差放宽到 60 秒，避免混音版比原曲长而匹配失败。
 - LRCLIB 并行候选都没命中时，会再用歌名搜一次；仍按歌手 / 版本 / Live / 时长校验，不会拿别人的同名歌。
+- 严格校验（歌名 + 歌手 + Live + 时长）一条都没命中时，会再跑一轮放宽匹配：曲名必须完全相等（不是前缀 / 包含），歌手可以不写一致，两边都有时长时按 12 秒容差。曲库里「歌手写法不同 / 挂的制作人不同 / 合唱拆成单人」这类其实有歌词的曲子靠这一轮救回来。
+- 只有纯文本歌词时（`sync_plain_lyrics`），按歌曲时长把每行均分出时间轴再返回：从第 1.2 秒排到最后 4 秒，`syncType` 仍是 `LINE_SYNCED`，所以歌词页能跟着滚。这是编出来的时间轴，只用来兜底 —— 有真正的同步歌词时一律以真歌词为准（伪同步不会让这一轮提前收工）。时长未知或不足 20 秒时不编，保持 `UNSYNCED`。
+- 前面几轮都落空时（`lyrics_isrc`），用 Deezer 公开 API（无需 token）按曲名 + 歌手反查这首歌，拿到规范曲名 / 歌手 / 时长 / ISRC 后同时打两枪：① Musixmatch 用 `track_isrc` 直查字幕，完全不依赖名字匹配；② 用 Deezer 的规范写法把 LRCLIB / 网易云 / QQ 再查一遍。这一轮通常已经过了客户端 4.5 秒窗口，结果是写进缓存（下次打开歌词页 / 卡片直接命中）。
 - 第三方请求超时、429、5xx 或所有源都没结果时都不写缓存，下次打开会立即重试。
 - 歌词页总时限 4.5 秒（从官方响应到达开始算），单个外部请求 4 秒；纯文本在 3.5 秒兜底。打开 Now Playing 时 feed 可能刚把 scrollsita 里的曲名 / 歌手写进缓存，歌词脚本会每 100ms 看一次元数据、最多 2 秒，命中就直接查歌词，不必等 open.spotify.com。scrollsita 补卡**不等歌词**：打开 Now Playing 时客户端先渲染列表，晚到的响应只更新模型、不重绘，所以收到 scroll 就立刻补卡，内容由随后的 color-lyrics 响应填充。
 - protobuf 补齐官方字段（含歌词卡使用的 `previewLines`），并将歌词额度限制归一为可显示状态。
 - 配色：未激活行黑字，当前 / 已唱行白字；命中元数据缓存时不再请求 embed，用缓存里的封面色，没有缓存时用默认中灰底。
-- scrollsita 列表缺少歌词 section 时立刻补一格：读到 `spotify.lyrics.miss` 不补（有歌词请求在路上时旧标记不作数）；补在头部 section 之后；官方已有则不重复补。
+- scrollsita 列表缺少歌词 section 时立刻补一格，补在最前面；官方已有则不重复补；列表形状认不出来（没有 section id / 曲目引用，body 里也没有当前曲目的 URI）时原样放行，不往里插，避免把整包结构写坏后出现「整页空白」。
+- `spotify.lyrics.miss`（5 分钟内不补空卡）只在**确实有源回过答**（200 / 404）且都说没歌词时才写：全部请求失败属于临时故障（后台被挂起、代理断开、上游 5xx），不写 miss，否则回到前台的这段时间歌词卡会一直被挡掉。有歌词请求在路上（`spotify.lyrics.pending`）时旧 miss 不作数。
+- 换 body 时会按新长度重算 `Content-Length`、去掉 `Content-Encoding`、保留 / 补齐 CORS 头：沿用旧长度或旧的 gzip 声明，客户端会截断或解压失败，表现是 Now Playing 正常、卡片列表整块空白。
 
 歌词源：`lrclib`、`musixmatch`、`netease`、`qq`、`auto`（默认）。
 - LRCLIB 把完整曲名、去掉 `feat.` / `remaster` 等后缀的曲名、繁→简折叠后的写法，以及歌名-only 的兜底搜索全部放进第一批并行请求（对应 EeveeSpotify 的 `strippedTrackTitle`），返回结果仍会重新校验歌手 / Live / 时长。
 - 网易云在「歌名 / 时长已匹配、只差歌手写法」时，会把候选歌词与歌手 alias 查询并行预取；alias 确认后直接复用，不重复请求，也不放松歌手校验。
 - `extended-metadata` 是批量接口，可能到几 MB；脚本只解析包含 `spotify:track:` 的子消息，图片 / Credits / Canvas 等大块直接跳过，且用字段级 canonical 检查代替整包 `serialize` 拷贝。超过 12MB 的响应仍原样放行。
 
+
+## 预取下一首
+
+切歌时歌词页才第一次查第三方源，快慢就取决于网络。预取把这段等待提前：
+
+1. `js/spotify.js` 处理 **connect-state** 响应时，按 PlayerState 的字段号读出播放队列（`track` = 7、`prev_tracks` = 19、`next_tracks` = 20），写进本地存储 `spotify.queue`（当前曲目 + 接下来最多 8 首）。connect-state 是热路径（每次状态变化、前台轮询都会打），所以这里**只做去重写入、不发任何请求**，队列没变就不写。
+2. `js/spotify.feed.js` 在滚动页（Now Playing）补歌词卡时，读 `spotify.queue` 拿到下一首的 id，交给 `js/spotify_lyrics.js` 的预取入口去查歌词并写进 `spotify.lyrics.cache.v2`。**fire-and-forget**：不等待、不阻塞 scroll 响应（多等一秒列表就可能不被客户端采用）。
+3. 换到下一首时，客户端请求 `color-lyrics`，请求阶段直接命中缓存，卡片和歌词页都不再等第三方源。
+
+约束：
+
+- 队列里的 `current` 必须与当前滚动页的曲目一致才会预取，避免用上一首的队列乱查。
+- 下一首必须在 `spotify.track.meta.v2` 里有曲名 / 歌手才会预取：没有元数据就要先回源 `open.spotify.com`，那一步比歌词本身还慢，没意义。
+- 同一首 30 分钟内只试一次（`spotify.prefetch.v1`），已经缓存过的直接跳过，所以滚动页反复刷新几乎零开销。
+- 关闭 `prefetch_lyrics` 后只跳过第 2 步，队列照常记录（不产生请求）。
 
 ## 广告域名兜底
 
@@ -158,6 +181,8 @@ Spotify。桌面端如果一直看不到脚本执行记录，说明请求可能�
 ## 注意
 
 - 只支持逐行同步歌词，未实现逐字歌词。
+- 歌词卡只在客户端「第一次」为这首歌拉 scrollsita 的那条响应里补：拿到的列表不会再插入新卡，所以换歌后的第一次进 Now Playing 是关键时机。补卡不等歌词，内容由随后的 `color-lyrics` 响应填充。
+- Now Playing 正常但卡片列表（scrollsita）整块空白时，先把 `enable_lyrics` 关掉只留去广告再复现一次：仍空白说明与补卡无关（去广告只删广告 section，不删正常卡片）；恢复空白前的样子说明问题在补卡 / 歌词链路。脚本换 body 时会按新长度重算 `Content-Length`、去掉 `Content-Encoding`、保留 CORS 头——以前这几项沿用旧值，客户端会截断或解压失败，表现正好是「整页卡片空白」。
 - 插件删除 `if-none-match` 并清除 `extended-metadata` 请求体里的 etag，避免 304 空响应导致脚本拿不到 body。
 - 脚本 URL 带 `?v=日期`；客户端元数据有缓存，更新后需重启 App 或打开未缓存的歌单。
 

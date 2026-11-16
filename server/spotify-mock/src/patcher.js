@@ -230,8 +230,13 @@ function buildPatcher($argument) {
   try {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
     if (Array.isArray(raw)) {
-      // Loon 位置参数：spoof, ads, unlock, enable_lyrics, desktop, lyrics_source。
-      opt = { spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2], enable_lyrics: raw[3], desktop: raw[4], lyrics_source: raw[5] };
+      // Loon 位置参数：spoof, ads, unlock, enable_lyrics, desktop, lyrics_source,
+      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc。
+      opt = {
+        spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2],
+        enable_lyrics: raw[3], desktop: raw[4], lyrics_source: raw[5],
+        prefetch_lyrics: raw[6], sync_plain_lyrics: raw[7], lyrics_isrc: raw[8],
+      };
     } else if (typeof raw === "string") {
       opt = JSON.parse(raw || "{}") || {};
     } else if (raw && "object" == typeof raw) {
@@ -1586,7 +1591,7 @@ function buildPatcher($argument) {
   //
   // 存储值：{ "<track id>": [title, artist, durationMs, savedAt] }，最多 24 首。
   const TRACK_CACHE_KEY = "spotify.track.meta.v2";
-  const TRACK_CACHE_MAX = 24;
+  const TRACK_CACHE_MAX = 64;
   const TITLE_KEYS = ["track_title", "title", "track_name"];
   const ARTIST_KEYS = ["artist_name", "artist"];
 
@@ -1719,6 +1724,80 @@ function buildPatcher($argument) {
     const found = Object.create(null);
     collectTracks(fields, found, 0);
     rememberTracks(found);
+    // 队列只从 connect-state 拿：它按 PlayerState 的字段号给出 track / next_tracks。
+    // 歌词脚本与 feed 脚本据此预取下一首的歌词（见 spotify.queue 的说明）。
+    if (target.indexOf("/connect-state/") >= 0) rememberQueue(fields);
+  }
+
+  // ---- 播放队列（预取下一首歌词用）---------------------------------------
+  //
+  // connect-state 的 PlayerState 字段号：track = 7，prev_tracks = 19，
+  // next_tracks = 20。不能按「当前曲目后面第一首」的遍历顺序取 —— prev_tracks
+  // 也排在后面，会把手上一首当成下一首。
+  //
+  // 这里只记「当前曲目 + 接下来几首」，写进 spotify.queue；真正的歌词查询在
+  // 歌词脚本里做（喂给它的曲目 id 来自这份队列）。connect-state 是热路径，
+  // 客户端每次状态变化、以及前台轮询都会打，所以这里只做一次去重写入，
+  // 不发任何请求。
+  const QUEUE_KEY = "spotify.queue";
+  const QUEUE_MAX = 8;
+  const QUEUE_TTL_MS = 30 * 60 * 1000;
+
+  function queueTrackId(entry) {
+    for (const f of entry) {
+      if (f.no !== 1 || f.w !== 2 || f.p.length !== 36) continue;
+      const value = text(f);
+      if (value && /^spotify:track:[A-Za-z0-9]{22}$/.test(value)) return value.slice(14);
+    }
+    return "";
+  }
+
+  function scanPlayerState(fields, out, depth) {
+    if (depth > 8 || out.current) return;
+    const current = first(fields, 7);
+    const next = fields.filter((f) => f.no === 20 && f.w === 2);
+    const prev = fields.filter((f) => f.no === 19 && f.w === 2);
+    if (current && current.w === 2 && (next.length || prev.length)) {
+      const head = parse(current.p);
+      const id = head ? queueTrackId(head) : "";
+      if (id) {
+        out.current = id;
+        const ids = [];
+        for (const f of next) {
+          const sub = parse(f.p);
+          const nextId = sub ? queueTrackId(sub) : "";
+          if (nextId && ids.indexOf(nextId) < 0) ids.push(nextId);
+        }
+        out.next = ids.slice(0, QUEUE_MAX);
+        return;
+      }
+    }
+    for (const f of fields) {
+      if (f.w !== 2) continue;
+      const sub = parse(f.p);
+      if (sub) scanPlayerState(sub, out, depth + 1);
+    }
+  }
+
+  function rememberQueue(fields) {
+    const store = cacheStore();
+    if (!store) return;
+    const queue = { current: "", next: [] };
+    scanPlayerState(fields, queue, 0);
+    if (!queue.current) return;
+    const next = queue.next.slice(0, QUEUE_MAX);
+    try {
+      const raw = store.read(QUEUE_KEY);
+      const old = raw ? JSON.parse(raw) : null;
+      const same = old && old.current === queue.current &&
+        Array.isArray(old.next) && old.next.length === next.length &&
+        old.next.every((id, i) => id === next[i]);
+      // 队列没变就不重复写：connect-state 轮询很频繁，写存储本身也有成本。
+      if (same && Number(old.at) && Date.now() - Number(old.at) < QUEUE_TTL_MS) return;
+      store.write(JSON.stringify({ current: queue.current, next: next, at: Date.now() }), QUEUE_KEY);
+    } catch (e) {
+      // 存储写失败不影响响应改写。
+    }
   }
 
   // 桌面端（CEF）拉 track 元数据时要的是 JSON：accept: application/json，
@@ -2055,6 +2134,11 @@ function buildPatcher($argument) {
     const kept = [];
     let removed = 0;
     let hasLyrics = false;
+    // 认出来的卡片数量：section 里带 section id（23）/ 曲目引用（5）/ 广告内容（30）
+    // 才算一列卡片。形状对不上说明这不是滚动页的卡片列表（或者客户端换了结构），
+    // 这时插一个 section 进去会把整包结构写坏 —— 客户端解析失败后整页空白，
+    // 比「没有歌词卡」严重得多，所以只删广告、不插卡。
+    let recognized = 0;
     const trackRef = trackId ? new TextEncoder().encode("spotify:track:" + trackId) : null;
     for (const section of sections) {
       if (section.no !== 1 || section.wire !== 2) {
@@ -2076,6 +2160,7 @@ function buildPatcher($argument) {
       } catch (e) {
         return null;
       }
+      if (ad || hasTrack || hasSectionId) recognized += 1;
       // 官方歌词 section 的真实字节：和 lyricsSection() 的合成结果对比用。
       if (hasTrack && hasSectionId) hasLyrics = true;
       // 当前曲目的 section 里通常带 track_title / artist_name，抄进元数据缓存。
@@ -2089,7 +2174,12 @@ function buildPatcher($argument) {
       kept.push(section.raw);
     }
 
-    const addCard = wantCard && !!trackId && !hasLyrics;
+    // 只往「确实是一列卡片」的响应里插卡：列表形状对不上时插进去会把整包
+    // 结构写坏，客户端解析失败后整页空白，比不补卡严重得多。
+    // 判定条件放宽到「认出了任意一列卡片」或者「body 里确实有当前曲目的引用」，
+    // 后者能兜住客户端换 section 结构、但列表确实属于这首歌的情况。
+    const addCard = wantCard && !!trackId && !hasLyrics
+      && (recognized > 0 || (trackRef && containsBytes(buffer, trackRef)));
     if (!removed && !addCard) return null;
     if (addCard) kept.unshift(wireEncodeField(1, 2, lyricsSection(trackId)));
 

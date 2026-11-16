@@ -300,7 +300,9 @@ test("no third-party match keeps the official 404 and is not cached", async () =
 test("scroll adds the lyrics card on the first render and color-lyrics fills it", async () => {
   const id = "0VjIjW4GlUZAMYd2vXMi3b";
   const trackUri = "spotify:track:" + id;
-  const section = bytes(1, concat([str(2, "normal-card")]));
+  // 真实的滚动页 section 一定带 section id（字段 23）；补卡只往这种「认得出是
+  // 卡片列表」的响应里插，见 src/spotify/feed/lyrics.js 的 recognized 判定。
+  const section = bytes(1, concat([str(2, "normal-card"), str(23, "spotify:section:card")]));
   const scrollBody = bytes(1, concat([section]));
   const fullTitle = "晚秋（电影《晚秋》主题曲）";
   const calls = stubNetwork([
@@ -386,7 +388,9 @@ test("scroll adds the lyrics card on the first render and color-lyrics fills it"
 
 test("a quick confirmed miss never adds an empty lyrics card", async () => {
   const id = "0VjIjW4GlUZAMYd2vXMi3b";
-  const section = bytes(1, concat([str(2, "normal-card")]));
+  // 真实的滚动页 section 一定带 section id（字段 23）；补卡只往这种「认得出是
+  // 卡片列表」的响应里插，见 src/spotify/feed/lyrics.js 的 recognized 判定。
+  const section = bytes(1, concat([str(2, "normal-card"), str(23, "spotify:section:card")]));
   const scrollBody = bytes(1, concat([section]));
   stubNetwork([
     [
@@ -425,6 +429,70 @@ test("a quick confirmed miss never adds an empty lyrics card", async () => {
   );
   // color-lyrics 也确认没歌词后，后续渲染继续被 miss 标记压住。
   assert.equal(await hasCard(), false, "a confirmed miss must not leave an empty card on the next render");
+});
+
+test("a transient provider outage must not suppress the lyrics card", async () => {
+  const id = "0VjIjW4GlUZAMYd2vXMi3b";
+  const section = bytes(1, concat([str(2, "normal-card"), str(23, "spotify:section:card")]));
+  const scrollBody = bytes(1, concat([section]));
+  // 歌词源全部 500 / 超时：这是临时故障，不是「确认没有歌词」。后台播歌时最常见，
+  // 写进 miss 的话回到前台的 5 分钟内歌词卡一直被挡掉。
+  stubNetwork([
+    [
+      "spclient.wg.spotify.com",
+      (target) =>
+        target.includes("/color-lyrics/")
+          ? upstreamResponse(new Uint8Array(0), 404, "application/x-protobuf")
+          : upstreamResponse(scrollBody, 200, "application/x-protobuf"),
+    ],
+    [
+      "open.spotify.com/oembed",
+      () => upstreamResponse(JSON.stringify({ title: "Missing", author_name: "Nobody" }), 200, "application/json"),
+    ],
+    ["lrclib.net", () => upstreamResponse("upstream error", 500, "text/plain")],
+  ]);
+  const env = { BLOCK_ADS: "false", LYRICS_SOURCE: "lrclib" };
+  const scrollUrl = "http://localhost/music/scrollsita/v1/scroll/spotify:track:" + id;
+  const hasCard = async () => {
+    const response = await handle(new Request(scrollUrl), env);
+    assert.equal(response.status, 200);
+    const out = new Uint8Array(await response.arrayBuffer());
+    const list = parse(out).find((field) => field.no === 1).bytes;
+    return parse(list)
+      .filter((field) => field.no === 1)
+      .some((field) => parse(field.bytes).some((inner) => inner.no === 5));
+  };
+
+  assert.equal(await hasCard(), true, "the card is added without waiting for the lyrics lookup");
+  await handle(
+    new Request("http://localhost/music/color-lyrics/v2/track/" + id + "?format=json", {
+      headers: { accept: "application/json" },
+    }),
+    env,
+  );
+  assert.equal(await hasCard(), true, "a provider outage is not a confirmed miss");
+});
+
+test("scroll responses of unknown shape are left untouched", async () => {
+  const id = "0VjIjW4GlUZAMYd2vXMi3b";
+  // section 里既没有 section id（23）/ 曲目引用（5）/ 广告内容（30），body 里也没有
+  // 当前曲目的 URI：这不是滚动页的卡片列表，插一个 section 进去会把结构写坏，
+  // 客户端解析失败后整页空白。宁可原样放行。
+  const scrollBody = bytes(1, concat([bytes(1, concat([str(2, "normal-card")]))]));
+  stubNetwork([
+    [
+      "spclient.wg.spotify.com",
+      () => upstreamResponse(scrollBody, 200, "application/x-protobuf"),
+    ],
+  ]);
+  const env = { BLOCK_ADS: "false", LYRICS_SOURCE: "lrclib" };
+  const response = await handle(
+    new Request("http://localhost/music/scrollsita/v1/scroll/spotify:track:" + id),
+    env,
+  );
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-spotify-mock"), "passthrough");
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), scrollBody);
 });
 
 test("health reports the lyrics options", async () => {

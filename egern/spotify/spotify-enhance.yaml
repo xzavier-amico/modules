@@ -47,7 +47,7 @@ env_schema:
     options: ["true", "false"]
   lyrics_source:
     name: "歌词来源"
-    description: "官方没有歌词时去哪个库找。默认 auto 并发查询网易云、QQ、LRCLIB，首个匹配的同步歌词胜出；Musixmatch 仅在显式选择时使用"
+    description: "官方没有歌词时去哪个库找。默认 auto 并发查询网易云、QQ、LRCLIB、Musixmatch，首个匹配的同步歌词胜出；Musixmatch（Spotify 官方上游）排最后，前三个都落空时才用它兜底"
     default_value: "auto"
     options: ["auto", "lrclib", "musixmatch", "netease", "qq"]
   desktop:
@@ -63,6 +63,21 @@ env_schema:
   ignore_han_variants:
     name: "忽略简繁"
     description: "查歌词时把繁体曲名 / 歌手按简体比较，兼容 Spotify 的繁体元数据与简体曲库；关闭后繁简写法必须完全一致"
+    default_value: "true"
+    options: ["true", "false"]
+  sync_plain_lyrics:
+    name: "纯文本伪同步"
+    description: "官方和曲库都只有纯文本歌词时，按歌曲时长把每行均分出时间轴，让它能跟着滚动；关掉则只按纯文本显示"
+    default_value: "true"
+    options: ["true", "false"]
+  lyrics_isrc:
+    name: "ISRC 反查"
+    description: "前几轮都没搜到时，用 Deezer 公开接口反查 ISRC，再用 ISRC 直查 Musixmatch、并用 Deezer 的规范曲名重查一遍曲库；关掉可少两次请求"
+    default_value: "true"
+    options: ["true", "false"]
+  prefetch_lyrics:
+    name: "预取下一首"
+    description: "打开 Now Playing 时顺手把队列里下一首的歌词查好写进缓存，切歌后歌词卡 / 歌词页直接命中；不阻塞卡片渲染"
     default_value: "true"
     options: ["true", "false"]
 
@@ -137,7 +152,7 @@ scriptings:
   - http_request:
       name: "spotify.meta.req"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/extended-metadata\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261115-38"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261115-39"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -147,7 +162,7 @@ scriptings:
   - http_response:
       name: "spotify.enhance"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:bootstrap|user-customization-service)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261115-38"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261115-39"
       body_required: true
       binary_body: true
       max_size: 41943040
@@ -157,7 +172,7 @@ scriptings:
   - http_response:
       name: "spotify.meta"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:extended-metadata|context-resolve|connect-state|metadata\\/4\\/track)\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261115-38"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261115-39"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -167,7 +182,7 @@ scriptings:
   - http_response:
       name: "spotify.config"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:remote-config-resolver|nebula)\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261115-38"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261115-39"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -179,7 +194,7 @@ scriptings:
   - http_response:
       name: "spotify.feed"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:casita\\/v\\d+\\/home|browsita\\/v\\d+\\/browse|scrollsita\\/v\\d+\\/scroll)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.feed.js?v=20261115-7"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.feed.js?v=20261115-9"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -189,7 +204,7 @@ scriptings:
   - http_request:
       name: "spotify.lyrics.req"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261115-9"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261115-11"
       binary_body: true
       max_size: 2097152
       timeout: 10
@@ -202,7 +217,7 @@ scriptings:
   - http_response:
       name: "spotify.lyrics"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261115-9"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261115-11"
       body_required: true
       binary_body: true
       max_size: 2097152

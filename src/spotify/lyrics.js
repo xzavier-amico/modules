@@ -36,13 +36,16 @@
     try {
       const raw = typeof $argument !== "undefined" ? $argument : undefined;
       if (Array.isArray(raw)) {
-        // Loon 位置参数：歌词源, 补全歌词, 设备类型, 歌词字形, 忽略简繁。
+        // Loon 位置参数：歌词源, 补全歌词, 设备类型, 歌词字形, 忽略简繁,
+        // 纯文本伪同步, ISRC 反查。
         opt = {
           lyrics_source: raw[0],
           enable_lyrics: raw[1],
           desktop: raw[2],
           lyrics_script: raw[3],
           ignore_han_variants: raw[4],
+          sync_plain_lyrics: raw[5],
+          lyrics_isrc: raw[6],
         };
       }
       else if (typeof raw === "string") {
@@ -90,6 +93,15 @@
   const foldHanVariants = flag(opt.ignore_han_variants, true);
   // 补全歌词的显示字形：hans（默认）转简体，source 保持歌词源原文。
   // 只在整段判定为繁体时转换，简体 / 英文 / 日文歌词原样返回。
+  // 纯文本伪同步：只有纯文本歌词时，按歌曲时长把行均分出时间轴，让它能跟着滚动。
+  // 默认开：反正拿不到同步歌词，能滚动比只能整屏文字有用；关掉则保持 UNSYNCED。
+  const pseudoSync = flag(opt.sync_plain_lyrics, true);
+  // ISRC 反查：前面几轮都没搜到时，用 Deezer 公开 API 反查 ISRC，再用 ISRC 直查
+  // Musixmatch、用 Deezer 的规范曲名重查一遍。只在落空后才跑，不占主链路预算。
+  const isrcLookup = flag(opt.lyrics_isrc, true);
+  // 预取下一首：只有 feed 脚本（辅助模式）会用。
+  const prefetchNextOn = flag(opt.prefetch_lyrics, true);
+
   const hansLyrics = (() => {
     const raw = opt.lyrics_script === undefined || opt.lyrics_script === null ? "hans" : opt.lyrics_script;
     const mode = String(raw).trim().toLowerCase();
@@ -138,7 +150,7 @@
   // spotify.js 在改写曲目元数据时，顺手把曲名 / 歌手 / 时长存进了本地存储。
   // 命中时连 oEmbed 都不用请求，只留 embed 页面取封面配色。
   const TRACK_CACHE_KEY = "spotify.track.meta.v2";
-  const TRACK_CACHE_MAX = 24;
+  const TRACK_CACHE_MAX = 64;
 
   // 歌词结果缓存：同一首歌的播放器、歌词页与歌词卡会重复请求 color-lyrics，
   // 命中后直接回缓存，不再打第三方源。命中的歌词基本不会变，存久一点；
@@ -172,6 +184,27 @@
   const PENDING_KEY = "spotify.lyrics.pending";
   // 歌词脚本自己的 deadline 是 4.5s；超过 10s 还没清掉就是脚本被杀了，按失效处理。
   const PENDING_TTL_MS = 10 * 1000;
+
+  // Musixmatch：两跳要各给短超时，整条链路的总预算是 4.5s，token 慢就等于这一源
+  // 白等。换到的匿名 token 大约 10 分钟有效，存起来省掉下一次往返；接口回非 200
+  // 说明 token 失效，下次重新换。
+  // 这些常量必须声明在顶层调用 resolveLyrics() 之前：const 有 TDZ，函数声明虽然
+  // 提升，执行到函数体时读到的常量可能还没初始化（ReferenceError）。
+  const MMX_APP_ID = "mac-ios-v2.0";
+  const MMX_TOKEN_KEY = "spotify.mmx.token";
+  const MMX_TOKEN_TIMEOUT_MS = 1500;
+  const MMX_TIMEOUT_MS = 2500;
+  const MMX_TOKEN_TTL_MS = 8 * 60 * 1000;
+
+  // 预取下一首歌词：attempt 记录免掉重复网络请求（同一首 30 分钟内只试一次），
+  // 队列整体过期时间与 spotify.queue 保持一致。
+  const PREFETCH_KEY = "spotify.prefetch.v1";
+  const PREFETCH_TTL_MS = 30 * 60 * 1000;
+  const PREFETCH_MARK_MAX = 32;
+  const QUEUE_KEY = "spotify.queue";
+  const QUEUE_TTL_MS = 30 * 60 * 1000;
+  const DEEZER_TIMEOUT_MS = 2500;
+  const DEEZER_API = "https://api.deezer.com";
 
   const storeBackend = () =>
     typeof $persistentStore !== "undefined" && $persistentStore ? $persistentStore : null;
@@ -429,9 +462,27 @@
   let deadline;
   let plainTimer;
   let plainFallback = null;
+  // plainFallback 里的时间轴是不是「按行均分」编出来的（伪同步）。
+  let plainFallbackPseudo = false;
   let cacheKey = "";
+  // 第三方源的应答情况。miss 标记（5 分钟内不再补卡）只在「确实有源回了答、
+  // 且都说没歌词」时才写；全部请求都失败时是临时故障（代理没连上、App 在后台
+  // 被挂起、脚本被掐），不能拿来判这首歌没歌词，否则回到前台的这 5 分钟里
+  // 歌词卡会一直被挡掉。
+  let netAnswered = 0;
+  // 主链路 settle 之后，嵌套查询（ISRC 反查、预取）仍然可以继续跑：它们不再影响
+  // 已经交给客户端的响应，结果只写缓存。stopped() 因此在嵌套轮里保持 false。
+  let nestedRuns = 0;
+  // 预取轮：辅助模式下替「下一首」查歌词，绝对不能碰 $done（滚动页响应早就交回去了）。
+  let prefetching = false;
+  const stopped = () => settled && !nestedRuns;
+  const markMiss = () => {
+    if (!trackId || !netAnswered) return;
+    writeMark(MISS_KEY, { id: trackId, at: Date.now() });
+  };
+
   const finish = (value) => {
-    if (settled) return;
+    if (settled || prefetching) return;
     settled = true;
     if (deadline !== undefined && typeof clearTimeout === "function") clearTimeout(deadline);
     if (plainTimer !== undefined && typeof clearTimeout === "function") clearTimeout(plainTimer);
@@ -459,6 +510,47 @@
       if (readLyricsCache(lyricsCacheKey(id), id)) return true;
       if (activeMark(PENDING_KEY, id, PENDING_TTL_MS)) return true;
       if (activeMark(MISS_KEY, id, MISS_TTL_MS)) return false;
+      return true;
+    };
+
+    // ---- 预取下一首歌词 ---------------------------------------------------
+    //
+    // 由 feed 脚本在滚动页里调用（fire-and-forget，绝不等待）：把队列里下一首的
+    // 歌词先查出来写进缓存，换歌后客户端请求 color-lyrics 时请求阶段就直接命中。
+    // 只在辅助模式里有这功能 —— 这条链路没有主响应要交付，多等几秒没代价。
+    //
+    // 去重：已经缓存过、或 30 分钟内试过同一首，都不再打网络。
+    const prefetchMark = (id) => {
+      const map = readJsonMap(PREFETCH_KEY) || {};
+      const at = Number(map[id]);
+      return Number.isFinite(at) && at > 0 && Date.now() - at < PREFETCH_TTL_MS;
+    };
+    const rememberPrefetch = (id) => {
+      const map = readJsonMap(PREFETCH_KEY) || {};
+      map[id] = Date.now();
+      const ids = Object.keys(map).sort((a, b) => Number(map[b]) - Number(map[a]));
+      for (const key of ids.slice(PREFETCH_MARK_MAX)) delete map[key];
+      writeJsonMap(PREFETCH_KEY, map);
+    };
+
+    globalThis.__spotifyPrefetch = (id) => {
+      const target = id ? String(id) : "";
+      if (!target || !prefetchNextOn || !flag(opt.enable_lyrics, true)) return false;
+      if (readLyricsCache(lyricsCacheKey(target), target)) return false;
+      if (prefetchMark(target)) return false;
+      // 没有曲名 / 歌手时要先请求 open.spotify.com，预取就没意义了：等元数据到了再说。
+      const meta = cachedTrackMeta(target);
+      if (!meta || !meta.title) return false;
+      rememberPrefetch(target);
+      // 辅助模式下没有主链路在跑，这里的模块级状态可以安全改写。
+      prefetching = true;
+      trackId = target;
+      cacheKey = lyricsCacheKey(target);
+      plainFallback = null;
+      plainFallbackPseudo = false;
+      resolveLyrics((payload) => {
+        if (payload) writeLyricsCache(cacheKey, payload);
+      });
       return true;
     };
     return;
@@ -613,14 +705,15 @@
   }, LYRICS_DEADLINE_MS);
   resolveLyrics((payload) => {
     if (settled) {
-      // deadline 超时放行后，所有源都确认没歌词时补写 miss 标记；feed 补卡时
-      // 读到 miss 就不再乐观补空卡。拿到了歌词则由 runSource 写缓存。
-      if (!payload) writeMark(MISS_KEY, { id: trackId, at: Date.now() });
+      // 响应已经放行（超时 / 已出结果）：晚到的歌词照样写缓存 —— ISRC 反查和预取
+      // 都会走到这里，下次打开歌词页 / 卡片直接命中。
+      if (payload) writeLyricsCache(cacheKey, payload);
+      else markMiss();
       return;
     }
     writeLyricsCache(cacheKey, payload);
     if (!payload) {
-      writeMark(MISS_KEY, { id: trackId, at: Date.now() });
+      markMiss();
       finish({});
       return;
     }
@@ -637,7 +730,7 @@
     // 客户端拉过的元数据优先：命中时直接查歌词，open.spotify.com 一次都不请求，
     // 歌词页背景用默认底色（不再为封面配色抓 embed 页面）。
     const startWith = (info, colorOf) => {
-      runSource(sourceOrder(info.title, info.artist), info.title, info.artist, cb, info.duration, colorOf);
+      runWithIsrc(sourceOrder(info.title, info.artist), info.title, info.artist, cb, info.duration, colorOf);
     };
     const cached = cachedTrackMeta(trackId);
     if (cached) {
@@ -748,18 +841,71 @@
 
   function sourceOrder(title, artist) {
     const wanted = String(opt.lyrics_source || "auto").toLowerCase();
-    // Musixmatch 是 Spotify 的官方歌词上游，auto 不使用，仅在显式选择时查询。
+    // Musixmatch 是 Spotify 的官方歌词上游，还能用 track_spotify_id 直查，匹配
+    // 精度最好。它在 auto 里排在最后：四个源并行发出，前三个有结果就立刻用，
+    // 它只负责前三个都落空时再兜一层（以前只在显式选择时才查）。
     const auto = CJK_MARK.test(title + artist)
-      ? ["netease", "qq", "lrclib"] : ["lrclib", "netease", "qq"];
+      ? ["netease", "qq", "lrclib", "musixmatch"] : ["lrclib", "netease", "qq", "musixmatch"];
     if (wanted === "lrclib" || wanted === "musixmatch" || wanted === "netease" || wanted === "qq") return [wanted];
     return auto;
+  }
+
+  // 主链路：先按正常顺序查一轮；全部落空且开了 ISRC 反查时，再用 Deezer 的
+  // 规范曲名 / 歌手和 ISRC 补两枪。这一轮通常在客户端 4.5s 窗口之后才回来，
+  // 结果是写进缓存（下次打开 / 卡片直接命中），不占主链路的时间预算。
+  function runWithIsrc(order, title, artist, done, duration, colorOf) {
+    runSource(order, title, artist, (payload) => {
+      if (payload || !isrcLookup) {
+        done(payload);
+        return;
+      }
+      nestedRuns += 1;
+      const endNested = () => {
+        nestedRuns = Math.max(0, nestedRuns - 1);
+      };
+      let left = 0;
+      let settledInner = false;
+      const finishInner = (found) => {
+        if (settledInner) {
+          if (found) writeLyricsCache(cacheKey, found);
+          return;
+        }
+        if (found) {
+          settledInner = true;
+          endNested();
+          done(found);
+          return;
+        }
+        left -= 1;
+        if (left > 0) return;
+        settledInner = true;
+        endNested();
+        done(null);
+      };
+      lookupDeezer(title, artist, duration, (canonical) => {
+        if (!canonical) {
+          finishInner(null);
+          return;
+        }
+        // 1) ISRC 直查 Musixmatch：不再依赖任何名字匹配。
+        // 2) 用 Deezer 的规范曲名 / 歌手再查一轮曲库。
+        left = canonical.isrc ? 2 : 1;
+        if (canonical.isrc) {
+          lookupMusixmatchByIsrc(canonical.isrc, (record) => {
+            finishInner(record ? payloadFrom(record, canonical.duration || duration) : null);
+          });
+        }
+        runSource(sourceOrder(canonical.title, canonical.artist), canonical.title, canonical.artist,
+          (payload) => finishInner(payload), canonical.duration || duration, colorOf);
+      });
+    }, duration, colorOf);
   }
 
   // 并发查询所有来源：首个通过校验的同步歌词胜出；只有纯文本时等全部结束。
   // settled 后不再 emit（响应已放行），但仍然写缓存：用户重新进歌词页时
   // 请求阶段就能直接命中。全部源都确认没歌词时才写 miss 标记。
   function runSource(order, title, artist, done, duration, colorOf) {
-    if (settled) return;
+    if (stopped()) return;
     if (!order.length) {
       done(null);
       return;
@@ -773,9 +919,11 @@
       }
     };
     for (const name of order) {
-      if (settled || finished) return;
+      if (stopped() || finished) return;
       lookup(name, title, artist, duration, (record) => {
-        if (settled) {
+        // 伪同步要按歌曲时长均分时间轴，时长只能从这一层传下去。
+        if (record && duration && !record.trackDurationMs) record.trackDurationMs = Number(duration) * 1000;
+        if (stopped()) {
           // deadline 超时放行：歌词晚到时写缓存，下次请求阶段直接命中。
           if (record && colorOf) record.albumColor = colorOf();
           const latePayload = buildPayload(record);
@@ -786,14 +934,18 @@
         }
         if (finished) return;
         if (record && colorOf) record.albumColor = colorOf();
+        // record.pseudo 表示这份 payload 的时间轴是按行均分编出来的：它不能让
+        // 这一轮提前收工，得等真正的同步歌词；只有实在没有同步歌词时才用它兜底。
+        const pseudo = !!(record && record.pseudo);
         const payload = buildPayload(record);
-        if (payload && (payload.lyrics.syncType === "LINE_SYNCED" || order.length === 1)) {
+        if (payload && (order.length === 1 || (payload.lyrics.syncType === "LINE_SYNCED" && !pseudo))) {
           finished = true;
           done(payload);
           return;
         }
-        if (payload && !plainFallback) {
+        if (payload && (!plainFallback || (plainFallbackPseudo && !pseudo))) {
           plainFallback = payload;
+          plainFallbackPseudo = pseudo;
           // 有纯文本但同步歌词还在路上时，先把纯文本发出去，后续结果不再覆盖。
           // deadline 超时放行后仍然写缓存，供下次请求命中。
           if (typeof setTimeout === "function") plainTimer = setTimeout(() => {
@@ -847,16 +999,19 @@
     const lists = [];
     const records = [];
     let done = false;
-    const all = () => lists.concat(records);
-    const syncedPick = () => {
-      const synced = [];
+    // 候选必须摊平成一维：search 回来的是数组，get 回来的是单条记录。
+    // 以前这里直接 concat 数组，pickRecord 收到的是「数组套数组」，只有 /api/get
+    // 的结果会被考虑，search 里的同名版本全被丢掉 —— 纯文本兜底基本等于没生效。
+    const all = () => {
+      const out = [];
       for (const list of lists) {
         if (!Array.isArray(list)) continue;
-        for (const item of list) if (isSynced(item)) synced.push(item);
+        for (const item of list) out.push(item);
       }
-      for (const record of records) if (isSynced(record)) synced.push(record);
-      return pickRecord(synced, title, duration, artist);
+      for (const record of records) out.push(record);
+      return out;
     };
+    const syncedPick = () => pickRecord(all().filter(isSynced), title, duration, artist);
 
     // 先把所有请求列出来再统一发出：同步回调不会在批次中途把 pending 减到 0，
     // pending 减到 0，避免提前判定「都没命中」。
@@ -892,7 +1047,10 @@
       }
       if (pending) return;
       done = true;
-      const picked = pickRecord(all(), title, duration, artist);
+      // 严格规则一条都没命中时，再用「同名 + 时长」放宽一轮：歌手写法对不上
+      // （feat. / 制作人署名 / 翻译名）的曲目在这一轮会被救回来。
+      const picked = pickRecord(all(), title, duration, artist)
+        || pickRecord(all(), title, duration, artist, matchesSongLoose);
       cb(picked ? withProvider(picked, "LRCLIB") : null);
     };
 
@@ -941,7 +1099,7 @@
           for (const fn of callbacks) fn(record);
         }, headers);
       };
-      const ranked = rankSongs(songs, title, artist, duration, (item) => item.name, artistOf, durationOf);
+      const ranked = rankSongsWithFallback(songs, title, artist, duration, (item) => item.name, artistOf, durationOf);
       if (ranked.length) {
         tryCandidates(ranked, fetchLyric, cb);
         return;
@@ -966,7 +1124,7 @@
       }
       const resolve = () => {
         if (!pending.length) {
-          tryCandidates(rankSongs(songs, title, artist, duration, (item) => item.name, artistOf, durationOf), fetchLyric, cb);
+          tryCandidates(rankSongsWithFallback(songs, title, artist, duration, (item) => item.name, artistOf, durationOf), fetchLyric, cb);
           return;
         }
         // 歌手详情请求并行发出，全部回来后再统一补 alias。
@@ -983,7 +1141,7 @@
             }
             left -= 1;
             if (!left) {
-              tryCandidates(rankSongs(songs, title, artist, duration, (item) => item.name, artistOf, durationOf), fetchLyric, cb);
+              tryCandidates(rankSongsWithFallback(songs, title, artist, duration, (item) => item.name, artistOf, durationOf), fetchLyric, cb);
             }
           }, headers);
         }
@@ -1001,7 +1159,7 @@
     // search_for_qq_cp 是同一个搜索服务的移动端入口，返回结构一致。
     httpGetJson("https://c.y.qq.com/soso/fcgi-bin/search_for_qq_cp?w=" + query + "&format=json&n=10&p=1", (data) => {
       const list = data && data.data && data.data.song && data.data.song.list;
-      const candidates = rankSongs(list, title, artist, duration, (item) => item.songname,
+      const candidates = rankSongsWithFallback(list, title, artist, duration, (item) => item.songname,
         (item) => (item.singer || []).reduce((names, a) => names.concat(artistNames(a)), []), (item) => Number(item.interval));
       tryCandidates(candidates, (picked, next) => {
         httpGetJson(
@@ -1017,34 +1175,41 @@
   }
 
   // Musixmatch：沿用 EeveeSpotify 的做法，先用固定 app_id 换匿名 token，
-  // 再调 macro.subtitles.get 拿逐行字幕。
-  function lookupMusixmatch(title, artist, duration, cb) {
-    // 该接口不提供足够的场次信息，Live 曲目直接跳过。
-    if (isLive(title)) { cb(null); return; }
-    const queryArtist = isDj(title) ? "" : artist;
-    const APP_ID = "mac-ios-v2.0";
-    httpGetJson("https://apic.musixmatch.com/ws/1.1/token.get?app_id=" + APP_ID, (token) => {
-      const userToken = token && token.message && token.message.body && token.message.body.user_token;
+  // 再调 macro.subtitles.get 拿逐行字幕。两跳各给短超时：整条链路的总预算是
+  // 4.5s，token 慢就等于这一源白等。token 大约 10 分钟有效，存起来省一次往返。
+  function cachedMusixToken() {
+    const mark = readMark(MMX_TOKEN_KEY);
+    if (!mark || !mark.token || !Number(mark.at)) return "";
+    if (Date.now() - Number(mark.at) >= MMX_TOKEN_TTL_MS) return "";
+    return String(mark.token);
+  }
+
+  // 按 spotify id 或 isrc 取字幕；validate 用来做曲目校验（ISRC 直查时不需要）。
+  function musixSubtitles(params, validate, cb) {
+    const withToken = (userToken) => {
       if (!userToken) {
         cb(null);
         return;
       }
-      const target =
-        "https://apic.musixmatch.com/ws/1.1/macro.subtitles.get?format=json&app_id=" + APP_ID +
-        "&usertoken=" + encodeURIComponent(userToken) +
-        "&track_spotify_id=" + encodeURIComponent(trackId) +
-        "&subtitle_format=lrc" +
-        "&q_track=" + encodeURIComponent(title) +
-        (queryArtist ? "&q_artist=" + encodeURIComponent(queryArtist) : "") +
-        "&user_language=zh";
+      let target = "https://apic.musixmatch.com/ws/1.1/macro.subtitles.get?format=json&app_id=" + MMX_APP_ID +
+        "&usertoken=" + encodeURIComponent(userToken) + "&subtitle_format=lrc&user_language=zh";
+      if (params.isrc) {
+        target += "&track_isrc=" + encodeURIComponent(params.isrc);
+      } else {
+        target += "&track_spotify_id=" + encodeURIComponent(params.spotifyId || "");
+        if (params.title) target += "&q_track=" + encodeURIComponent(params.title);
+        if (params.artist) target += "&q_artist=" + encodeURIComponent(params.artist);
+      }
       httpGetJson(target, (data) => {
         const status = data && data.message && data.message.header && data.message.header.status_code;
         const calls = data && data.message && data.message.body && data.message.body.macro_calls;
+        // token 失效时清掉缓存，下一次重新换。
+        if (data && Number(status) !== 200) writeMark(MMX_TOKEN_KEY, null);
         const matched = calls && calls["matcher.track.get"] && calls["matcher.track.get"].message;
         const track = matched && matched.body && matched.body.track;
         // 字幕接口可能返回无关的默认结果，需同时校验曲目匹配与字幕状态。
-        if (Number(status) !== 200 || !matched || !matched.header || Number(matched.header.status_code) !== 200 || !track || Number(track.instrumental) === 1 ||
-            !matchesSong(title, artist, duration, track.track_name, track.artist_name, Number(track.track_length))) {
+        if (Number(status) !== 200 || !matched || !matched.header || Number(matched.header.status_code) !== 200 ||
+            !track || Number(track.instrumental) === 1 || (validate && !validate(track))) {
           cb(null);
           return;
         }
@@ -1057,8 +1222,90 @@
           return;
         }
         cb({ provider: "Musixmatch", providerId: String(first.subtitle.subtitle_id || ""), syncedLyrics: body });
-      });
-    });
+      }, null, MMX_TIMEOUT_MS);
+    };
+    const cached = cachedMusixToken();
+    if (cached) {
+      withToken(cached);
+      return;
+    }
+    httpGetJson("https://apic.musixmatch.com/ws/1.1/token.get?app_id=" + MMX_APP_ID, (token) => {
+      const userToken = token && token.message && token.message.body && token.message.body.user_token;
+      if (userToken) writeMark(MMX_TOKEN_KEY, { token: String(userToken), at: Date.now() });
+      withToken(userToken);
+    }, null, MMX_TOKEN_TIMEOUT_MS);
+  }
+
+  function lookupMusixmatch(title, artist, duration, cb) {
+    // 该接口不提供足够的场次信息，Live 曲目直接跳过。
+    if (isLive(title)) { cb(null); return; }
+    const queryArtist = isDj(title) ? "" : artist;
+    musixSubtitles(
+      { spotifyId: trackId, title: title, artist: queryArtist },
+      (track) => matchesSong(title, artist, duration, track.track_name, track.artist_name, Number(track.track_length)),
+      cb,
+    );
+  }
+
+  function lookupMusixmatchByIsrc(isrc, cb) {
+    // ISRC 已经是「同一首录音」的强标识，这里不再做名字校验。
+    musixSubtitles({ isrc: isrc }, null, cb);
+  }
+
+  // ---- ISRC 反查（Deezer 公开 API，不需要 token）--------------------------
+  //
+  // 用它解决两类漏配：Spotify 上的曲名 / 歌手写法太特殊（feat.、译名、装饰括号、
+  // CJK 罗马字），以及同名不同版。拿到 Deezer 的规范写法与 ISRC 后：
+  //   * Musixmatch 可以用 track_isrc 直查字幕，完全不依赖名字匹配；
+  //   * LRCLIB / 网易云 / QQ 用规范写法再搜一轮，命中率明显高于原名。
+  // Deezer 本身不提供歌词，它只用来「认出这首歌是谁」。
+  function lookupDeezer(title, artist, duration, cb) {
+    const clean = (value) => String(value || "").replace(/["\\]/g, " ").trim();
+    const query = 'track:"' + clean(title) + '"' + (artist ? ' artist:"' + clean(artist) + '"' : "");
+    httpGetJson(DEEZER_API + "/search?q=" + encodeURIComponent(query) + "&limit=5", (data) => {
+      const list = data && Array.isArray(data.data) ? data.data : [];
+      if (!list.length) {
+        cb(null);
+        return;
+      }
+      let picked = null;
+      for (const item of list) {
+        if (!item || !item.title) continue;
+        const singer = item.artist && item.artist.name;
+        if (matchesSong(title, artist, duration, item.title, singer, Number(item.duration))) {
+          picked = item;
+          break;
+        }
+      }
+      if (!picked) {
+        // 严格规则没命中时按放宽规则再试一次（同名 + 时长），仍然要求曲名完全一致。
+        for (const item of list) {
+          if (!item || !item.title) continue;
+          const singer = item.artist && item.artist.name;
+          if (matchesSongLoose(title, artist, duration, item.title, singer, Number(item.duration))) {
+            picked = item;
+            break;
+          }
+        }
+      }
+      if (!picked || !picked.id) {
+        cb(null);
+        return;
+      }
+      httpGetJson(DEEZER_API + "/2/track/" + picked.id, (detail) => {
+        const track = detail && detail.id ? detail : null;
+        if (!track || !track.title) {
+          cb(null);
+          return;
+        }
+        cb({
+          title: String(track.title),
+          artist: String((track.artist && track.artist.name) || (picked.artist && picked.artist.name) || ""),
+          duration: Number(track.duration) || Number(picked.duration) || 0,
+          isrc: String(track.isrc || ""),
+        });
+      }, null, DEEZER_TIMEOUT_MS);
+    }, null, DEEZER_TIMEOUT_MS);
   }
 
   function withProvider(record, name) {
@@ -1074,10 +1321,11 @@
     return Boolean(record && "string" == typeof record.syncedLyrics && record.syncedLyrics.trim());
   }
 
-  function rankSongs(list, title, artist, duration, nameOf, artistOf, durationOf) {
+  function rankSongs(list, title, artist, duration, nameOf, artistOf, durationOf, matcher) {
     if (!Array.isArray(list)) return [];
     const wanted = normalize(queryTitle(title));
     const singer = normalize(artist);
+    const matches = matcher || matchesSong;
     const score = (item) => {
       const name = normalize(queryTitle(nameOf(item)));
       const seconds = durationOf(item);
@@ -1085,8 +1333,16 @@
         + (singer && matchesArtist(artist, artistOf(item)) ? 8 : 0)
         + (Number.isFinite(duration) && duration > 0 && Math.abs(seconds - duration) <= 4 ? 6 : 0);
     };
-    return list.filter((item) => item && matchesSong(title, artist, duration, nameOf(item), artistOf(item), durationOf(item)))
+    return list.filter((item) => item && matches(title, artist, duration, nameOf(item), artistOf(item), durationOf(item)))
       .sort((a, b) => score(b) - score(a)).slice(0, 3);
+  }
+
+  // 严格轮没结果时再按放宽规则挑一遍。曲名仍要完全相等，所以不会串到同名
+  // 不同版的另一首；只有歌手写法不一致这类「曲库里其实有这首歌」的情况才会救回来。
+  function rankSongsWithFallback(list, title, artist, duration, nameOf, artistOf, durationOf) {
+    const strict = rankSongs(list, title, artist, duration, nameOf, artistOf, durationOf);
+    if (strict.length) return strict;
+    return rankSongs(list, title, artist, duration, nameOf, artistOf, durationOf, matchesSongLoose);
   }
 
   function isLive(title) {
@@ -1211,17 +1467,45 @@
     return true;
   }
 
+  // 严格匹配失败后的第二轮：只放开「歌手」一项，曲名必须完全对得上
+  // （不是前缀、不是包含），Live / 伴奏 / 场次仍按原规则拦。
+  // 曲库侧常见「歌手写法不同 / 挂的制作人不同 / 合唱拆开」，严格轮会把整首歌
+  // 判成没有歌词；这一轮用同名 + 时长兜底，同名加上时长对得上基本不会串歌。
+  function matchesSongLoose(title, artist, duration, candidateTitle, candidateArtist, candidateDuration) {
+    if (!candidateTitle) return false;
+    const wanted = [songTitle(title), normalize(queryTitle(title))].filter(Boolean);
+    const found = [songTitle(candidateTitle), normalize(queryTitle(candidateTitle))].filter(Boolean);
+    if (!wanted.length || !found.some((name) => wanted.indexOf(name) >= 0)) return false;
+    if (isLive(title) !== isLive(candidateTitle)) return false;
+    if (INSTRUMENTAL_MARK.test(candidateTitle) && !INSTRUMENTAL_MARK.test(title)) return false;
+    const stage = STAGE_MARK.exec(title);
+    const otherStage = STAGE_MARK.exec(candidateTitle);
+    if (stage && otherStage && stage[1] !== otherStage[1]) return false;
+    const wantedDuration = durationSeconds(duration);
+    const candidateSeconds = durationSeconds(candidateDuration);
+    if (Number.isFinite(wantedDuration) && wantedDuration > 0 &&
+        Number.isFinite(candidateSeconds) && candidateSeconds > 0) {
+      // 同名不同版的时长差通常远大于 10 秒；两边都有时长时用它挡掉翻唱 / 剪辑版。
+      if (Math.abs(candidateSeconds - wantedDuration) > 12) return false;
+      return true;
+    }
+    // 没有时长可对时只认「毫无歧义」的情况：名字完全一致，且歌手也对得上或
+    // 曲库里根本没写歌手。宁可少补一首，也不要把别的歌的歌词贴上去。
+    const singer = normalize(artist);
+    return !singer || !candidateArtist || matchesArtist(artist, candidateArtist);
+  }
+
   // 候选歌词请求并行发出（最多 3 个），首个拿到可解析歌词的胜出；全部没歌词
   // 时返回 null。
   function tryCandidates(candidates, fetch, cb, limit = 3) {
-    if (settled) return;
+    if (stopped()) return;
     const picked = Array.isArray(candidates) ? candidates.slice(0, limit) : [];
     if (!picked.length) { cb(null); return; }
     let pending = picked.length;
     let done = false;
     for (const candidate of picked) {
       fetch(candidate, (record) => {
-        if (settled || done) return;
+        if (stopped() || done) return;
         if (buildPayload(record)) {
           done = true;
           cb(record);
@@ -1270,10 +1554,10 @@
   }
 
   function httpGetText(target, callback, extraHeaders, timeoutMs) {
-    if (settled) return;
+    if (stopped()) return;
     let done = false;
     const reply = (value) => {
-      if (done || settled) return;
+      if (done || stopped()) return;
       done = true;
       callback(value);
     };
@@ -1285,10 +1569,20 @@
         }
       }
       const options = { url: target, headers: headers, timeout: timeoutMs || 4000 };
+      // 元数据请求（open.spotify.com 的 oEmbed / embed）和 Musixmatch 换 token 的
+      // 那一跳也走这里，它们成功不代表歌词源给过答复，所以统计只算真正的歌词查询。
+      const counted = target.indexOf("open.spotify.com") < 0 && target.indexOf("/token.get") < 0;
       const onReply = (error, response, data) => {
-        if (done || settled) return;
+        if (done || stopped()) return;
         const statusCode = Number(response && response.status);
         if (error || !response) {
+          reply(null);
+          return;
+        }
+        // 404 / 400 是第三方源的「确定没有」答复，算有效应答；5xx / 429 / 超时
+        // 属于临时故障，不算，避免把网络故障写成 miss。
+        if (statusCode === 404 || statusCode === 400) {
+          if (counted) netAnswered += 1;
           reply(null);
           return;
         }
@@ -1301,6 +1595,7 @@
           reply(null);
           return;
         }
+        if (counted) netAnswered += 1;
         reply(data);
       };
 
@@ -1601,6 +1896,28 @@
     return pbConcat([pbWriteVarint(field * 8 + 2), pbWriteVarint(bytes.length), bytes]);
   }
 
+  // 只有纯文本时，按歌曲时长把行均分出时间轴：能跟着滚动的歌词总比整屏文字有用。
+  // 从第二行开始排（第一行通常留 1.2 秒前奏），最后一行落在结束前 4 秒。
+  // 时长缺失或太短时不编时间轴，保持 UNSYNCED。
+  function distributeLines(words, spanMs) {
+    const first = 1200;
+    const last = Math.max(first, spanMs - 4000);
+    const step = words.length > 1 ? (last - first) / (words.length - 1) : 0;
+    return words.map((text, index) => ({
+      startTimeMs: String(Math.round(first + step * index)),
+      words: text,
+      syllables: [],
+      endTimeMs: "0",
+    }));
+  }
+
+  function plainWords(text) {
+    return String(text || "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+
   function buildPayload(record) {
     if (!record || "object" != typeof record || record.instrumental) return null;
 
@@ -1610,15 +1927,27 @@
     }
 
     if (typeof record.plainLyrics === "string") {
-      const lines = record.plainLyrics
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((words) => ({ startTimeMs: "0", words: words, syllables: [], endTimeMs: "0" }));
+      const words = plainWords(record.plainLyrics);
+      const span = Number(record.trackDurationMs) || 0;
+      if (pseudoSync && words.length && span >= 20000) {
+        const payload = makePayload("LINE_SYNCED", distributeLines(words, span), record);
+        // 标记成伪同步：runSource 不让它提前收工，等真正的同步歌词先。
+        if (payload) {
+          record.pseudo = true;
+          return payload;
+        }
+      }
+      const lines = words.map((text) => ({ startTimeMs: "0", words: text, syllables: [], endTimeMs: "0" }));
       if (lines.length) return makePayload("UNSYNCED", lines, record);
     }
 
     return null;
+  }
+
+  // ISRC 反查拿回来的 record（只有时间轴歌词）转成 payload，走同一套规范化。
+  function payloadFrom(record, duration) {
+    if (record && duration && !record.trackDurationMs) record.trackDurationMs = Number(duration) * 1000;
+    return buildPayload(record);
   }
 
   // 客户端按 startTimeMs 递增定位当前行，并据此滚动列表。外部来源的行统一在这里
@@ -1784,12 +2113,13 @@
 
   // 同名曲目往往有好几版（原版、Video Edit、Extended Mix）。打分选版本：
   // 时长贴近的优先（时间轴才对得上），其次要有同步时间轴，其次曲名精确匹配。
-  function pickRecord(list, title, duration, artist) {
+  function pickRecord(list, title, duration, artist, matcher) {
     if (!Array.isArray(list) || !list.length) return null;
     const wanted = normalize(queryTitle(title));
+    const matches = matcher || matchesSong;
     const usable = list.filter((item) => {
       if (!item || "object" != typeof item || item.instrumental) return false;
-      if (!matchesSong(title, artist, duration, item.trackName, item.artistName, Number(item.duration))) return false;
+      if (!matches(title, artist, duration, item.trackName, item.artistName, Number(item.duration))) return false;
       return Boolean(
         (typeof item.syncedLyrics === "string" && item.syncedLyrics.trim()) ||
           (typeof item.plainLyrics === "string" && item.plainLyrics.trim()),

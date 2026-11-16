@@ -345,7 +345,9 @@ async function patchLyrics(env, request, targetPath, bytes, upstream, desktop, l
   const found = await (lyricsLookup || findLyrics(trackId, options));
   if (!found.lyrics) {
     // 卡片已经乐观补上了：确认没歌词后短期内不再补空卡。
-    markLyricsMiss(trackId);
+    // 只有「确实有源回了答」才算确认；全部请求失败（代理没连上、上游抖动）时
+    // 不写 miss，否则下一次进 Now Playing 的卡片会被压掉。
+    if (found.authoritative !== false) markLyricsMiss(trackId);
     return {
       bytes: null,
       status,

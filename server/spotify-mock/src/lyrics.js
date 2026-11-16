@@ -96,12 +96,17 @@ export function lyricsInfo(env = {}) {
 
 // ---------------------------------------------------------------- HTTP / JSON
 
-async function getJson(target, ctx, extraHeaders) {
+// countAnswer=false is used for the metadata request: it succeeds even when every
+// lyric provider is unreachable, so it must not count as a provider answer.
+async function getJson(target, ctx, extraHeaders, countAnswer = true) {
   const remaining = ctx.deadline - Date.now();
   if (remaining <= 0) return null;
   const controller = new AbortController();
   const timeout = Math.min(remaining, REQUEST_TIMEOUT_MS);
   const timer = setTimeout(() => controller.abort(), timeout);
+  const answered = () => {
+    if (countAnswer && ctx) ctx.answered = (ctx.answered || 0) + 1;
+  };
   try {
     const headers = { "user-agent": USER_AGENT, accept: "application/json" };
     if (extraHeaders) {
@@ -112,12 +117,20 @@ async function getJson(target, ctx, extraHeaders) {
       signal: controller.signal,
       redirect: "follow",
     });
-    if (!response || response.status < 200 || response.status >= 300) return null;
+    if (!response) return null;
+    // 404 / 400 is the provider's authoritative "not in our catalogue"; 5xx / 429
+    // and timeouts are transient and must never be reported as "no lyrics".
+    if (response.status === 404 || response.status === 400) {
+      answered();
+      return null;
+    }
+    if (response.status < 200 || response.status >= 300) return null;
     const length = Number(response.headers.get("content-length") || 0);
     if (length > MAX_JSON_BYTES) return null;
     const text = await response.text();
     // Third-party APIs are not trusted: never JSON.parse an unbounded response.
     if (!text || text.length > MAX_JSON_BYTES) return null;
+    answered();
     return JSON.parse(text);
   } catch (error) {
     return null;
@@ -132,7 +145,7 @@ async function lookupMetadata(trackId, ctx) {
   const target =
     "https://open.spotify.com/oembed?url=" +
     encodeURIComponent("https://open.spotify.com/track/" + trackId);
-  const meta = await getJson(target, ctx);
+  const meta = await getJson(target, ctx, null, false);
   if (!meta || !meta.title) return null;
   return {
     title: String(meta.title),
@@ -546,18 +559,22 @@ function cacheSet(key, value, options) {
   cache.set(key, { value, expires: Date.now() + options.cacheTtlMs });
 }
 
+// `authoritative` tells the caller whether "no lyrics" is a real answer from at
+// least one provider or just a network failure. Only the former may be recorded
+// as a miss: a backgrounded client whose provider requests all failed would
+// otherwise keep its lyrics card suppressed for the whole miss window.
 async function resolveLyrics(trackId, options) {
   const deadline = Date.now() + options.timeoutMs;
-  const ctx = { deadline };
+  const ctx = { deadline, answered: 0 };
   const meta = await lookupMetadata(trackId, ctx);
-  if (!meta) return null;
+  if (!meta) return { lyrics: null, authoritative: false };
 
   for (const source of options.sources) {
     if (Date.now() >= deadline) break;
     const lyrics = await lookupSource(source, meta.title, meta.artist, ctx);
-    if (lyrics) return lyrics;
+    if (lyrics) return { lyrics, authoritative: true };
   }
-  return null;
+  return { lyrics: null, authoritative: (ctx.answered || 0) > 0 };
 }
 
 export async function findLyrics(trackId, options = lyricsOptions()) {
@@ -568,9 +585,9 @@ export async function findLyrics(trackId, options = lyricsOptions()) {
   if (cached) return { lyrics: cached.value, cache: "hit" };
   if (inflight.has(key)) return inflight.get(key);
 
-  const task = resolveLyrics(trackId, options).then((value) => {
-    cacheSet(key, value, options);
-    return { lyrics: value, cache: "miss" };
+  const task = resolveLyrics(trackId, options).then((result) => {
+    cacheSet(key, result.lyrics, options);
+    return { lyrics: result.lyrics, cache: "miss", authoritative: result.authoritative };
   });
   const tracked = task.finally(() => {
     inflight.delete(key);
