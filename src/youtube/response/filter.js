@@ -168,6 +168,22 @@
     return itemLayouts(node).some((layout) => FEED_CARD_LAYOUT.test(layout));
   }
 
+  // 列表项里是否带视频 id（/vi/xxxxxxxxxxx/）：带的就是视频卡片，别当图文删。
+  function hasVideoIdMark(node) {
+    const state = node && node[WIRE_STATE];
+    if (!state || !state.bytes || !state.bytes.length) return false;
+    return /\/vi\/[A-Za-z0-9_-]{11}\//.test(looseUtf8.decode(state.bytes));
+  }
+
+  // 新闻 / 图文卡片。前两条是版式名和 element 标识；最后一条是结构兜底：
+  // 列表项解出来既没有已建模的视频卡片字段（videoWithContextRenderer），
+  // 也不带视频 id，那它就是帖子 / 新闻 / 轮播这类非视频卡片——renderer 叫
+  // 什么名字都能删，不用去猜。
+  function isFeedCard(node) {
+    if (isFeedCardLayout(node) || hasMarker(node, FEED_CARD_MARKERS)) return true;
+    return !node.videoWithContextRenderer && !hasVideoIdMark(node);
+  }
+
   const CONTAINER_KEYS = new Set(["richItemContents", "overlays"]);
   const LIST_KEYS = new Set(["richItemContents", "contents", "sectionListSupportedRenderers", "overlayCollections"]);
   const RENDERER_KEYS = new Set([
@@ -404,15 +420,16 @@
 
     let changed = rewriteSpeedMenu(root, opts.maxSpeed, opts.hidePremium);
 
-    function visit(node, inList = false) {
+    // isItem：node 是不是 richItemContents 里的那一层卡片本身。
+    // inList 会传给子节点，结构判断只能认 isItem，否则会把卡片内部的
+    // element 节点当成「非视频卡片」连锅端。
+    function visit(node, inList = false, isItem = false) {
       if (!node || "object" != typeof node || ArrayBuffer.isView(node)) return 0;
       if (inList && false !== opts.blockMembersOnly && hasMembersOnlyBadge(node) && isAllMembersOnly(node)) return 1;
 
       // 列表项：Shorts 卡片 / 新闻图文卡片直接整项删掉。
-      if (inList) {
-        if (false !== opts.blockShortsFeed && (node.reelShelfRenderer || hasMarker(node, SHORTS_MARKERS))) return 1;
-        if (false !== opts.blockFeedCards && (isFeedCardLayout(node) || hasMarker(node, FEED_CARD_MARKERS))) return 1;
-      }
+      if (inList && false !== opts.blockShortsFeed && (node.reelShelfRenderer || hasMarker(node, SHORTS_MARKERS))) return 1;
+      if (isItem && false !== opts.blockFeedCards && isFeedCard(node)) return 1;
 
       // 货架：内部命中标识时整块删掉（Shorts 货架 / 新闻帖子货架）。
       // 货架标题是本地化文案，这里不参与判断；标题下的卡片被删空后，
@@ -428,7 +445,7 @@
 
       if (Array.isArray(node)) {
         let result = 0;
-        for (const item of node) result |= 1 & visit(item, inList);
+        for (const item of node) result |= 1 & visit(item, inList, false);
         return result;
       }
 
@@ -461,7 +478,7 @@
         if (!value || "object" != typeof value || ArrayBuffer.isView(value)) continue;
 
         if (!Array.isArray(value)) {
-          const result = visit(value, inList);
+          const result = visit(value, inList, false);
           if (inList && 1 & result) return 1;
           isAd = !!(1 & result) || isAd;
           if (2 & result && RENDERER_KEYS.has(key)) isShortsShelf = true;
@@ -481,7 +498,7 @@
             (isTabs && isStoreTab(item)) ||
             (isAttachments && item.products?.length) ||
             (isPromoted && false !== opts.blockFeedAds && containsBytes(item));
-          const result = drop && !inList ? 0 : visit(item, inList || isContainer);
+          const result = drop && !inList ? 0 : visit(item, inList || isContainer, "richItemContents" === key);
 
           if (inList && 1 & result) return 1;
           isAd = !!(1 & result) || isAd;

@@ -767,7 +767,6 @@ export default async function (ctx) {
     video_codec: "videoCodec",
     web_cleanup: "webCleanup",
     music_cleanup: "musicCleanup",
-    probe: "probe",
   };
 
   // 旧版插件的 26 个参数顺序。Loon 旧版按位置传数组时用它还原；
@@ -802,7 +801,7 @@ export default async function (ctx) {
     "stripHotHash",
   ];
 
-  // 当前 Loon 位置数组（21 项）。末尾追加的新参数按这个顺序还原；
+  // 当前 Loon 位置数组（20 项）。末尾追加的新参数按这个顺序还原；
   // 旧长度的位置数组走下面按长度分的兼容表。
   const CURRENT_ARG_ORDER = [
     "block_ads",
@@ -825,7 +824,6 @@ export default async function (ctx) {
     "video_codec",
     "web_cleanup",
     "music_cleanup",
-    "probe",
   ];
 
   // 只加过 block_feed_cards 的那一版（13 项）：客户端缓存旧插件时仍按它的顺序还原。
@@ -1093,10 +1091,6 @@ export default async function (ctx) {
     // 网页版 topbar 按钮与 YouTube Music 首页推荐。
     options.webCleanup = asBool(options.webCleanup, false);
     options.musicCleanup = asBool(options.musicCleanup, false);
-    // 排障日志：off / on / full。full 会额外打卡片开头的 hex，能直接解出字段号。
-    const probeRaw = String(options.probe ?? "").trim().toLowerCase();
-    options.probeFull = "full" === probeRaw || "hex" === probeRaw;
-    options.probe = options.probeFull || asBool(options.probe, false);
 
     const result = { ...defaults, ...options };
     if (noDefaults) OPTIONS_CACHE = result;

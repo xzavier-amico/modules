@@ -767,7 +767,6 @@ export default async function (ctx) {
     video_codec: "videoCodec",
     web_cleanup: "webCleanup",
     music_cleanup: "musicCleanup",
-    probe: "probe",
   };
 
   // 旧版插件的 26 个参数顺序。Loon 旧版按位置传数组时用它还原；
@@ -802,7 +801,7 @@ export default async function (ctx) {
     "stripHotHash",
   ];
 
-  // 当前 Loon 位置数组（21 项）。末尾追加的新参数按这个顺序还原；
+  // 当前 Loon 位置数组（20 项）。末尾追加的新参数按这个顺序还原；
   // 旧长度的位置数组走下面按长度分的兼容表。
   const CURRENT_ARG_ORDER = [
     "block_ads",
@@ -825,7 +824,6 @@ export default async function (ctx) {
     "video_codec",
     "web_cleanup",
     "music_cleanup",
-    "probe",
   ];
 
   // 只加过 block_feed_cards 的那一版（13 项）：客户端缓存旧插件时仍按它的顺序还原。
@@ -1093,10 +1091,6 @@ export default async function (ctx) {
     // 网页版 topbar 按钮与 YouTube Music 首页推荐。
     options.webCleanup = asBool(options.webCleanup, false);
     options.musicCleanup = asBool(options.musicCleanup, false);
-    // 排障日志：off / on / full。full 会额外打卡片开头的 hex，能直接解出字段号。
-    const probeRaw = String(options.probe ?? "").trim().toLowerCase();
-    options.probeFull = "full" === probeRaw || "hex" === probeRaw;
-    options.probe = options.probeFull || asBool(options.probe, false);
 
     const result = { ...defaults, ...options };
     if (noDefaults) OPTIONS_CACHE = result;
@@ -1861,6 +1855,22 @@ export default async function (ctx) {
     return itemLayouts(node).some((layout) => FEED_CARD_LAYOUT.test(layout));
   }
 
+  // 列表项里是否带视频 id（/vi/xxxxxxxxxxx/）：带的就是视频卡片，别当图文删。
+  function hasVideoIdMark(node) {
+    const state = node && node[WIRE_STATE];
+    if (!state || !state.bytes || !state.bytes.length) return false;
+    return /\/vi\/[A-Za-z0-9_-]{11}\//.test(looseUtf8.decode(state.bytes));
+  }
+
+  // 新闻 / 图文卡片。前两条是版式名和 element 标识；最后一条是结构兜底：
+  // 列表项解出来既没有已建模的视频卡片字段（videoWithContextRenderer），
+  // 也不带视频 id，那它就是帖子 / 新闻 / 轮播这类非视频卡片——renderer 叫
+  // 什么名字都能删，不用去猜。
+  function isFeedCard(node) {
+    if (isFeedCardLayout(node) || hasMarker(node, FEED_CARD_MARKERS)) return true;
+    return !node.videoWithContextRenderer && !hasVideoIdMark(node);
+  }
+
   const CONTAINER_KEYS = new Set(["richItemContents", "overlays"]);
   const LIST_KEYS = new Set(["richItemContents", "contents", "sectionListSupportedRenderers", "overlayCollections"]);
   const RENDERER_KEYS = new Set([
@@ -2097,15 +2107,16 @@ export default async function (ctx) {
 
     let changed = rewriteSpeedMenu(root, opts.maxSpeed, opts.hidePremium);
 
-    function visit(node, inList = false) {
+    // isItem：node 是不是 richItemContents 里的那一层卡片本身。
+    // inList 会传给子节点，结构判断只能认 isItem，否则会把卡片内部的
+    // element 节点当成「非视频卡片」连锅端。
+    function visit(node, inList = false, isItem = false) {
       if (!node || "object" != typeof node || ArrayBuffer.isView(node)) return 0;
       if (inList && false !== opts.blockMembersOnly && hasMembersOnlyBadge(node) && isAllMembersOnly(node)) return 1;
 
       // 列表项：Shorts 卡片 / 新闻图文卡片直接整项删掉。
-      if (inList) {
-        if (false !== opts.blockShortsFeed && (node.reelShelfRenderer || hasMarker(node, SHORTS_MARKERS))) return 1;
-        if (false !== opts.blockFeedCards && (isFeedCardLayout(node) || hasMarker(node, FEED_CARD_MARKERS))) return 1;
-      }
+      if (inList && false !== opts.blockShortsFeed && (node.reelShelfRenderer || hasMarker(node, SHORTS_MARKERS))) return 1;
+      if (isItem && false !== opts.blockFeedCards && isFeedCard(node)) return 1;
 
       // 货架：内部命中标识时整块删掉（Shorts 货架 / 新闻帖子货架）。
       // 货架标题是本地化文案，这里不参与判断；标题下的卡片被删空后，
@@ -2121,7 +2132,7 @@ export default async function (ctx) {
 
       if (Array.isArray(node)) {
         let result = 0;
-        for (const item of node) result |= 1 & visit(item, inList);
+        for (const item of node) result |= 1 & visit(item, inList, false);
         return result;
       }
 
@@ -2154,7 +2165,7 @@ export default async function (ctx) {
         if (!value || "object" != typeof value || ArrayBuffer.isView(value)) continue;
 
         if (!Array.isArray(value)) {
-          const result = visit(value, inList);
+          const result = visit(value, inList, false);
           if (inList && 1 & result) return 1;
           isAd = !!(1 & result) || isAd;
           if (2 & result && RENDERER_KEYS.has(key)) isShortsShelf = true;
@@ -2174,7 +2185,7 @@ export default async function (ctx) {
             (isTabs && isStoreTab(item)) ||
             (isAttachments && item.products?.length) ||
             (isPromoted && false !== opts.blockFeedAds && containsBytes(item));
-          const result = drop && !inList ? 0 : visit(item, inList || isContainer);
+          const result = drop && !inList ? 0 : visit(item, inList || isContainer, "richItemContents" === key);
 
           if (inList && 1 & result) return 1;
           isAd = !!(1 & result) || isAd;
@@ -2378,104 +2389,6 @@ export default async function (ctx) {
     }
 
     return changed;
-  }
-
-  //=====================================================================================
-  // §12 排障：把推荐流里卡片的真实结构打到日志
-  //
-  // 只读不改，默认关闭，靠 probe 参数打开（off / on / full）。用来回答
-  // 「这张卡片在响应里到底长什么样」，好按真实字段号而不是猜的名字写规则：
-  //   App（protobuf）：每个列表项一行——序号、字节数、字段号、已建模的键、
-  //                    有没有视频 id、.eml 版式名、卡内出现的内部标识。
-  //   full：额外打前 120 字节的 hex，可以直接按 protobuf 解出字段号。
-  //   网页版（JSON）：每个列表一行——数组键 → 单键包装链。
-  // 同一份签名在一次响应里只打一次，最多 40 行。
-  //=====================================================================================
-
-  const PROBE_MAX_LINES = 40;
-  const PROBE_EML = /[a-z0-9_]{3,}\.eml(?:-js)?(?:-fe)?/g;
-  const PROBE_IDENTIFIER = /[a-z][a-z0-9]{1,}(?:_[a-z0-9]+){1,4}/g;
-  const PROBE_VIDEO_ID = /\/vi\/[A-Za-z0-9_-]{11}\//;
-
-  function probeLog(lines, line) {
-    if (lines.size >= PROBE_MAX_LINES || lines.has(line)) return;
-    lines.add(line);
-    console.log("[YT probe] " + line);
-  }
-
-  function probeHex(bytes, limit = 120) {
-    const slice = bytes.subarray(0, Math.min(bytes.length, limit));
-    let out = "";
-    for (const byte of slice) out += (byte < 16 ? "0" : "") + byte.toString(16);
-    return out;
-  }
-
-  // App：按列表项打印字段号与标识。
-  function probeAppCards(root, options) {
-    const lines = new Set();
-    try {
-      probeLog(lines, "platform=app route=protobuf");
-      walkObjects(root, (node) => {
-        for (const key of LIST_KEYS) {
-          const list = node[key];
-          if (!Array.isArray(list)) continue;
-          for (let index = 0; index < list.length; index++) {
-            const item = list[index];
-            const state = item && item[WIRE_STATE];
-            if (!state || !state.bytes || !state.bytes.length) continue;
-            const bytes = state.bytes;
-            const decoded = looseUtf8.decode(bytes);
-            const eml = [...new Set(decoded.match(PROBE_EML) ?? [])].slice(0, 6);
-            const ids = [...new Set(decoded.match(PROBE_IDENTIFIER) ?? [])].slice(0, 10);
-            const fields = (state.fields ?? []).map((field) => field.no).slice(0, 10);
-            let line = `${key}#${index} bytes=${bytes.length} videoId=${PROBE_VIDEO_ID.test(decoded) ? "yes" : "no"} fields=[${fields.join(",")}] keys=[${Object.keys(item).join(",")}] eml=[${eml.join(",")}] ids=[${ids.join(",")}]`;
-            if (options.probeFull) line += ` hex=${probeHex(bytes)}`;
-            probeLog(lines, line);
-          }
-        }
-      });
-    } catch (e) {
-      console.log("[YT probe] app cards failed: " + (e && e.message));
-    }
-  }
-
-  // 网页版：按列表打印「数组键 → 单键包装链」。
-  function probeJsonCards(root, options) {
-    const lines = new Set();
-    const chain = (node) => {
-      const keys = [];
-      let current = node;
-      for (let depth = 0; depth < 5 && current && "object" == typeof current && !Array.isArray(current); depth++) {
-        const names = Object.keys(current);
-        if (1 !== names.length) break;
-        keys.push(names[0]);
-        current = current[names[0]];
-      }
-      return keys.join(".");
-    };
-
-    try {
-      probeLog(lines, "platform=web route=json");
-      (function visit(node) {
-        if (!node || "object" != typeof node) return;
-        if (Array.isArray(node)) {
-          for (const item of node) visit(item);
-          return;
-        }
-        for (const key of Object.keys(node)) {
-          const value = node[key];
-          if (Array.isArray(value) && value.length) {
-            const signatures = [...new Set(value.filter((item) => item && "object" == typeof item).map((item) => chain(item) || "?"))].slice(0, 6);
-            let line = `${key} -> ${signatures.join(" | ")}`;
-            if (options.probeFull) line += ` sample=${JSON.stringify(value[0]).slice(0, 400)}`;
-            if (signatures.length) probeLog(lines, line);
-          }
-          visit(value);
-        }
-      })(root);
-    } catch (e) {
-      console.log("[YT probe] json cards failed: " + (e && e.message));
-    }
   }
 
   //=====================================================================================
@@ -3136,8 +3049,6 @@ export default async function (ctx) {
 
     // browse / next / search / reel/reel_watch_sequence 共用同一套 renderer 过滤；
     // 侧栏偶尔也塞在 browse 响应里，所以 guide 过滤一起跑。
-    if (options.probe) probeJsonCards(data, options);
-
     let changed = jsonPruneTree(data, options);
     changed = jsonFilterGuide(data, options) || changed;
     if (options.blockRelatedVideos) changed = jsonDropRelated(data) || changed;
@@ -3967,8 +3878,6 @@ export default async function (ctx) {
         $done({});
         return;
       }
-
-      if (options.probe) probeAppCards(node, options);
 
       // 画质上限或编码偏好任一开启都要刷新缓存：request 阶段按缓存 itag 改写。
       if (false !== options.autoHd || "any" !== options.videoCodec) {

@@ -1023,13 +1023,13 @@ check("YouTube keeps current and previous Loon argument tuples aligned", () => {
 check("YouTube Loon plugin passes every argument and keeps block_feed_cards last", () => {
   const plugin = read("loon/youtube/youtube-enhance.plugin");
   const declared = [...plugin.matchAll(/^(\w+) = (?:switch|select|input),/gm)].map((match) => match[1]);
-  assert.equal(declared.length, 21, "the plugin must expose 21 arguments");
+  assert.equal(declared.length, 20, "the plugin must expose 20 arguments");
   assert.ok(declared.includes("block_feed_cards"));
   // 设置页按功能分组，位置数组按兼容顺序：新参数一律追加在末尾。
   const order = [
     "block_ads", "block_ai", "max_height", "caption_lang", "home_menu", "block_shorts_feed", "youtube_music",
     "block_members_only", "home_cleanup", "jump_ahead", "max_speed", "web", "block_feed_cards",
-    "player_cleanup", "captions_mode", "feed_cleanup", "watch_cleanup", "video_codec", "web_cleanup", "music_cleanup", "probe",
+    "player_cleanup", "captions_mode", "feed_cleanup", "watch_cleanup", "video_codec", "web_cleanup", "music_cleanup",
   ];
   const names = (line) => [.../then script\("[^"]+", \{([^)]*)\}\) with/.exec(line)[1].matchAll(/\$\{(\w+)\}/g)].map((match) => match[1]);
   const lines = plugin.split("\n").filter((line) => /then script\("[^"]+", \{/.test(line));
@@ -1505,52 +1505,6 @@ check("YouTube Music cleanup locks the highest audio bitrate", () => {
     assert.deepEqual(Object.keys(run(file, body, url, { maxHeight: "off", web: true }, { $request: { url }, $response: { url, status: 200, headers: { "content-type": "application/json" }, body } })), [], platform + " must keep every audio format by default");
     assert.deepEqual(itags({ musicCleanup: true, maxHeight: "off", web: true }), [251, 137], platform + " must keep only the best audio track");
   }
-});
-
-check("YouTube probe dumps the real card structure without touching the body", () => {
-  const item = (marker) => serialize([b(153515154, serialize([b(172660663, serialize([b(1, serialize([b(168777401, serialize([b(3, serialize([b(172035250, serialize([s(1, marker)]))]))]))]))]))]))]);
-  const sectionList = serialize([b(1, serialize([b(50195462, serialize([b(1, item("news_card.eml"))]))]))]);
-  const appBody = serialize([b(7, serialize([b(51779735, serialize([b(1, serialize([b(49399797, sectionList)]))]))]))]);
-  const appUrl = "https://youtubei.googleapis.com/youtubei/v1/next";
-  const appLogs = [];
-  const appOut = run("loon/youtube/js/youtube.response.js", appBody, appUrl, { blockAds: false, probe: true }, {
-    $request: { url: appUrl },
-    $response: { url: appUrl, status: 200, headers: {}, body: appBody },
-    console: { log: (line) => appLogs.push(String(line)) },
-  });
-  assert.deepEqual(Object.keys(appOut), [], "the probe must not rewrite the body");
-  assert.ok(appLogs.some((line) => line.includes("[YT probe]") && line.includes("platform=app")), "App probe must announce the platform");
-  assert.ok(
-    appLogs.some((line) => line.includes("richItemContents#0") && line.includes("videoId=no") && line.includes("news_card.eml")),
-    "App probe must dump the index, field numbers and identifiers: " + appLogs.join(" / "),
-  );
-
-  // full 模式额外打卡片开头 hex，能直接按 protobuf 解字段号。
-  const fullLogs = [];
-  run("loon/youtube/js/youtube.response.js", appBody, appUrl, { blockAds: false, probe: "full" }, {
-    $request: { url: appUrl },
-    $response: { url: appUrl, status: 200, headers: {}, body: appBody },
-    console: { log: (line) => fullLogs.push(String(line)) },
-  });
-  assert.ok(fullLogs.some((line) => line.includes("hex=")), "full mode must dump the item hex");
-
-  const body = JSON.stringify({ contents: { richGridRenderer: { contents: [{ richItemRenderer: { content: { postRenderer: { contentText: "post" } } } }] } } });
-  const url = "https://www.youtube.com/youtubei/v1/browse";
-  const webLogs = [];
-  run("loon/youtube/js/youtube.response.js", body, url, { web: true, probe: true, blockAds: false }, {
-    $request: { url },
-    $response: { url, status: 200, headers: { "content-type": "application/json" }, body },
-    console: { log: (line) => webLogs.push(String(line)) },
-  });
-  assert.ok(webLogs.some((line) => line.includes("[YT probe]") && line.includes("richItemRenderer.content.postRenderer")), "web probe must dump the wrap chain: " + webLogs.join(" / "));
-
-  const silent = [];
-  run("loon/youtube/js/youtube.response.js", appBody, appUrl, { blockAds: false }, {
-    $request: { url: appUrl },
-    $response: { url: appUrl, status: 200, headers: {}, body: appBody },
-    console: { log: (line) => silent.push(String(line)) },
-  });
-  assert.deepEqual(silent, [], "the probe must stay silent when the switch is off");
 });
 
 check("Bilibili web endpoints strip ads behind the web toggle", () => {

@@ -56,7 +56,7 @@ modules:
 
 ## 参数
 
-共 21 个参数。广告、画质、首页菜单、播放器 / 信息流 / 播放页清理都做了聚合；后台播放、PiP、热更新哈希这些不再单独给开关，脚本常开。
+共 20 个参数。广告、画质、首页菜单、播放器 / 信息流 / 播放页清理都做了聚合；后台播放、PiP、热更新哈希这些不再单独给开关，脚本常开。
 
 ### 广告与 AI
 
@@ -83,7 +83,7 @@ modules:
 | --- | --- | --- |
 | `home_menu` | 空 | 首页/侧栏菜单保留项（多选，逗号分隔）。留空=旧默认（仅隐藏上传）；`all`=全部保留；`none`=全部隐藏；`-shorts`=保留全部但隐藏 Shorts；`upload,shorts`=只保留这两项 |
 | `block_shorts_feed` | false | 移除首页、搜索和推荐信息流中的 Shorts 货架，以及混在推荐流里的单个 Shorts 卡片 |
-| `block_feed_cards` | false | 移除推荐流里的新闻、社区图文帖子等非视频卡片（按版式名 / element 标识判断，不看标题文案） |
+| `block_feed_cards` | false | 移除推荐流里的新闻、社区图文帖子等非视频卡片。原生端按结构判定：列表项不是视频卡片（没有 `videoWithContextRenderer`）、也不带视频 id 就删，所以不依赖 renderer 名字；网页版按 renderer 名单判定；都不看标题文案 |
 | `home_cleanup` | standard | 首页内容清理：`standard`=Playables；`all`=再加竖屏直播；`off`=不清理 |
 | `block_members_only` | false | 从首页、频道页等列表中移除需要频道会员才能观看的视频 |
 | `feed_cleanup` | off | 信息流清理（网页版）：`standard`=去掉「继续观看」卡片与顶部筛选条；`all`=再去掉直播 / 首映卡片 |
@@ -97,7 +97,6 @@ modules:
 | `youtube_music` | true | YouTube Music 增强：去广告、后台播放、PiP；关闭后 YouTube Music 的请求完全放行 |
 | `web` | true | 支持网页版：处理 `www.youtube.com` / `m.youtube.com` / `music.youtube.com` 的 youtubei JSON 响应；关闭后网页版请求完全放行 |
 | `music_cleanup` | false | 网页版 YouTube Music 只保留最高码率音频格式 |
-| `probe` | off | 排障日志：`off` 关闭；`on` 打印每张卡片的字段号、`.eml` 版式名、内部标识、有没有视频 id；`full` 再打卡片开头 120 字节 hex。排查「某类卡片没被删掉」时临时打开 |
 
 补充说明：
 
@@ -113,7 +112,6 @@ modules:
 - 脚本按请求阶段拆分，独立维护，不自动同步外部改动；外部实现若有变化，需要人工对比后再决定是否跟进。
 - 三端都生效的：`captions_mode`、`video_codec`、`watch_cleanup`（评论区按 `comment-item-section` 标识、相关视频按播放器浮层字段）。
 - 只有网页版生效的：`player_cleanup` 的结束推荐墙与信息卡、`feed_cleanup` 的筛选条 / 直播卡片、`web_cleanup`、`music_cleanup`。原生 App 的 player 响应里这几处没有建模字段，脚本不去猜字段号，宁可不动数据；`player_cleanup=all` 在原生端仍会关掉自动播放下一首（`NextResult` 3 号字段）。
-- 打开 `probe` 后日志形如 `[YT probe] richItemContents fields=[153515154] keys=[videoWithContextRenderer] eml=[…] ids=[…]`（原生 App）或 `[YT probe] contents -> richItemRenderer.content.postRenderer`（网页版）；脚本只读不改，看完记得关掉。
 - `captions_mode=off` 认的是 `kind=asr` 与 `vssId=a.*`，`force` 会同时把音轨的 `captionsInitialState` 置为开启；两者都不看界面语言。
 - 不做 SponsorBlock 自动跳过：原生 App 的跳段必须由客户端 seek，MITM 只能改响应数据，控制不了播放进度；uYou+ / iSponsorBlock 都是 hook `YTPlayerViewController` 实现的。网页版理论上可以在 watch 页 HTML 里注入脚本，但要额外处理 CSP nonce 与 SPA 导航，暂未实现。
 
