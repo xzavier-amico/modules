@@ -261,8 +261,9 @@
   // `xxx_shelf.eml` 这类内部名字）——它们是英文资源名，不随界面语言变化。
   // 标题文案（「重大新闻」/「Top stories」…）一律不匹配：那些是本地化文案，
   // 既会随语言失效，也会误删恰好叫这个名字的普通视频/货架。
-  const FEED_CARD_LAYOUT =
-    /^(?:post_shelf|carousel_headered_layout|carousel_footered_layout|landscape_image_wide_button_layout|square_image_layout|text_image_button_layout|grid_ads_image_layout|statement_banner|news_[a-z0-9_]+|breaking_news[a-z0-9_]*)\.eml(?:-js)?(?:-fe)?$/;
+  // 只认语义明确属于「帖子 / 新闻」的版式名。轮播、方图、大图按钮这些通用版式
+  // 普通视频卡片也在用，别列进来，否则会把首页正常内容一起删掉。
+  const FEED_CARD_LAYOUT = /^(?:post_shelf|news_[a-z0-9_]+|breaking_news[a-z0-9_]*)\.eml(?:-js)?(?:-fe)?$/;
   const FEED_CARD_MARKERS = [
     textEncoder.encode("post_shelf"),
     textEncoder.encode("backstage_post"),

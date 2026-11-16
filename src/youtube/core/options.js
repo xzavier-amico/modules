@@ -352,8 +352,10 @@
     // 网页版 topbar 按钮与 YouTube Music 首页推荐。
     options.webCleanup = asBool(options.webCleanup, false);
     options.musicCleanup = asBool(options.musicCleanup, false);
-    // 排障日志：打印推荐流卡片的真实结构，默认关闭。
-    options.probe = asBool(options.probe, false);
+    // 排障日志：off / on / full。full 会额外打卡片开头的 hex，能直接解出字段号。
+    const probeRaw = String(options.probe ?? "").trim().toLowerCase();
+    options.probeFull = "full" === probeRaw || "hex" === probeRaw;
+    options.probe = options.probeFull || asBool(options.probe, false);
 
     const result = { ...defaults, ...options };
     if (noDefaults) OPTIONS_CACHE = result;

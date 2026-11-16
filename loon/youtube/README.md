@@ -59,7 +59,7 @@
 | `youtube_music` | true | YouTube Music 增强：去广告、后台播放、PiP；关闭后 YouTube Music 的请求完全放行 |
 | `web` | true | 支持网页版：处理 `www.youtube.com` / `m.youtube.com` / `music.youtube.com` 的 youtubei JSON 响应；关闭后网页版请求完全放行 |
 | `music_cleanup` | false | 网页版 YouTube Music 只保留最高码率音频格式 |
-| `probe` | false | 排障日志：把推荐流里每张卡片的字段号、版式名（`.eml`）和内部标识打出来。排查「某类卡片没被删掉」时临时打开，把日志贴给我就能按真实结构写规则 |
+| `probe` | off | 排障日志：`off` 关闭；`on` 打印每张卡片的字段号、`.eml` 版式名、内部标识、有没有视频 id；`full` 再打卡片开头 120 字节 hex。排查「某类卡片没被删掉」时临时打开 |
 
 ## 注意事项
 

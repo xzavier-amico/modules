@@ -261,8 +261,9 @@
   // `xxx_shelf.eml` 这类内部名字）——它们是英文资源名，不随界面语言变化。
   // 标题文案（「重大新闻」/「Top stories」…）一律不匹配：那些是本地化文案，
   // 既会随语言失效，也会误删恰好叫这个名字的普通视频/货架。
-  const FEED_CARD_LAYOUT =
-    /^(?:post_shelf|carousel_headered_layout|carousel_footered_layout|landscape_image_wide_button_layout|square_image_layout|text_image_button_layout|grid_ads_image_layout|statement_banner|news_[a-z0-9_]+|breaking_news[a-z0-9_]*)\.eml(?:-js)?(?:-fe)?$/;
+  // 只认语义明确属于「帖子 / 新闻」的版式名。轮播、方图、大图按钮这些通用版式
+  // 普通视频卡片也在用，别列进来，否则会把首页正常内容一起删掉。
+  const FEED_CARD_LAYOUT = /^(?:post_shelf|news_[a-z0-9_]+|breaking_news[a-z0-9_]*)\.eml(?:-js)?(?:-fe)?$/;
   const FEED_CARD_MARKERS = [
     textEncoder.encode("post_shelf"),
     textEncoder.encode("backstage_post"),
@@ -966,8 +967,10 @@
     // 网页版 topbar 按钮与 YouTube Music 首页推荐。
     options.webCleanup = asBool(options.webCleanup, false);
     options.musicCleanup = asBool(options.musicCleanup, false);
-    // 排障日志：打印推荐流卡片的真实结构，默认关闭。
-    options.probe = asBool(options.probe, false);
+    // 排障日志：off / on / full。full 会额外打卡片开头的 hex，能直接解出字段号。
+    const probeRaw = String(options.probe ?? "").trim().toLowerCase();
+    options.probeFull = "full" === probeRaw || "hex" === probeRaw;
+    options.probe = options.probeFull || asBool(options.probe, false);
 
     const result = { ...defaults, ...options };
     if (noDefaults) OPTIONS_CACHE = result;
@@ -2254,17 +2257,19 @@
   //=====================================================================================
   // §12 排障：把推荐流里卡片的真实结构打到日志
   //
-  // 只读不改，默认关闭，靠 probe 参数打开。用来回答「这张卡片在响应里长什么样」：
-  //   App（protobuf）：每个列表项打一行——字段号、已建模的键、.eml 版式名、
-  //                    以及卡片里出现的可疑内部标识。
-  //   网页版（JSON）：每个列表打一行——数组键 → 单键包装链，例如
-  //                    richItemContents -> richItemRenderer.content.postRenderer
-  // 同一份签名在一次响应里只打一次，避免刷屏。
+  // 只读不改，默认关闭，靠 probe 参数打开（off / on / full）。用来回答
+  // 「这张卡片在响应里到底长什么样」，好按真实字段号而不是猜的名字写规则：
+  //   App（protobuf）：每个列表项一行——序号、字节数、字段号、已建模的键、
+  //                    有没有视频 id、.eml 版式名、卡内出现的内部标识。
+  //   full：额外打前 120 字节的 hex，可以直接按 protobuf 解出字段号。
+  //   网页版（JSON）：每个列表一行——数组键 → 单键包装链。
+  // 同一份签名在一次响应里只打一次，最多 40 行。
   //=====================================================================================
 
   const PROBE_MAX_LINES = 40;
   const PROBE_EML = /[a-z0-9_]{3,}\.eml(?:-js)?(?:-fe)?/g;
   const PROBE_IDENTIFIER = /[a-z][a-z0-9]{1,}(?:_[a-z0-9]+){1,4}/g;
+  const PROBE_VIDEO_ID = /\/vi\/[A-Za-z0-9_-]{11}\//;
 
   function probeLog(lines, line) {
     if (lines.size >= PROBE_MAX_LINES || lines.has(line)) return;
@@ -2272,22 +2277,34 @@
     console.log("[YT probe] " + line);
   }
 
+  function probeHex(bytes, limit = 120) {
+    const slice = bytes.subarray(0, Math.min(bytes.length, limit));
+    let out = "";
+    for (const byte of slice) out += (byte < 16 ? "0" : "") + byte.toString(16);
+    return out;
+  }
+
   // App：按列表项打印字段号与标识。
-  function probeAppCards(root) {
+  function probeAppCards(root, options) {
     const lines = new Set();
     try {
+      probeLog(lines, "platform=app route=protobuf");
       walkObjects(root, (node) => {
         for (const key of LIST_KEYS) {
           const list = node[key];
           if (!Array.isArray(list)) continue;
-          for (const item of list) {
+          for (let index = 0; index < list.length; index++) {
+            const item = list[index];
             const state = item && item[WIRE_STATE];
             if (!state || !state.bytes || !state.bytes.length) continue;
-            const text = looseUtf8.decode(state.bytes);
-            const eml = [...new Set(text.match(PROBE_EML) ?? [])].slice(0, 6);
-            const ids = [...new Set(text.match(PROBE_IDENTIFIER) ?? [])].slice(0, 10);
+            const bytes = state.bytes;
+            const decoded = looseUtf8.decode(bytes);
+            const eml = [...new Set(decoded.match(PROBE_EML) ?? [])].slice(0, 6);
+            const ids = [...new Set(decoded.match(PROBE_IDENTIFIER) ?? [])].slice(0, 10);
             const fields = (state.fields ?? []).map((field) => field.no).slice(0, 10);
-            probeLog(lines, `${key} fields=[${fields.join(",")}] keys=[${Object.keys(item).join(",")}] eml=[${eml.join(",")}] ids=[${ids.join(",")}]`);
+            let line = `${key}#${index} bytes=${bytes.length} videoId=${PROBE_VIDEO_ID.test(decoded) ? "yes" : "no"} fields=[${fields.join(",")}] keys=[${Object.keys(item).join(",")}] eml=[${eml.join(",")}] ids=[${ids.join(",")}]`;
+            if (options.probeFull) line += ` hex=${probeHex(bytes)}`;
+            probeLog(lines, line);
           }
         }
       });
@@ -2297,7 +2314,7 @@
   }
 
   // 网页版：按列表打印「数组键 → 单键包装链」。
-  function probeJsonCards(root) {
+  function probeJsonCards(root, options) {
     const lines = new Set();
     const chain = (node) => {
       const keys = [];
@@ -2312,6 +2329,7 @@
     };
 
     try {
+      probeLog(lines, "platform=web route=json");
       (function visit(node) {
         if (!node || "object" != typeof node) return;
         if (Array.isArray(node)) {
@@ -2321,8 +2339,10 @@
         for (const key of Object.keys(node)) {
           const value = node[key];
           if (Array.isArray(value) && value.length) {
-            const chains = [...new Set(value.filter((item) => item && "object" == typeof item).map((item) => chain(item) || "?"))].slice(0, 6);
-            if (chains.length) probeLog(lines, `${key} -> ${chains.join(" | ")}`);
+            const signatures = [...new Set(value.filter((item) => item && "object" == typeof item).map((item) => chain(item) || "?"))].slice(0, 6);
+            let line = `${key} -> ${signatures.join(" | ")}`;
+            if (options.probeFull) line += ` sample=${JSON.stringify(value[0]).slice(0, 400)}`;
+            if (signatures.length) probeLog(lines, line);
           }
           visit(value);
         }
@@ -2990,7 +3010,7 @@
 
     // browse / next / search / reel/reel_watch_sequence 共用同一套 renderer 过滤；
     // 侧栏偶尔也塞在 browse 响应里，所以 guide 过滤一起跑。
-    if (options.probe) probeJsonCards(data);
+    if (options.probe) probeJsonCards(data, options);
 
     let changed = jsonPruneTree(data, options);
     changed = jsonFilterGuide(data, options) || changed;
@@ -3822,7 +3842,7 @@
         return;
       }
 
-      if (options.probe) probeAppCards(node);
+      if (options.probe) probeAppCards(node, options);
 
       // 画质上限或编码偏好任一开启都要刷新缓存：request 阶段按缓存 itag 改写。
       if (false !== options.autoHd || "any" !== options.videoCodec) {

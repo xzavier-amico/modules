@@ -1519,7 +1519,20 @@ check("YouTube probe dumps the real card structure without touching the body", (
     console: { log: (line) => appLogs.push(String(line)) },
   });
   assert.deepEqual(Object.keys(appOut), [], "the probe must not rewrite the body");
-  assert.ok(appLogs.some((line) => line.includes("[YT probe]") && line.includes("richItemContents") && line.includes("news_card.eml")), "App probe must dump field numbers and identifiers: " + appLogs.join(" / "));
+  assert.ok(appLogs.some((line) => line.includes("[YT probe]") && line.includes("platform=app")), "App probe must announce the platform");
+  assert.ok(
+    appLogs.some((line) => line.includes("richItemContents#0") && line.includes("videoId=no") && line.includes("news_card.eml")),
+    "App probe must dump the index, field numbers and identifiers: " + appLogs.join(" / "),
+  );
+
+  // full 模式额外打卡片开头 hex，能直接按 protobuf 解字段号。
+  const fullLogs = [];
+  run("loon/youtube/js/youtube.response.js", appBody, appUrl, { blockAds: false, probe: "full" }, {
+    $request: { url: appUrl },
+    $response: { url: appUrl, status: 200, headers: {}, body: appBody },
+    console: { log: (line) => fullLogs.push(String(line)) },
+  });
+  assert.ok(fullLogs.some((line) => line.includes("hex=")), "full mode must dump the item hex");
 
   const body = JSON.stringify({ contents: { richGridRenderer: { contents: [{ richItemRenderer: { content: { postRenderer: { contentText: "post" } } } }] } } });
   const url = "https://www.youtube.com/youtubei/v1/browse";
