@@ -143,6 +143,23 @@
     }
   }
 
+  // 在节点原始字节里找标记。只对列表项和货架调用，避免在大响应顶层做整块扫描。
+  function hasMarker(node, markers) {
+    const bytes = node && node[WIRE_STATE] && node[WIRE_STATE].bytes;
+    if (!bytes || !bytes.length) return false;
+    for (const marker of markers) {
+      if (bytes.length >= marker.length && containsBytes(bytes, marker)) return true;
+    }
+    return false;
+  }
+
+  // 新闻 / 图文卡片的版式名。item 本身可能不带 renderInfo，留给字节标记兜底。
+  function isFeedCardLayout(node) {
+    const eml = node.renderInfo?.layoutRender?.eml || node.layoutRender?.eml;
+    const layout = eml && String(eml).split("|")[0];
+    return !!layout && FEED_CARD_LAYOUT.test(layout);
+  }
+
   const CONTAINER_KEYS = new Set(["richItemContents", "overlays"]);
   const LIST_KEYS = new Set(["richItemContents", "contents", "sectionListSupportedRenderers", "overlayCollections"]);
   const RENDERER_KEYS = new Set([
@@ -372,6 +389,7 @@
       hidePremium: true,
       blockFeedAds: true,
       blockShortsFeed: false,
+      blockFeedCards: false,
       blockMembersOnly: false,
       ...(options || {}),
     };
@@ -381,7 +399,24 @@
     function visit(node, inList = false) {
       if (!node || "object" != typeof node || ArrayBuffer.isView(node)) return 0;
       if (inList && false !== opts.blockMembersOnly && hasMembersOnlyBadge(node) && isAllMembersOnly(node)) return 1;
+
+      // 列表项：Shorts 卡片 / 新闻图文卡片直接整项删掉。
+      if (inList) {
+        if (false !== opts.blockShortsFeed && (node.reelShelfRenderer || hasMarker(node, SHORTS_MARKERS))) return 1;
+        if (false !== opts.blockFeedCards && (isFeedCardLayout(node) || hasMarker(node, FEED_CARD_MARKERS))) return 1;
+      }
+
+      // 货架：内部命中标识时整块删掉（Shorts 货架 / 新闻帖子货架）。
+      // 货架标题是本地化文案，这里不参与判断；标题下的卡片被删空后，
+      // 容器空了会顺着上面的空列表逻辑一起删掉。
+      if (!inList && node.shelfRenderer) {
+        if (false !== opts.blockShortsFeed && hasMarker(node, SHORTS_MARKERS)) return 2;
+        if (false !== opts.blockFeedCards && hasMarker(node, FEED_CARD_MARKERS)) return 2;
+      }
       if (false !== opts.blockShortsFeed && node.reelShelfRenderer) return 2;
+
+      // 自动播放下一首：NextResult 3 号字段。
+      if (opts.blockAutoplay && void 0 !== node.autoplay && deleteField(node, "autoplay")) changed = true;
 
       if (Array.isArray(node)) {
         let result = 0;
@@ -467,6 +502,47 @@
 
   // ---- 播放器响应 ----
 
+  // 自动生成（ASR）字幕轨：kind=asr 或 vssId 以 "a." 开头，都是英文标识，与界面语言无关。
+  function isAutoCaptionTrack(track) {
+    return "asr" === String(track?.kind ?? "").toLowerCase() || String(track?.vssId ?? "").startsWith("a.");
+  }
+
+  // 去掉自动生成字幕轨；选中索引是按轨道顺序算的，删完要收回有效范围。
+  function stripAutoCaptionTracks(player) {
+    const renderer = player.captions?.playerCaptionsTrackListRenderer;
+    const tracks = renderer?.captionTracks;
+    if (!Array.isArray(tracks) || !tracks.length) return false;
+
+    const kept = tracks.filter((track) => !isAutoCaptionTrack(track));
+    if (kept.length === tracks.length) return false;
+
+    let changed = setField(renderer, "captionTracks", kept);
+    const selected = renderer.defaultCaptionTrackIndex;
+    if (kept.length && Number.isFinite(selected) && selected >= kept.length) {
+      changed = setField(renderer, "defaultCaptionTrackIndex", kept.length - 1) || changed;
+    }
+    return changed;
+  }
+
+  // 强制开启字幕：选中一条已有轨道，并让所有音轨的初始状态变成「开」。
+  function forceCaptionTrack(player) {
+    const renderer = player.captions?.playerCaptionsTrackListRenderer;
+    const tracks = renderer?.captionTracks;
+    if (!Array.isArray(tracks) || !tracks.length) return false;
+
+    let selected = renderer.defaultCaptionTrackIndex;
+    if (!Number.isFinite(selected) || selected < 0 || selected >= tracks.length) selected = 0;
+
+    let changed = setField(renderer, "defaultCaptionTrackIndex", selected);
+    for (const audio of renderer.audioTracks ?? []) {
+      const indices = Array.isArray(audio.captionTrackIndices) ? audio.captionTrackIndices : [];
+      if (!indices.includes(selected)) changed = setField(audio, "captionTrackIndices", [...indices, selected]) || changed;
+      changed = setField(audio, "defaultCaptionTrackIndex", selected) || changed;
+      changed = setField(audio, "captionsInitialState", 3) || changed;
+    }
+    return changed;
+  }
+
   // 字幕翻译：在原字幕轨道后面补一条带 tlang 的翻译轨道，并把它设为默认。
   // 目标语言本身就在轨道列表里时直接选中它，不再重复添加。
   function applyCaptionTranslation(player, lang) {
@@ -517,6 +593,26 @@
     return changed;
   }
 
+  // 播放页面板：评论区整块、播放器相关浮层。
+  // 评论区只认 engagementPanels 里的内部标识；相关浮层是已建模字段。
+  function dropNextExtras(next, options) {
+    let changed = false;
+
+    if (false !== options.blockComments && Array.isArray(next.engagementPanels)) {
+      const kept = next.engagementPanels.filter((panel) => !hasMarker(panel, COMMENT_PANEL_MARKERS));
+      if (kept.length !== next.engagementPanels.length) {
+        setField(next, "engagementPanels", kept);
+        changed = true;
+      }
+    }
+
+    if (false !== options.blockRelatedVideos && next.playerOverlays?.renderer?.related) {
+      changed = deleteField(next.playerOverlays.renderer, "related") || changed;
+    }
+
+    return changed;
+  }
+
   function rewritePlayer(player, options) {
     let changed = filterBrowseTree(player, options);
 
@@ -527,6 +623,14 @@
       } catch (e) {
         // ignore
       }
+    }
+
+    // 字幕开关：off 去掉自动生成字幕轨（不再自动开字幕），force 强制开启。
+    try {
+      if (options.stripAutoCaptions) changed = stripAutoCaptionTracks(player) || changed;
+      else if (options.forceCaptions) changed = forceCaptionTrack(player) || changed;
+    } catch (e) {
+      // ignore
     }
 
     if (false !== options.removePaidPromotion) changed = deleteField(player, "paidPromotion") || changed;

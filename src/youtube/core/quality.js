@@ -1,3 +1,12 @@
+  // 编码偏好：any 不过滤，no_av1 去掉 AV1，avc 只留 H.264。
+  // 认的是 mimeType 里的 codecs 串（avc1 / av01 / vp9…），与界面语言无关。
+  function codecAllowed(mime, codec) {
+    const text = String(mime ?? "").toLowerCase();
+    if ("avc" === codec) return text.includes("avc1");
+    if ("no_av1" === codec) return !text.includes("av01");
+    return true;
+  }
+
   function isQualityEntry(entry) {
     return !!(
       entry &&

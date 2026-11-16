@@ -52,7 +52,9 @@
 
           const format = parseFields(field.data);
           const mime = format.find((item) => 5 === item.no && 2 === item.wire);
-          if (!mime || !strictUtf8.decode(mime.data).startsWith("video/")) continue;
+          if (!mime) continue;
+          const mimeText = strictUtf8.decode(mime.data);
+          if (!mimeText.startsWith("video/") || !codecAllowed(mimeText, options.videoCodec)) continue;
 
           const numberField = (fieldNo) => {
             const item = format.find((entry) => entry.no === fieldNo && 0 === entry.wire);

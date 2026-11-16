@@ -11,7 +11,14 @@
       },
     ],
     browse: ["Browse", filterBrowseTree],
-    next: ["Next", filterBrowseTree],
+    next: [
+      "Next",
+      function (node, options) {
+        let changed = filterBrowseTree(node, options);
+        changed = dropNextExtras(node, options) || changed;
+        return changed;
+      },
+    ],
     player: ["Player", rewritePlayer],
     search: ["Search", filterBrowseTree],
     "reel/reel_watch_sequence": [
@@ -80,7 +87,10 @@
         let changed = false;
         for (const item of node.contents) {
           if (item.player) changed = rewritePlayer(item.player, options) || changed;
-          if (item.next) changed = filterBrowseTree(item.next, options) || changed;
+          if (item.next) {
+            changed = filterBrowseTree(item.next, options) || changed;
+            changed = dropNextExtras(item.next, options) || changed;
+          }
         }
         return changed;
       },

@@ -17,6 +17,15 @@
     jump_ahead: "jumpAhead",
     max_speed: "maxSpeed",
     web: "web",
+    // 新增参数放在末尾：12 项旧位置数组走 Object.keys 兜底时，前 12 位顺序不能变。
+    block_feed_cards: "blockFeedCards",
+    player_cleanup: "playerCleanup",
+    captions_mode: "captionsMode",
+    feed_cleanup: "feedCleanup",
+    watch_cleanup: "watchCleanup",
+    video_codec: "videoCodec",
+    web_cleanup: "webCleanup",
+    music_cleanup: "musicCleanup",
   };
 
   // 旧版插件的 26 个参数顺序。Loon 旧版按位置传数组时用它还原；
@@ -51,8 +60,8 @@
     "stripHotHash",
   ];
 
-  // 当前 Loon 位置数组（12 项，最后一项是 web）。web 是布尔值；
-  // 上一版 12 项数组的最后一项是 max_speed 字符串，用这个区分新旧 tuple。
+  // 当前 Loon 位置数组（20 项）。末尾追加的新参数按这个顺序还原；
+  // 旧长度的位置数组走下面按长度分的兼容表。
   const CURRENT_ARG_ORDER = [
     "block_ads",
     "block_ai",
@@ -66,7 +75,18 @@
     "jump_ahead",
     "max_speed",
     "web",
+    "block_feed_cards",
+    "player_cleanup",
+    "captions_mode",
+    "feed_cleanup",
+    "watch_cleanup",
+    "video_codec",
+    "web_cleanup",
+    "music_cleanup",
   ];
+
+  // 只加过 block_feed_cards 的那一版（13 项）：客户端缓存旧插件时仍按它的顺序还原。
+  const FEED_CARDS_ARG_ORDER = CURRENT_ARG_ORDER.slice(0, 13);
 
   // 上一版 Loon 位置数组（12 项，含 on_the_go）。升级插件前客户端可能还缓存着
   // 旧 tuple；按长度和最后一项类型区分，避免把旧数组当成新数组。
@@ -103,9 +123,12 @@
           ? LEGACY_ARG_ORDER
           : raw.length === PREV_ARG_ORDER.length && "string" == typeof raw[raw.length - 1]
             ? PREV_ARG_ORDER
-            : raw.length === CURRENT_ARG_ORDER.length
-              ? CURRENT_ARG_ORDER
-              : Object.keys(ARG_ALIASES);
+            : raw.length === FEED_CARDS_ARG_ORDER.length
+              ? FEED_CARDS_ARG_ORDER
+              : raw.length === CURRENT_ARG_ORDER.length
+                ? CURRENT_ARG_ORDER
+                : // 其他长度（未来少传/多传）按别名表顺序兜底，前缀位置仍然对得上。
+                  Object.keys(ARG_ALIASES);
       order.forEach((key, index) => {
         if (index < raw.length) out[key] = raw[index];
       });
@@ -123,6 +146,18 @@
     if ("false" === text || "0" === text || "off" === text || "no" === text) return false;
     if ("true" === text || "1" === text || "on" === text || "yes" === text) return true;
     return fallback;
+  }
+
+  // 多级开关：off 关；基础档（standard / comments）；all 再多做一项。
+  // 旧式布尔值也能吃：true = 基础档，false = off。
+  function asLevel(value, base) {
+    if (true === value) return base;
+    if (false === value || 0 === value) return "off";
+    const text = String(value ?? "").trim().toLowerCase();
+    if (!text || "false" === text || "0" === text || "off" === text || "none" === text || "no" === text) return "off";
+    if ("all" === text) return "all";
+    if (base === text || "standard" === text || "true" === text || "1" === text || "on" === text || "yes" === text) return base;
+    return "off";
   }
 
   // 把 home_menu 里的一个 token 归一成 { hide, id }；认不出就返回 undefined。
@@ -274,11 +309,47 @@
     options.blockAi = asBool(options.blockAi, true);
     // 这两项插件默认关闭，参数缺失时不能按「非 false 即 true」处理。
     options.blockShortsFeed = asBool(options.blockShortsFeed, false);
+    options.blockFeedCards = asBool(options.blockFeedCards, false);
     options.blockMembersOnly = asBool(options.blockMembersOnly, false);
     options.jumpAhead = asBool(options.jumpAhead, true);
     options.youtubeMusic = asBool(options.youtubeMusic, true);
     // 网页版 YouTube / YouTube Music 的 JSON 响应处理，默认开启。
     options.web = asBool(options.web, true);
+
+    // 播放器清理：去播放结束推荐墙 / 信息卡 / 播放器相关浮层；all 再关掉自动播放下一首。
+    const playerCleanup = asLevel(options.playerCleanup, "standard");
+    options.playerCleanup = playerCleanup;
+    options.blockEndscreen = "off" !== playerCleanup;
+    options.blockInfoCards = "off" !== playerCleanup;
+    options.blockAutoplay = "all" === playerCleanup;
+
+    // 信息流清理：去「继续观看」卡片与顶部筛选条；all 再去掉直播 / 首映卡片。
+    const feedCleanup = asLevel(options.feedCleanup, "standard");
+    options.feedCleanup = feedCleanup;
+    options.blockContinueWatching = "off" !== feedCleanup;
+    options.blockChipCloud = "off" !== feedCleanup;
+    options.blockLiveCards = "all" === feedCleanup;
+
+    // 播放页清理：去掉评论区；all 再去掉相关视频列表。
+    const watchCleanup = asLevel(options.watchCleanup, "comments");
+    options.watchCleanup = watchCleanup;
+    options.blockComments = "off" !== watchCleanup;
+    options.blockRelatedVideos = "all" === watchCleanup;
+
+    // 字幕：keep 保持现状，off 去掉自动生成（ASR）字幕轨且不自动开启，force 强制开启。
+    const captionsMode = String(options.captionsMode ?? "keep").trim().toLowerCase();
+    options.captionsMode = ["keep", "off", "force"].includes(captionsMode) ? captionsMode : "keep";
+    options.stripAutoCaptions = "off" === options.captionsMode;
+    options.forceCaptions = "force" === options.captionsMode;
+    if (options.stripAutoCaptions) options.captionLang = "off";
+
+    // 编码偏好：any 不动，no_av1 去掉 AV1，avc 只留 H.264。
+    const codec = String(options.videoCodec ?? "any").trim().toLowerCase();
+    options.videoCodec = ["any", "no_av1", "avc"].includes(codec) ? codec : "any";
+
+    // 网页版 topbar 按钮与 YouTube Music 首页推荐。
+    options.webCleanup = asBool(options.webCleanup, false);
+    options.musicCleanup = asBool(options.musicCleanup, false);
 
     const result = { ...defaults, ...options };
     if (noDefaults) OPTIONS_CACHE = result;

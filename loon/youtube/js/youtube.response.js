@@ -257,14 +257,45 @@
   // 带货/商品版式。
   const SHOPPING_LAYOUT = /^(?:shopping_|products?_in_video_)[a-z0-9_]+\.eml(?:-js)?(?:-fe)?$/;
 
+  // 推荐流里的非视频卡片：新闻故事、社区图文帖子、轮播等。  // 只认版式名和 element 标识（跟 YTLitePlus / uYou 一样看 element 描述里的
+  // `xxx_shelf.eml` 这类内部名字）——它们是英文资源名，不随界面语言变化。
+  // 标题文案（「重大新闻」/「Top stories」…）一律不匹配：那些是本地化文案，
+  // 既会随语言失效，也会误删恰好叫这个名字的普通视频/货架。
+  const FEED_CARD_LAYOUT =
+    /^(?:post_shelf|carousel_headered_layout|carousel_footered_layout|landscape_image_wide_button_layout|square_image_layout|text_image_button_layout|grid_ads_image_layout|statement_banner|news_[a-z0-9_]+|breaking_news[a-z0-9_]*)\.eml(?:-js)?(?:-fe)?$/;
+  const FEED_CARD_MARKERS = [
+    textEncoder.encode("post_shelf"),
+    textEncoder.encode("backstage_post"),
+    textEncoder.encode("post_card"),
+    textEncoder.encode("postMultiImage"),
+    textEncoder.encode("news_card"),
+    textEncoder.encode("news_shelf"),
+    textEncoder.encode("news_story"),
+    textEncoder.encode("breaking_news"),
+  ];
+
+  // App 里 Shorts 卡片/货架的 element 标识（uYou / YTLite 用的也是这几个）。
+  // 最后一个是 reelWatchEndpoint 的字段标签：混在推荐流里的单个 Shorts 卡片。
+  const SHORTS_MARKERS = [
+    textEncoder.encode("shorts_video_cell"),
+    textEncoder.encode("shorts_shelf"),
+    new Uint8Array([0x8a, 0x9f, 0xc8, 0x94, 0x04]),
+  ];
+
+  // 播放页的评论区面板：engagementPanels 里靠这两个内部标识认出来，
+  // 和网页版 JSON 的 sectionIdentifier 是同一套名字，不随界面语言变化。
+  const COMMENT_PANEL_MARKERS = [textEncoder.encode("comment-item-section"), textEncoder.encode("comments-section")];
+
   // 会员专属徽章的文案，用来在列表里认出会员视频。
+  // App 的 protobuf 里只有本地化文案（枚举是 varint，脚本里没为它建模），
+  // 所以原生端按这几种语言的徽章文字精确匹配；网页版 JSON 有 style 枚举，
+  // 优先按 BADGE_STYLE_TYPE_MEMBERS_ONLY 判定，文案只作兜底。
   const MEMBERS_ONLY_LABELS = [
     "Members only",
     "会员专享",
     "會員專享",
     "メンバー限定",
     "멤버 전용",
-    "BADGE_MEMBERS_ONLY",
   ];
 
   // 侧栏/首页菜单项：值是可读别名，id 是 guide 响应里的 browseId。
@@ -540,6 +571,15 @@
     return isMusicRequest(request) ? "youtubeMusic" : "youtube";
   }
 
+  // 编码偏好：any 不过滤，no_av1 去掉 AV1，avc 只留 H.264。
+  // 认的是 mimeType 里的 codecs 串（avc1 / av01 / vp9…），与界面语言无关。
+  function codecAllowed(mime, codec) {
+    const text = String(mime ?? "").toLowerCase();
+    if ("avc" === codec) return text.includes("avc1");
+    if ("no_av1" === codec) return !text.includes("av01");
+    return true;
+  }
+
   function isQualityEntry(entry) {
     return !!(
       entry &&
@@ -591,6 +631,15 @@
     jump_ahead: "jumpAhead",
     max_speed: "maxSpeed",
     web: "web",
+    // 新增参数放在末尾：12 项旧位置数组走 Object.keys 兜底时，前 12 位顺序不能变。
+    block_feed_cards: "blockFeedCards",
+    player_cleanup: "playerCleanup",
+    captions_mode: "captionsMode",
+    feed_cleanup: "feedCleanup",
+    watch_cleanup: "watchCleanup",
+    video_codec: "videoCodec",
+    web_cleanup: "webCleanup",
+    music_cleanup: "musicCleanup",
   };
 
   // 旧版插件的 26 个参数顺序。Loon 旧版按位置传数组时用它还原；
@@ -625,8 +674,8 @@
     "stripHotHash",
   ];
 
-  // 当前 Loon 位置数组（12 项，最后一项是 web）。web 是布尔值；
-  // 上一版 12 项数组的最后一项是 max_speed 字符串，用这个区分新旧 tuple。
+  // 当前 Loon 位置数组（20 项）。末尾追加的新参数按这个顺序还原；
+  // 旧长度的位置数组走下面按长度分的兼容表。
   const CURRENT_ARG_ORDER = [
     "block_ads",
     "block_ai",
@@ -640,7 +689,18 @@
     "jump_ahead",
     "max_speed",
     "web",
+    "block_feed_cards",
+    "player_cleanup",
+    "captions_mode",
+    "feed_cleanup",
+    "watch_cleanup",
+    "video_codec",
+    "web_cleanup",
+    "music_cleanup",
   ];
+
+  // 只加过 block_feed_cards 的那一版（13 项）：客户端缓存旧插件时仍按它的顺序还原。
+  const FEED_CARDS_ARG_ORDER = CURRENT_ARG_ORDER.slice(0, 13);
 
   // 上一版 Loon 位置数组（12 项，含 on_the_go）。升级插件前客户端可能还缓存着
   // 旧 tuple；按长度和最后一项类型区分，避免把旧数组当成新数组。
@@ -677,9 +737,12 @@
           ? LEGACY_ARG_ORDER
           : raw.length === PREV_ARG_ORDER.length && "string" == typeof raw[raw.length - 1]
             ? PREV_ARG_ORDER
-            : raw.length === CURRENT_ARG_ORDER.length
-              ? CURRENT_ARG_ORDER
-              : Object.keys(ARG_ALIASES);
+            : raw.length === FEED_CARDS_ARG_ORDER.length
+              ? FEED_CARDS_ARG_ORDER
+              : raw.length === CURRENT_ARG_ORDER.length
+                ? CURRENT_ARG_ORDER
+                : // 其他长度（未来少传/多传）按别名表顺序兜底，前缀位置仍然对得上。
+                  Object.keys(ARG_ALIASES);
       order.forEach((key, index) => {
         if (index < raw.length) out[key] = raw[index];
       });
@@ -697,6 +760,18 @@
     if ("false" === text || "0" === text || "off" === text || "no" === text) return false;
     if ("true" === text || "1" === text || "on" === text || "yes" === text) return true;
     return fallback;
+  }
+
+  // 多级开关：off 关；基础档（standard / comments）；all 再多做一项。
+  // 旧式布尔值也能吃：true = 基础档，false = off。
+  function asLevel(value, base) {
+    if (true === value) return base;
+    if (false === value || 0 === value) return "off";
+    const text = String(value ?? "").trim().toLowerCase();
+    if (!text || "false" === text || "0" === text || "off" === text || "none" === text || "no" === text) return "off";
+    if ("all" === text) return "all";
+    if (base === text || "standard" === text || "true" === text || "1" === text || "on" === text || "yes" === text) return base;
+    return "off";
   }
 
   // 把 home_menu 里的一个 token 归一成 { hide, id }；认不出就返回 undefined。
@@ -848,11 +923,47 @@
     options.blockAi = asBool(options.blockAi, true);
     // 这两项插件默认关闭，参数缺失时不能按「非 false 即 true」处理。
     options.blockShortsFeed = asBool(options.blockShortsFeed, false);
+    options.blockFeedCards = asBool(options.blockFeedCards, false);
     options.blockMembersOnly = asBool(options.blockMembersOnly, false);
     options.jumpAhead = asBool(options.jumpAhead, true);
     options.youtubeMusic = asBool(options.youtubeMusic, true);
     // 网页版 YouTube / YouTube Music 的 JSON 响应处理，默认开启。
     options.web = asBool(options.web, true);
+
+    // 播放器清理：去播放结束推荐墙 / 信息卡 / 播放器相关浮层；all 再关掉自动播放下一首。
+    const playerCleanup = asLevel(options.playerCleanup, "standard");
+    options.playerCleanup = playerCleanup;
+    options.blockEndscreen = "off" !== playerCleanup;
+    options.blockInfoCards = "off" !== playerCleanup;
+    options.blockAutoplay = "all" === playerCleanup;
+
+    // 信息流清理：去「继续观看」卡片与顶部筛选条；all 再去掉直播 / 首映卡片。
+    const feedCleanup = asLevel(options.feedCleanup, "standard");
+    options.feedCleanup = feedCleanup;
+    options.blockContinueWatching = "off" !== feedCleanup;
+    options.blockChipCloud = "off" !== feedCleanup;
+    options.blockLiveCards = "all" === feedCleanup;
+
+    // 播放页清理：去掉评论区；all 再去掉相关视频列表。
+    const watchCleanup = asLevel(options.watchCleanup, "comments");
+    options.watchCleanup = watchCleanup;
+    options.blockComments = "off" !== watchCleanup;
+    options.blockRelatedVideos = "all" === watchCleanup;
+
+    // 字幕：keep 保持现状，off 去掉自动生成（ASR）字幕轨且不自动开启，force 强制开启。
+    const captionsMode = String(options.captionsMode ?? "keep").trim().toLowerCase();
+    options.captionsMode = ["keep", "off", "force"].includes(captionsMode) ? captionsMode : "keep";
+    options.stripAutoCaptions = "off" === options.captionsMode;
+    options.forceCaptions = "force" === options.captionsMode;
+    if (options.stripAutoCaptions) options.captionLang = "off";
+
+    // 编码偏好：any 不动，no_av1 去掉 AV1，avc 只留 H.264。
+    const codec = String(options.videoCodec ?? "any").trim().toLowerCase();
+    options.videoCodec = ["any", "no_av1", "avc"].includes(codec) ? codec : "any";
+
+    // 网页版 topbar 按钮与 YouTube Music 首页推荐。
+    options.webCleanup = asBool(options.webCleanup, false);
+    options.musicCleanup = asBool(options.musicCleanup, false);
 
     const result = { ...defaults, ...options };
     if (noDefaults) OPTIONS_CACHE = result;
@@ -947,7 +1058,11 @@
     EngagementPanel: [[138681066, "renderer", "EngagementPanelRenderer"]],
     EngagementPanelRenderer: [[3, "content", "BrowseContent"]],
     NextContent: [[51779735, "nextResult", "NextResult"]],
-    NextResult: [[1, "content", "BrowseContent"]],
+    NextResult: [
+      [1, "content", "BrowseContent"],
+      // 自动播放下一首（compactAutoplayRenderer）；关掉自动播放就整块删。
+      [3, "autoplay", "bytes"],
+    ],
     PlayerOverlays: [[78882851, "renderer", "PlayerOverlayRenderer"]],
     PlayerOverlayRenderer: [
       [2, "overflowMenu", "bytes"],
@@ -1588,6 +1703,23 @@
     }
   }
 
+  // 在节点原始字节里找标记。只对列表项和货架调用，避免在大响应顶层做整块扫描。
+  function hasMarker(node, markers) {
+    const bytes = node && node[WIRE_STATE] && node[WIRE_STATE].bytes;
+    if (!bytes || !bytes.length) return false;
+    for (const marker of markers) {
+      if (bytes.length >= marker.length && containsBytes(bytes, marker)) return true;
+    }
+    return false;
+  }
+
+  // 新闻 / 图文卡片的版式名。item 本身可能不带 renderInfo，留给字节标记兜底。
+  function isFeedCardLayout(node) {
+    const eml = node.renderInfo?.layoutRender?.eml || node.layoutRender?.eml;
+    const layout = eml && String(eml).split("|")[0];
+    return !!layout && FEED_CARD_LAYOUT.test(layout);
+  }
+
   const CONTAINER_KEYS = new Set(["richItemContents", "overlays"]);
   const LIST_KEYS = new Set(["richItemContents", "contents", "sectionListSupportedRenderers", "overlayCollections"]);
   const RENDERER_KEYS = new Set([
@@ -1817,6 +1949,7 @@
       hidePremium: true,
       blockFeedAds: true,
       blockShortsFeed: false,
+      blockFeedCards: false,
       blockMembersOnly: false,
       ...(options || {}),
     };
@@ -1826,7 +1959,24 @@
     function visit(node, inList = false) {
       if (!node || "object" != typeof node || ArrayBuffer.isView(node)) return 0;
       if (inList && false !== opts.blockMembersOnly && hasMembersOnlyBadge(node) && isAllMembersOnly(node)) return 1;
+
+      // 列表项：Shorts 卡片 / 新闻图文卡片直接整项删掉。
+      if (inList) {
+        if (false !== opts.blockShortsFeed && (node.reelShelfRenderer || hasMarker(node, SHORTS_MARKERS))) return 1;
+        if (false !== opts.blockFeedCards && (isFeedCardLayout(node) || hasMarker(node, FEED_CARD_MARKERS))) return 1;
+      }
+
+      // 货架：内部命中标识时整块删掉（Shorts 货架 / 新闻帖子货架）。
+      // 货架标题是本地化文案，这里不参与判断；标题下的卡片被删空后，
+      // 容器空了会顺着上面的空列表逻辑一起删掉。
+      if (!inList && node.shelfRenderer) {
+        if (false !== opts.blockShortsFeed && hasMarker(node, SHORTS_MARKERS)) return 2;
+        if (false !== opts.blockFeedCards && hasMarker(node, FEED_CARD_MARKERS)) return 2;
+      }
       if (false !== opts.blockShortsFeed && node.reelShelfRenderer) return 2;
+
+      // 自动播放下一首：NextResult 3 号字段。
+      if (opts.blockAutoplay && void 0 !== node.autoplay && deleteField(node, "autoplay")) changed = true;
 
       if (Array.isArray(node)) {
         let result = 0;
@@ -1912,6 +2062,47 @@
 
   // ---- 播放器响应 ----
 
+  // 自动生成（ASR）字幕轨：kind=asr 或 vssId 以 "a." 开头，都是英文标识，与界面语言无关。
+  function isAutoCaptionTrack(track) {
+    return "asr" === String(track?.kind ?? "").toLowerCase() || String(track?.vssId ?? "").startsWith("a.");
+  }
+
+  // 去掉自动生成字幕轨；选中索引是按轨道顺序算的，删完要收回有效范围。
+  function stripAutoCaptionTracks(player) {
+    const renderer = player.captions?.playerCaptionsTrackListRenderer;
+    const tracks = renderer?.captionTracks;
+    if (!Array.isArray(tracks) || !tracks.length) return false;
+
+    const kept = tracks.filter((track) => !isAutoCaptionTrack(track));
+    if (kept.length === tracks.length) return false;
+
+    let changed = setField(renderer, "captionTracks", kept);
+    const selected = renderer.defaultCaptionTrackIndex;
+    if (kept.length && Number.isFinite(selected) && selected >= kept.length) {
+      changed = setField(renderer, "defaultCaptionTrackIndex", kept.length - 1) || changed;
+    }
+    return changed;
+  }
+
+  // 强制开启字幕：选中一条已有轨道，并让所有音轨的初始状态变成「开」。
+  function forceCaptionTrack(player) {
+    const renderer = player.captions?.playerCaptionsTrackListRenderer;
+    const tracks = renderer?.captionTracks;
+    if (!Array.isArray(tracks) || !tracks.length) return false;
+
+    let selected = renderer.defaultCaptionTrackIndex;
+    if (!Number.isFinite(selected) || selected < 0 || selected >= tracks.length) selected = 0;
+
+    let changed = setField(renderer, "defaultCaptionTrackIndex", selected);
+    for (const audio of renderer.audioTracks ?? []) {
+      const indices = Array.isArray(audio.captionTrackIndices) ? audio.captionTrackIndices : [];
+      if (!indices.includes(selected)) changed = setField(audio, "captionTrackIndices", [...indices, selected]) || changed;
+      changed = setField(audio, "defaultCaptionTrackIndex", selected) || changed;
+      changed = setField(audio, "captionsInitialState", 3) || changed;
+    }
+    return changed;
+  }
+
   // 字幕翻译：在原字幕轨道后面补一条带 tlang 的翻译轨道，并把它设为默认。
   // 目标语言本身就在轨道列表里时直接选中它，不再重复添加。
   function applyCaptionTranslation(player, lang) {
@@ -1962,6 +2153,26 @@
     return changed;
   }
 
+  // 播放页面板：评论区整块、播放器相关浮层。
+  // 评论区只认 engagementPanels 里的内部标识；相关浮层是已建模字段。
+  function dropNextExtras(next, options) {
+    let changed = false;
+
+    if (false !== options.blockComments && Array.isArray(next.engagementPanels)) {
+      const kept = next.engagementPanels.filter((panel) => !hasMarker(panel, COMMENT_PANEL_MARKERS));
+      if (kept.length !== next.engagementPanels.length) {
+        setField(next, "engagementPanels", kept);
+        changed = true;
+      }
+    }
+
+    if (false !== options.blockRelatedVideos && next.playerOverlays?.renderer?.related) {
+      changed = deleteField(next.playerOverlays.renderer, "related") || changed;
+    }
+
+    return changed;
+  }
+
   function rewritePlayer(player, options) {
     let changed = filterBrowseTree(player, options);
 
@@ -1972,6 +2183,14 @@
       } catch (e) {
         // ignore
       }
+    }
+
+    // 字幕开关：off 去掉自动生成字幕轨（不再自动开字幕），force 强制开启。
+    try {
+      if (options.stripAutoCaptions) changed = stripAutoCaptionTracks(player) || changed;
+      else if (options.forceCaptions) changed = forceCaptionTrack(player) || changed;
+    } catch (e) {
+      // ignore
     }
 
     if (false !== options.removePaidPromotion) changed = deleteField(player, "paidPromotion") || changed;
@@ -2025,7 +2244,7 @@
   //
   // www.youtube.com / m.youtube.com / music.youtube.com 的 youtubei 响应是 JSON，
   // 字段名和 protobuf 的 lowerCamelCase 属性一致。这里只做保守的结构删除：
-  // 认识的广告 renderer、播放器广告字段、Shorts 货架、会员徽章、AI 控件。
+  // 认识的广告 renderer、播放器广告字段、Shorts 货架、新闻/图文卡片、会员徽章、AI 控件。
   // 结构对不上就原样放行，最差是某个开关不生效，不会把页面改坏。
   //=====================================================================================
 
@@ -2065,7 +2284,51 @@
     "paidContentOverlayViewModel",
   ]);
 
+  // 推荐流里的新闻故事 / 社区图文帖子等非视频卡片。
+  const JSON_FEED_CARD_RENDERERS = new Set([
+    "postRenderer",
+    "backstagePostRenderer",
+    "sharedPostRenderer",
+    "postMultiImageRenderer",
+    "newsRenderer",
+    "breakingNewsRenderer",
+    "newsShelfRenderer",
+  ]);
+
   const JSON_PLAYER_AD_FIELDS = new Set(["adPlacements", "playerAds", "adSlots", "adBreakHeartbeatParams"]);
+
+  // 列表项基本都被单键装了一层：{ richItemRenderer: { content: { … } } }。
+  // 删卡片时连包装一起删，否则网页会留下一个空白卡片位。
+  const JSON_ITEM_WRAPPERS = new Set(["richItemRenderer", "richSectionRenderer", "content", "item", "videoRenderer", "compactVideoRenderer"]);
+
+  // 会员徽章的 style 枚举名；本地化文案不作为网页版判定依据。
+  const JSON_MEMBERS_ONLY_STYLES = ["BADGE_STYLE_TYPE_MEMBERS_ONLY"];
+
+  // 播放器清理：播放结束推荐墙、信息卡、自动播放下一首。
+  const JSON_ENDSCREEN_FIELDS = new Set(["endscreen", "endScreen"]);
+  const JSON_INFO_CARD_FIELDS = new Set(["cards"]);
+  const JSON_AUTOPLAY_FIELDS = new Set(["autoplay", "compactAutoplayRenderer"]);
+
+  // 信息流清理：顶部筛选条。
+  const JSON_CHIP_FIELDS = new Set(["chipCloudRenderer"]);
+
+  // 播放页清理：评论区。
+  const JSON_COMMENT_FIELDS = new Set([
+    "commentsEntryPointHeaderRenderer",
+    "commentsEntryPointTeaserRenderer",
+    "commentsHeaderRenderer",
+    "commentThreadRenderer",
+    "commentSectionRenderer",
+  ]);
+
+  // 播放页清理：相关视频列表（all 档）。
+  const JSON_RELATED_FIELDS = new Set(["secondaryResults", "watchNextSecondaryResultsRenderer"]);
+
+  // 直播 / 首映徽章：同样认枚举名，不认文案。
+  const JSON_LIVE_STYLES = new Set(["BADGE_STYLE_TYPE_LIVE_NOW", "BADGE_STYLE_TYPE_PREMIERE", "BADGE_STYLE_TYPE_LIVE"]);
+
+  // 顶部按钮里要隐藏的图标。
+  const JSON_TOPBAR_BLOCK_ICONS = /(CREATE|NOTIFICATIONS|UPLOAD)/;
 
   function jsonHasAnyKey(node, keys) {
     if (!node || "object" != typeof node || Array.isArray(node)) return false;
@@ -2079,15 +2342,51 @@
     return "string" == typeof label ? label : "";
   }
 
+  // 徽章样式枚举名：和 uBlock 的 .badge-style-type-members-only、第三方脚本认的
+  // "BADGE_STYLE_TYPE_MEMBERS_ONLY" 是同一个东西，不随界面语言变化。
+  function jsonBadgeStyle(badge) {
+    if (!badge || "object" != typeof badge) return "";
+    const style = badge.metadataBadgeRenderer?.style ?? badge.style;
+    return "string" == typeof style ? style : "";
+  }
+
   function jsonIsMembersOnly(node) {
     if (!node || "object" != typeof node) return false;
     for (const key of ["badges", "ownerBadges"]) {
       const list = node[key];
       if (!Array.isArray(list)) continue;
       for (const badge of list) {
+        const style = jsonBadgeStyle(badge);
+        // 有 style 就以它为准：文案是本地化的，不能用来判断。
+        if (style) {
+          if (JSON_MEMBERS_ONLY_STYLES.includes(style)) return true;
+          continue;
+        }
         const label = jsonBadgeLabel(badge);
         if (label && MEMBERS_ONLY_LABELS.some((text) => label.indexOf(text) >= 0)) return true;
       }
+    }
+    return false;
+  }
+
+  // 「继续观看」卡片：缩略图右上角带播放进度条。
+  function jsonHasResumeOverlay(node) {
+    const overlays = node.thumbnailOverlays;
+    if (!Array.isArray(overlays)) return false;
+    return overlays.some((overlay) => !!overlay && "object" == typeof overlay && "thumbnailOverlayResumePlaybackRenderer" in overlay);
+  }
+
+  // 直播 / 首映卡片：时间戳样式或徽章样式命中枚举名。
+  function jsonIsLiveCard(node) {
+    const overlays = Array.isArray(node.thumbnailOverlays) ? node.thumbnailOverlays : [];
+    for (const overlay of overlays) {
+      const style = overlay?.thumbnailOverlayTimeStatusRenderer?.style;
+      if ("LIVE" === style || "UPCOMING" === style) return true;
+    }
+    for (const key of ["badges", "ownerBadges"]) {
+      const list = node[key];
+      if (!Array.isArray(list)) continue;
+      for (const badge of list) if (JSON_LIVE_STYLES.has(jsonBadgeStyle(badge))) return true;
     }
     return false;
   }
@@ -2097,7 +2396,15 @@
     if (false !== options.blockFeedAds && jsonHasAnyKey(node, JSON_AD_RENDERERS)) return true;
     if (false !== options.blockAi && jsonHasAnyKey(node, JSON_AI_RENDERERS)) return true;
     if (options.blockStore && jsonHasAnyKey(node, JSON_STORE_RENDERERS)) return true;
-    if (false !== options.blockShortsFeed && ("reelShelfRenderer" in node || "shortsLockupViewModel" in node)) return true;
+    if (
+      false !== options.blockShortsFeed &&
+      ("reelShelfRenderer" in node || "shortsLockupViewModel" in node || node.navigationEndpoint?.reelWatchEndpoint || node.onTap?.innertubeCommand?.reelWatchEndpoint)
+    ) {
+      return true;
+    }
+    if (false !== options.blockFeedCards && jsonHasAnyKey(node, JSON_FEED_CARD_RENDERERS)) return true;
+    if (false !== options.blockContinueWatching && jsonHasResumeOverlay(node)) return true;
+    if (false !== options.blockLiveCards && jsonIsLiveCard(node)) return true;
     if (false !== options.blockMembersOnly) {
       if (jsonIsMembersOnly(node)) return true;
       // 列表项通常是 { videoRenderer: { badges } }，徽章在下一层。
@@ -2106,6 +2413,18 @@
       }
     }
     return false !== options.blockFeedAds && true === node.adClientParams?.isAd;
+  }
+
+  // 从上往下剥单键包装，命中广告 / Shorts / 新闻图文 / 会员视频就整项删掉。
+  function jsonIsCardItem(node, options) {
+    let current = node;
+    for (let depth = 0; current && "object" == typeof current && !Array.isArray(current) && depth < 6; depth++) {
+      if (jsonIsAdNode(current, options)) return true;
+      const keys = Object.keys(current);
+      if (1 !== keys.length || !JSON_ITEM_WRAPPERS.has(keys[0])) return false;
+      current = current[keys[0]];
+    }
+    return false;
   }
 
   function jsonSmartSkip(button) {
@@ -2134,7 +2453,7 @@
       if (!node || "object" != typeof node) return;
       if (Array.isArray(node)) {
         for (let i = node.length - 1; i >= 0; i--) {
-          if (jsonIsAdNode(node[i], options)) {
+          if (jsonIsCardItem(node[i], options)) {
             node.splice(i, 1);
             changed = true;
             continue;
@@ -2162,6 +2481,42 @@
           continue;
         }
         if (false !== options.blockShortsFeed && ("reelShelfRenderer" === key || "shortsLockupViewModel" === key)) {
+          delete node[key];
+          changed = true;
+          continue;
+        }
+        if (false !== options.blockFeedCards && JSON_FEED_CARD_RENDERERS.has(key)) {
+          delete node[key];
+          changed = true;
+          continue;
+        }
+        if (false !== options.blockEndscreen && JSON_ENDSCREEN_FIELDS.has(key)) {
+          delete node[key];
+          changed = true;
+          continue;
+        }
+        if (false !== options.blockInfoCards && JSON_INFO_CARD_FIELDS.has(key)) {
+          delete node[key];
+          changed = true;
+          continue;
+        }
+        if (options.blockAutoplay && JSON_AUTOPLAY_FIELDS.has(key)) {
+          delete node[key];
+          changed = true;
+          continue;
+        }
+        if (false !== options.blockChipCloud && JSON_CHIP_FIELDS.has(key)) {
+          delete node[key];
+          changed = true;
+          continue;
+        }
+        if (false !== options.blockComments && JSON_COMMENT_FIELDS.has(key)) {
+          delete node[key];
+          changed = true;
+          continue;
+        }
+        // 评论区偶尔是一个带 sectionIdentifier 的 itemSectionRenderer。
+        if (false !== options.blockComments && "comment-item-section" === value?.sectionIdentifier) {
           delete node[key];
           changed = true;
           continue;
@@ -2273,6 +2628,144 @@
     return changed;
   }
 
+  // 自动生成（ASR）字幕轨：kind=asr 或 vssId 以 "a." 开头，和界面语言无关。
+  function jsonIsAutoCaptionTrack(track) {
+    return "asr" === String(track?.kind ?? "").toLowerCase() || String(track?.vssId ?? "").startsWith("a.");
+  }
+
+  function jsonStripAutoCaptionTracks(player) {
+    const renderer = player?.captions?.playerCaptionsTrackListRenderer;
+    const tracks = renderer?.captionTracks;
+    if (!Array.isArray(tracks) || !tracks.length) return false;
+
+    const kept = tracks.filter((track) => !jsonIsAutoCaptionTrack(track));
+    if (kept.length === tracks.length) return false;
+
+    renderer.captionTracks = kept;
+    const selected = renderer.defaultCaptionTrackIndex;
+    if (kept.length && Number.isInteger(selected) && selected >= kept.length) renderer.defaultCaptionTrackIndex = kept.length - 1;
+    return true;
+  }
+
+  function jsonForceCaptionTrack(player) {
+    const renderer = player?.captions?.playerCaptionsTrackListRenderer;
+    const tracks = renderer?.captionTracks;
+    if (!Array.isArray(tracks) || !tracks.length) return false;
+
+    let selected = renderer.defaultCaptionTrackIndex;
+    if (!Number.isInteger(selected) || selected < 0 || selected >= tracks.length) selected = 0;
+
+    let changed = false;
+    if (renderer.defaultCaptionTrackIndex !== selected) {
+      renderer.defaultCaptionTrackIndex = selected;
+      changed = true;
+    }
+    for (const audio of Array.isArray(renderer.audioTracks) ? renderer.audioTracks : []) {
+      if (!audio || "object" != typeof audio) continue;
+      const indices = Array.isArray(audio.captionTrackIndices) ? audio.captionTrackIndices : [];
+      if (!indices.includes(selected)) {
+        audio.captionTrackIndices = [...indices, selected];
+        changed = true;
+      }
+      if (audio.defaultCaptionTrackIndex !== selected) {
+        audio.defaultCaptionTrackIndex = selected;
+        changed = true;
+      }
+      if (audio.captionsInitialState !== 3) {
+        audio.captionsInitialState = 3;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  // 编码偏好：过滤 adaptiveFormats 里的视频格式，音频不动。
+  // 目标编码一个都不剩时宁可不改，避免把视频轨删光。
+  function jsonApplyCodec(streamingData, codec) {
+    const formats = streamingData?.adaptiveFormats;
+    if (!Array.isArray(formats) || !formats.length || !codec || "any" === codec) return false;
+
+    const isVideo = (format) => String(format?.mimeType ?? "").startsWith("video/");
+    const kept = formats.filter((format) => !isVideo(format) || codecAllowed(format.mimeType, codec));
+    if (kept.length === formats.length || !kept.some(isVideo)) return false;
+    streamingData.adaptiveFormats = kept;
+    return true;
+  }
+
+  // YouTube Music：只保留码率最高的音频格式。
+  function jsonLockAudioQuality(streamingData) {
+    const formats = streamingData?.adaptiveFormats;
+    if (!Array.isArray(formats) || !formats.length) return false;
+
+    const isAudio = (format) => String(format?.mimeType ?? "").startsWith("audio/");
+    let best = 0;
+    for (const format of formats) {
+      const bitrate = parseInt(format?.bitrate, 10);
+      if (isAudio(format) && Number.isFinite(bitrate) && bitrate > best) best = bitrate;
+    }
+    if (!best) return false;
+
+    const kept = formats.filter((format) => !isAudio(format) || parseInt(format.bitrate, 10) === best);
+    if (kept.length === formats.length) return false;
+    streamingData.adaptiveFormats = kept;
+    return true;
+  }
+
+  // 相关视频：侧栏列表 + m 站播放器浮层里的 related。
+  function jsonDropRelated(root) {
+    let changed = false;
+
+    (function visit(node) {
+      if (!node || "object" != typeof node) return;
+      if (Array.isArray(node)) {
+        for (const item of node) visit(item);
+        return;
+      }
+      for (const key of Object.keys(node)) {
+        const value = node[key];
+        if (JSON_RELATED_FIELDS.has(key)) {
+          delete node[key];
+          changed = true;
+          continue;
+        }
+        if ("playerOverlayRenderer" === key && value && "object" == typeof value && value.related) {
+          delete value.related;
+          changed = true;
+        }
+        visit(value);
+      }
+    })(root);
+
+    return changed;
+  }
+
+  // 网页版顶部按钮：Create / 通知 / 上传，认图标枚举名。
+  function jsonFilterTopbar(root) {
+    let changed = false;
+
+    (function visit(node) {
+      if (!node || "object" != typeof node) return;
+      if (Array.isArray(node)) {
+        for (const item of node) visit(item);
+        return;
+      }
+      for (const key of Object.keys(node)) {
+        const value = node[key];
+        if ("topbarButtons" === key && Array.isArray(value)) {
+          const kept = value.filter((entry) => !JSON_TOPBAR_BLOCK_ICONS.test(String(entry?.topbarButtonRenderer?.icon?.ytIcon?.iconType?.iconType ?? "")));
+          if (kept.length !== value.length) {
+            node[key] = kept;
+            changed = true;
+          }
+          continue;
+        }
+        visit(value);
+      }
+    })(root);
+
+    return changed;
+  }
+
   // 网页播放器按 adaptiveFormats 里实际给的档位选画质。只保留目标高度
   // （max_height 与最高可用值取较小者），音频格式不动。
   function jsonApplyQuality(streamingData, maxHeight) {
@@ -2312,8 +2805,25 @@
       }
     }
 
+    // 字幕开关：off 去掉自动生成字幕轨（不再自动开字幕），force 强制开启。
+    try {
+      if (options.stripAutoCaptions) changed = jsonStripAutoCaptionTracks(player) || changed;
+      else if (options.forceCaptions) changed = jsonForceCaptionTrack(player) || changed;
+    } catch (e) {
+      // ignore
+    }
+
     if (false !== options.autoHd && player.streamingData) {
       changed = jsonApplyQuality(player.streamingData, options.maxHeight) || changed;
+    }
+
+    if (player.streamingData) {
+      try {
+        if ("any" !== options.videoCodec) changed = jsonApplyCodec(player.streamingData, options.videoCodec) || changed;
+        if (options.musicCleanup && options.musicWeb) changed = jsonLockAudioQuality(player.streamingData) || changed;
+      } catch (e) {
+        // ignore
+      }
     }
 
     const speedConfig = player.playerConfig?.granularVariableSpeedConfig;
@@ -2389,6 +2899,8 @@
     // 侧栏偶尔也塞在 browse 响应里，所以 guide 过滤一起跑。
     let changed = jsonPruneTree(data, options);
     changed = jsonFilterGuide(data, options) || changed;
+    if (options.blockRelatedVideos) changed = jsonDropRelated(data) || changed;
+    if (options.webCleanup) changed = jsonFilterTopbar(data) || changed;
     return changed;
   }
 
@@ -2446,7 +2958,9 @@
 
           const format = parseFields(field.data);
           const mime = format.find((item) => 5 === item.no && 2 === item.wire);
-          if (!mime || !strictUtf8.decode(mime.data).startsWith("video/")) continue;
+          if (!mime) continue;
+          const mimeText = strictUtf8.decode(mime.data);
+          if (!mimeText.startsWith("video/") || !codecAllowed(mimeText, options.videoCodec)) continue;
 
           const numberField = (fieldNo) => {
             const item = format.find((entry) => entry.no === fieldNo && 0 === entry.wire);
@@ -3050,7 +3564,14 @@
       },
     ],
     browse: ["Browse", filterBrowseTree],
-    next: ["Next", filterBrowseTree],
+    next: [
+      "Next",
+      function (node, options) {
+        let changed = filterBrowseTree(node, options);
+        changed = dropNextExtras(node, options) || changed;
+        return changed;
+      },
+    ],
     player: ["Player", rewritePlayer],
     search: ["Search", filterBrowseTree],
     "reel/reel_watch_sequence": [
@@ -3119,7 +3640,10 @@
         let changed = false;
         for (const item of node.contents) {
           if (item.player) changed = rewritePlayer(item.player, options) || changed;
-          if (item.next) changed = filterBrowseTree(item.next, options) || changed;
+          if (item.next) {
+            changed = filterBrowseTree(item.next, options) || changed;
+            changed = dropNextExtras(item.next, options) || changed;
+          }
         }
         return changed;
       },
@@ -3157,6 +3681,8 @@
         $done({});
         return;
       }
+      // 网页版 Music 的音频锁与 App 走不同结构，这里把「是不是 Music」带给下游。
+      options.musicWeb = isMusicRequest($request);
       if (!rewriteJsonRoute(route, data, options)) {
         $done({});
         return;
@@ -3201,7 +3727,8 @@
         return;
       }
 
-      if (false !== options.autoHd) {
+      // 画质上限或编码偏好任一开启都要刷新缓存：request 阶段按缓存 itag 改写。
+      if (false !== options.autoHd || "any" !== options.videoCodec) {
         const players = (function () {
           if ("Player" === typeName) return [node];
           if ("Watch" === typeName) return node.contents.map((item) => item.player).filter(Boolean);

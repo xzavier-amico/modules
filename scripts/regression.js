@@ -1020,6 +1020,34 @@ check("YouTube keeps current and previous Loon argument tuples aligned", () => {
   }
 });
 
+check("YouTube Loon plugin passes every argument and keeps block_feed_cards last", () => {
+  const plugin = read("loon/youtube/youtube-enhance.plugin");
+  const declared = [...plugin.matchAll(/^(\w+) = (?:switch|select|input),/gm)].map((match) => match[1]);
+  assert.equal(declared.length, 20, "the plugin must expose 20 arguments");
+  assert.ok(declared.includes("block_feed_cards"));
+  // 设置页按功能分组，位置数组按兼容顺序：新参数一律追加在末尾。
+  const order = [
+    "block_ads", "block_ai", "max_height", "caption_lang", "home_menu", "block_shorts_feed", "youtube_music",
+    "block_members_only", "home_cleanup", "jump_ahead", "max_speed", "web", "block_feed_cards",
+    "player_cleanup", "captions_mode", "feed_cleanup", "watch_cleanup", "video_codec", "web_cleanup", "music_cleanup",
+  ];
+  const names = (line) => [.../then script\("[^"]+", \{([^)]*)\}\) with/.exec(line)[1].matchAll(/\$\{(\w+)\}/g)].map((match) => match[1]);
+  const lines = plugin.split("\n").filter((line) => /then script\("[^"]+", \{/.test(line));
+  assert.ok(lines.length > 0);
+  for (const line of lines) assert.deepEqual(names(line), order, "every script tuple must follow the compatibility order");
+  assert.deepEqual(declared.slice().sort(), order.slice().sort(), "the plugin must declare every tuple argument");
+
+  // 13 项位置数组按 CURRENT_ARG_ORDER 还原：最后一位是 block_feed_cards。
+  const file = "loon/youtube/js/youtube.response.js";
+  const url = "https://www.youtube.com/youtubei/v1/browse";
+  const body = JSON.stringify({ contents: [{ postRenderer: { contentText: "post" } }, { videoRenderer: { videoId: "ok" } }] });
+  const tuple = (feedCards) => [true, true, "max", "zh-Hans", "", false, true, false, "standard", true, "4", true, feedCards];
+  const run13 = (args) => run(file, body, url, args, { $request: { url }, $response: { url, status: 200, headers: { "content-type": "application/json" }, body } });
+  const on = JSON.parse(run13(tuple(true)).body);
+  assert.deepEqual(on.contents.map((item) => Object.keys(item)[0]), ["videoRenderer"], "block_feed_cards must be read from the last tuple slot");
+  assert.deepEqual(Object.keys(run13(tuple(false))), [], "the switch must stay off when the last slot is false");
+});
+
 check("YouTube web JSON strips ads, Shorts shelves and members-only videos", () => {
   const body = JSON.stringify({
     contents: [
@@ -1029,10 +1057,12 @@ check("YouTube web JSON strips ads, Shorts shelves and members-only videos", () 
       { videoRenderer: { videoId: "members", badges: [{ metadataBadgeRenderer: { label: "会员专享" } }] } },
       { clarificationRenderer: { text: "AI" } },
       { shoppingShelfRenderer: { title: "shop" } },
+      { postRenderer: { contentText: "post" } },
+      { newsRenderer: { title: "news" } },
     ],
     entries: [{ displayAdRenderer: {} }],
   });
-  const args = { blockAds: true, blockAi: true, blockShortsFeed: true, blockMembersOnly: true, blockStore: true, web: true };
+  const args = { blockAds: true, blockAi: true, blockShortsFeed: true, blockFeedCards: true, blockMembersOnly: true, blockStore: true, web: true };
   for (const platform of ["loon", "egern", "shadowrocket"]) {
     const url = "https://www.youtube.com/youtubei/v1/browse";
     const out = run(platform + "/youtube/js/youtube.response.js", body, url, args, {
@@ -1044,6 +1074,73 @@ check("YouTube web JSON strips ads, Shorts shelves and members-only videos", () 
     assert.deepEqual(data.contents.map((item) => Object.keys(item)[0]), ["videoRenderer"]);
     assert.equal(data.contents[0].videoRenderer.videoId, "ok");
     assert.deepEqual(data.entries, []);
+  }
+});
+
+check("YouTube web JSON drops wrapped cards without leaving blank slots", () => {
+  // 真实网页首页是 richGridRenderer → richItemRenderer → content → renderer。
+  const card = (renderer) => ({ richItemRenderer: { content: renderer } });
+  const body = JSON.stringify({
+    contents: {
+      twoColumnBrowseResultsRenderer: {
+        tabs: [
+          {
+            tabRenderer: {
+              content: {
+                richGridRenderer: {
+                  contents: [
+                    card({ videoRenderer: { videoId: "ok" } }),
+                    card({ postRenderer: { contentText: "post" } }),
+                    card({ reelShelfRenderer: { title: { simpleText: "Shorts" } } }),
+                    card({ videoRenderer: { videoId: "short", navigationEndpoint: { reelWatchEndpoint: { videoId: "short" } } } }),
+                    card({ newsRenderer: { title: "news" } }),
+                    card({ adSlotRenderer: { adSlotMetadata: { slotId: "ad" } } }),
+                    card({ videoRenderer: { videoId: "members", badges: [{ metadataBadgeRenderer: { label: "会员专享" } }] } }),
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      },
+    },
+  });
+  const args = { blockAds: true, blockShortsFeed: true, blockFeedCards: true, blockMembersOnly: true, web: true };
+  const grid = (data) => data.contents.twoColumnBrowseResultsRenderer.tabs[0].tabRenderer.content.richGridRenderer.contents;
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const url = "https://www.youtube.com/youtubei/v1/browse";
+    const out = run(platform + "/youtube/js/youtube.response.js", body, url, args, {
+      $request: { url },
+      $response: { url, status: 200, headers: { "content-type": "application/json" }, body },
+    });
+    const contents = grid(JSON.parse(out.body));
+    assert.deepEqual(contents, [card({ videoRenderer: { videoId: "ok" } })], platform + " must keep only the organic video and drop the whole wrapper");
+  }
+});
+
+check("YouTube web JSON keys members-only on the badge style, not on localized copy", () => {
+  const body = JSON.stringify({
+    contents: [
+      { videoRenderer: { videoId: "ok" } },
+      // style 命中，文案是别的语言也要删。
+      { videoRenderer: { videoId: "style", badges: [{ metadataBadgeRenderer: { style: "BADGE_STYLE_TYPE_MEMBERS_ONLY", label: "Nur für Mitglieder" } }] } },
+      // 老响应只有文案，保留兜底。
+      { videoRenderer: { videoId: "label", badges: [{ metadataBadgeRenderer: { label: "会员专享" } }] } },
+      // 有 style 但不是会员徽章：即使文案写着 Members only 也不能删。
+      { videoRenderer: { videoId: "other", badges: [{ metadataBadgeRenderer: { style: "BADGE_STYLE_TYPE_VERIFIED", label: "Members only" } }] } },
+      // 标题恰好叫 Members only 的普通视频不能删。
+      { videoRenderer: { videoId: "title", title: { runs: [{ text: "Members only" }] } } },
+    ],
+  });
+  const args = { blockMembersOnly: true, web: true };
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const url = "https://www.youtube.com/youtubei/v1/browse";
+    const out = run(platform + "/youtube/js/youtube.response.js", body, url, args, {
+      $request: { url },
+      $response: { url, status: 200, headers: { "content-type": "application/json" }, body },
+    });
+    const ids = JSON.parse(out.body).contents.map((item) => item.videoRenderer.videoId);
+    assert.deepEqual(ids, ["ok", "other", "title"], platform + " must only drop actual members-only badges");
   }
 });
 
@@ -1106,6 +1203,307 @@ check("YouTube web JSON passes through unknown or malformed bodies", () => {
       });
       assert.deepEqual(Object.keys(out), []);
     }
+  }
+});
+
+check("YouTube next filters mixed Shorts / news-post cards and leaves autoplay intact", () => {
+  const enc = (text) => new TextEncoder().encode(text);
+  const elem = (marker) => serialize([b(999, enc(marker))]);
+  const item = (marker) => serialize([b(153515154, elem(marker))]);
+  const buildNext = (secondMarker) => {
+    const itemSection = serialize([b(1, item("video_lockup_with_attachment.eml")), b(1, item(secondMarker))]);
+    const supported = serialize([b(50195462, itemSection)]);
+    const sectionList = serialize([b(1, supported)]);
+    const browse = serialize([b(49399797, sectionList)]);
+    // NextResult 3 号字段是 autoplay；模块不能动它。
+    const nextResult = serialize([b(1, browse), b(3, new Uint8Array([9, 8, 7, 6]))]);
+    return serialize([b(7, serialize([b(51779735, nextResult)]) )]);
+  };
+  const readNext = (out) => {
+    const top = parse(out.body);
+    const nextResult = parse(first(parse(first(top, 7).p), 51779735).p);
+    const browse = first(nextResult, 1).p;
+    const sectionList = first(parse(browse), 49399797).p;
+    const supported = first(parse(sectionList), 1).p;
+    const itemSection = first(parse(supported), 50195462).p;
+    const autoplay = first(nextResult, 3);
+    return { items: parse(itemSection).filter((f) => f.no === 1), autoplay: autoplay && autoplay.p };
+  };
+
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const file = platform + "/youtube/js/youtube.response.js";
+    const url = "https://youtubei.googleapis.com/youtubei/v1/next";
+    const runNext = (body, args) =>
+      run(file, body, url, args, { $request: { url }, $response: { url, status: 200, headers: {}, body } });
+
+    const shortsBody = buildNext("shorts_video_cell");
+    const shortsOff = runNext(shortsBody, { blockAds: false, blockShortsFeed: false });
+    assert.deepEqual(Object.keys(shortsOff), [], platform + " must keep Shorts cards when the switch is off");
+    const shortsOn = readNext(runNext(shortsBody, { blockAds: false, blockShortsFeed: true }));
+    assert.equal(shortsOn.items.length, 1, platform + " must drop the mixed Shorts card");
+    assert.deepEqual([...shortsOn.autoplay], [9, 8, 7, 6], platform + " must not touch autoplay");
+
+    const postBody = buildNext("post_shelf");
+    const postOff = runNext(postBody, { blockAds: false, blockFeedCards: false });
+    assert.deepEqual(Object.keys(postOff), [], platform + " must keep news/post cards when the switch is off");
+    const postOn = readNext(runNext(postBody, { blockAds: false, blockFeedCards: true }));
+    assert.equal(postOn.items.length, 1, platform + " must drop the news/post card");
+    assert.deepEqual([...postOn.autoplay], [9, 8, 7, 6], platform + " must not touch autoplay");
+
+    // 普通视频标题里出现「重大新闻」不能被当成新闻卡片删掉。
+    const titleBody = buildNext("重大新闻");
+    const titleOut = runNext(titleBody, { blockAds: false, blockFeedCards: true });
+    assert.deepEqual(Object.keys(titleOut), [], platform + " must keep videos whose title contains 重大新闻");
+
+    // 货架级：ShelfRenderer 直接挂在 sectionListSupportedRenderers 上时整块删。
+    const buildShelfBody = (marker, copy) => {
+      const reel = serialize(copy ? [b(1, item("video_lockup_with_attachment.eml")), b(2, enc(copy))] : [b(1, item(marker))]);
+      const shelf = serialize([b(5, serialize([b(51431404, reel)]))]);
+      const sections = [b(1, serialize([b(51845067, shelf)]))];
+      if (!copy) sections.push(b(1, serialize([b(50195462, item("video_lockup_with_attachment.eml"))])));
+      const nextResult = serialize([b(1, serialize([b(49399797, serialize(sections))]))]);
+      return serialize([b(7, serialize([b(51779735, nextResult)]))]);
+    };
+    const readSections = (out) => {
+      const top = parse(out.body);
+      const nextResult = parse(first(parse(first(top, 7).p), 51779735).p);
+      return parse(first(parse(first(nextResult, 1).p), 49399797).p).filter((field) => field.no === 1);
+    };
+
+    const shelfBody = buildShelfBody("news_story");
+    const shelfOff = runNext(shelfBody, { blockAds: false, blockFeedCards: false });
+    assert.deepEqual(Object.keys(shelfOff), [], platform + " must keep the news shelf when the switch is off");
+    const shelfOn = readSections(runNext(shelfBody, { blockAds: false, blockFeedCards: true }));
+    assert.equal(shelfOn.length, 1, platform + " must drop the whole news shelf");
+    assert.ok(first(parse(shelfOn[0].p), 50195462), platform + " must keep the item section next to it");
+
+    // 货架标题是本地化文案，不能当判据：标题写「重大新闻」但里面是普通视频时必须保留。
+    assert.deepEqual(Object.keys(runNext(buildShelfBody(null, "重大新闻"), { blockAds: false, blockFeedCards: true })), [], platform + " must not match shelves by localized title copy");
+  }
+});
+
+check("YouTube player cleanup drops the endscreen wall, info cards and autoplay", () => {
+  const playerBody = JSON.stringify({ endscreen: { elements: [{ a: 1 }] }, cards: { cardCollectionRenderer: {} }, streamingData: { adaptiveFormats: [] } });
+  const nextBody = JSON.stringify({ autoplay: { countDownSecs: 5 }, contents: [{ videoRenderer: { videoId: "ok" } }] });
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const file = platform + "/youtube/js/youtube.response.js";
+    const runJson = (body, url, args) => run(file, body, url, args, { $request: { url }, $response: { url, status: 200, headers: { "content-type": "application/json" }, body } });
+    const playerUrl = "https://www.youtube.com/youtubei/v1/player";
+    const nextUrl = "https://www.youtube.com/youtubei/v1/next";
+
+    assert.deepEqual(Object.keys(runJson(playerBody, playerUrl, { playerCleanup: "off", web: true })), [], platform + " must keep the player when the switch is off");
+    const standard = JSON.parse(runJson(playerBody, playerUrl, { playerCleanup: "standard", web: true }).body);
+    assert.equal(standard.endscreen, undefined, platform + " must drop the endscreen wall");
+    assert.equal(standard.cards, undefined, platform + " must drop the info cards");
+
+    const standardNext = runJson(nextBody, nextUrl, { playerCleanup: "standard", web: true });
+    assert.deepEqual(Object.keys(standardNext), [], platform + " must keep autoplay on the standard level");
+    const allNext = JSON.parse(runJson(nextBody, nextUrl, { playerCleanup: "all", web: true }).body);
+    assert.equal(allNext.autoplay, undefined, platform + " must drop autoplay on the all level");
+  }
+
+  // 原生 App：NextResult 3 号字段就是自动播放下一首。
+  const appBody = serialize([b(7, serialize([b(51779735, serialize([b(3, new Uint8Array([5, 4, 3]))]))]))]);
+  const appUrl = "https://youtubei.googleapis.com/youtubei/v1/next";
+  const runApp = (args) => run("loon/youtube/js/youtube.response.js", appBody, appUrl, args, { $request: { url: appUrl }, $response: { url: appUrl, status: 200, headers: {}, body: appBody } });
+  const autoplay = (out) => {
+    const top = parse(out.body);
+    return first(parse(first(parse(first(top, 7).p), 51779735).p), 3);
+  };
+  assert.deepEqual(Object.keys(runApp({ playerCleanup: "standard", blockAds: false })), [], "App must keep autoplay on the standard level");
+  assert.equal(autoplay(runApp({ playerCleanup: "all", blockAds: false })), null, "App must drop the next-result autoplay field");
+});
+
+check("YouTube captions switch strips auto-generated tracks and can force them on", () => {
+  const body = JSON.stringify({
+    captions: {
+      playerCaptionsTrackListRenderer: {
+        captionTracks: [
+          { baseUrl: "https://x/t?lang=en", languageCode: "en", vssId: ".en", kind: "", isTranslatable: true },
+          { baseUrl: "https://x/t?lang=en&kind=asr", languageCode: "en", vssId: "a.en", kind: "asr" },
+          { baseUrl: "https://x/t?lang=ja", languageCode: "ja", vssId: ".ja", isTranslatable: true },
+        ],
+        audioTracks: [{ captionTrackIndices: [0], defaultCaptionTrackIndex: 2, captionsInitialState: 1 }],
+        defaultCaptionTrackIndex: 2,
+      },
+    },
+    streamingData: { adaptiveFormats: [] },
+  });
+  const url = "https://www.youtube.com/youtubei/v1/player";
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const file = platform + "/youtube/js/youtube.response.js";
+    const rendererOf = (out) => JSON.parse(out.body).captions.playerCaptionsTrackListRenderer;
+    const runJson = (args) => run(file, body, url, args, { $request: { url }, $response: { url, status: 200, headers: { "content-type": "application/json" }, body } });
+
+    const off = rendererOf(runJson({ captionsMode: "off", web: true }));
+    assert.deepEqual(off.captionTracks.map((track) => track.vssId), [".en", ".ja"], platform + " must drop the ASR track");
+    assert.equal(off.defaultCaptionTrackIndex, 1, platform + " must clamp the selected index after the strip");
+
+    const forced = rendererOf(runJson({ captionsMode: "force", captionLang: "off", web: true }));
+    assert.equal(forced.defaultCaptionTrackIndex, 2, platform + " must keep the selected track");
+    assert.equal(forced.audioTracks[0].captionsInitialState, 3, platform + " must switch captions on");
+  }
+
+  // 原生 App：同一份轨道结构走 protobuf。
+  const track = (vssId, kind) => serialize([s(1, "https://x/t"), s(3, vssId), s(5, kind)]);
+  const appBody = serialize([b(10, serialize([b(51621377, serialize([b(1, track(".en", "")), b(1, track("a.en", "asr")), b(2, serialize([v(2, 0), v(3, 1), v(11, 1)])), v(6, 1)]))]))]);
+  const appUrl = "https://youtubei.googleapis.com/youtubei/v1/player";
+  const runApp = (args) => run("loon/youtube/js/youtube.response.js", appBody, appUrl, args, { $request: { url: appUrl }, $response: { url: appUrl, status: 200, headers: {}, body: appBody } });
+  const readCaptions = (out) => {
+    const renderer = parse(first(parse(first(parse(out.body), 10).p), 51621377).p);
+    const audio = parse(first(renderer, 2).p);
+    return {
+      tracks: renderer.filter((field) => field.no === 1).map((field) => text(first(parse(field.p), 3))),
+      selected: first(renderer, 6)?.v,
+      state: first(audio, 11)?.v,
+    };
+  };
+
+  const appOff = readCaptions(runApp({ captionsMode: "off", blockAds: false }));
+  assert.deepEqual([...appOff.tracks], [".en"], "App must drop the ASR track");
+  assert.equal(Number(appOff.selected), 0, "App must clamp the selected index after the strip");
+
+  const appForced = readCaptions(runApp({ captionsMode: "force", captionLang: "off", blockAds: false }));
+  assert.equal(Number(appForced.selected), 1, "App must keep the selected track");
+  assert.equal(Number(appForced.state), 3, "App must switch captions on");
+});
+
+check("YouTube feed cleanup drops continue-watching cards, chips and live cards", () => {
+  const card = (renderer) => ({ richItemRenderer: { content: renderer } });
+  const body = JSON.stringify({
+    contents: [
+      card({ videoRenderer: { videoId: "ok" } }),
+      card({ videoRenderer: { videoId: "resume", thumbnailOverlays: [{ thumbnailOverlayResumePlaybackRenderer: { percentDurationWatched: 42 } }] } }),
+      card({ videoRenderer: { videoId: "live", thumbnailOverlays: [{ thumbnailOverlayTimeStatusRenderer: { style: "LIVE" } }] } }),
+      { chipCloudRenderer: { chips: [{ chipCloudChipRenderer: {} }] } },
+    ],
+  });
+  const url = "https://www.youtube.com/youtubei/v1/browse";
+  const ids = (contents) => contents.filter((item) => item.richItemRenderer).map((item) => item.richItemRenderer.content.videoRenderer.videoId);
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const file = platform + "/youtube/js/youtube.response.js";
+    const runJson = (args) => run(file, body, url, args, { $request: { url }, $response: { url, status: 200, headers: { "content-type": "application/json" }, body } });
+
+    assert.deepEqual(Object.keys(runJson({ feedCleanup: "off", web: true })), [], platform + " must keep the feed when the switch is off");
+    const standard = JSON.parse(runJson({ feedCleanup: "standard", web: true }).body).contents;
+    assert.deepEqual(ids(standard), ["ok", "live"], platform + " must drop the resume card and the chip bar");
+    assert.ok(!standard.some((item) => item.chipCloudRenderer), platform + " must drop the chip cloud");
+    const all = JSON.parse(runJson({ feedCleanup: "all", web: true }).body).contents;
+    assert.deepEqual(ids(all), ["ok"], platform + " must also drop live cards");
+  }
+});
+
+check("YouTube watch cleanup drops the comment box and the related list", () => {
+  const body = JSON.stringify({
+    commentsEntryPointHeaderRenderer: { headerText: { runs: [{ text: "comments" }] } },
+    contents: { twoColumnWatchNextResults: { secondaryResults: { secondaryResults: { results: [{ compactVideoRenderer: { videoId: "rel" } }] } } } },
+    onResponseReceivedEndpoints: [{ reloadContinuationItemsCommand: { continuationItems: [{ itemSectionRenderer: { sectionIdentifier: "comment-item-section" } }] } }],
+  });
+  const url = "https://www.youtube.com/youtubei/v1/next";
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const file = platform + "/youtube/js/youtube.response.js";
+    const runJson = (args) => run(file, body, url, args, { $request: { url }, $response: { url, status: 200, headers: { "content-type": "application/json" }, body } });
+
+    assert.deepEqual(Object.keys(runJson({ watchCleanup: "off", web: true })), [], platform + " must keep the watch page when the switch is off");
+    const standard = runJson({ watchCleanup: "comments", web: true }).body;
+    assert.ok(!standard.includes("commentsEntryPointHeaderRenderer"), platform + " must drop the comment entry point");
+    assert.ok(!standard.includes("comment-item-section"), platform + " must drop the comment section");
+    assert.ok(standard.includes("secondaryResults"), platform + " must keep the related list on the comments level");
+    const all = runJson({ watchCleanup: "all", web: true }).body;
+    assert.ok(!all.includes("secondaryResults"), platform + " must drop the related list on the all level");
+  }
+
+  // 原生 App：评论区靠 engagementPanels 里的内部标识认出来。
+  const panel = (marker) => serialize([b(138681066, serialize([s(9, marker)]))]);
+  const appBody = serialize([b(25, panel("comment-item-section")), b(25, panel("shopping-panel"))]);
+  const appUrl = "https://youtubei.googleapis.com/youtubei/v1/next";
+  const runApp = (args) => run("loon/youtube/js/youtube.response.js", appBody, appUrl, args, { $request: { url: appUrl }, $response: { url: appUrl, status: 200, headers: {}, body: appBody } });
+  const panelCount = (out) => parse(out.body).filter((field) => field.no === 25).length;
+  assert.deepEqual(Object.keys(runApp({ watchCleanup: "off", blockAds: false })), [], "App must keep the panels when the switch is off");
+  assert.equal(panelCount(runApp({ watchCleanup: "comments", blockAds: false })), 1, "App must drop the comment panel only");
+});
+
+check("YouTube codec preference filters AV1 out of the formats", () => {
+  const body = JSON.stringify({
+    streamingData: {
+      adaptiveFormats: [
+        { itag: 1, mimeType: 'video/mp4; codecs="avc1.640028"', height: 1080 },
+        { itag: 2, mimeType: 'video/mp4; codecs="av01.0.08M.08"', height: 1080 },
+        { itag: 3, mimeType: 'video/webm; codecs="vp9"', height: 1080 },
+        { itag: 4, mimeType: 'audio/mp4; codecs="mp4a.40.2"' },
+      ],
+    },
+  });
+  const url = "https://www.youtube.com/youtubei/v1/player";
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const file = platform + "/youtube/js/youtube.response.js";
+    const itags = (args) => JSON.parse(run(file, body, url, args, { $request: { url }, $response: { url, status: 200, headers: { "content-type": "application/json" }, body } }).body).streamingData.adaptiveFormats.map((format) => format.itag);
+    assert.deepEqual(Object.keys(run(file, body, url, { web: true }, { $request: { url }, $response: { url, status: 200, headers: { "content-type": "application/json" }, body } })), [], platform + " must leave formats alone by default");
+    assert.deepEqual(itags({ videoCodec: "no_av1", maxHeight: "off", web: true }), [1, 3, 4], platform + " must drop the AV1 track");
+    assert.deepEqual(itags({ videoCodec: "avc", maxHeight: "off", web: true }), [1, 4], platform + " must keep H.264 only");
+  }
+
+  // 原生 App：编码偏好在画质缓存里生效，request 阶段按缓存 itag 改写播放请求。
+  const formatBytes = (itag, mime, height) => serialize([v(1, itag), s(5, mime), v(7, height), v(8, height)]);
+  const appBody = serialize([
+    b(
+      4,
+      serialize([
+        s(15, "https://x.googlevideo.com/videoplayback?id=abc&itag=1"),
+        b(3, formatBytes(1, 'video/mp4; codecs="avc1.640028"', 1080)),
+        b(3, formatBytes(2, 'video/mp4; codecs="av01.0.08M.08"', 1080)),
+      ]),
+    ),
+  ]);
+  const appUrl = "https://youtubei.googleapis.com/youtubei/v1/player";
+  const cache = (args) => {
+    const map = {};
+    const store = { read: (key) => (key in map ? map[key] : null), write: (value, key) => ((map[key] = value), true) };
+    run("loon/youtube/js/youtube.response.js", appBody, appUrl, args, { $request: { url: appUrl }, $response: { url: appUrl, status: 200, headers: {}, body: appBody }, $persistentStore: store });
+    return JSON.parse(map.YouTubeQuality || "{}").abc ?? {};
+  };
+  assert.deepEqual(cache({ blockAds: false }).itags.slice().sort(), [1, 2], "App cache keeps every codec by default");
+  assert.deepEqual(cache({ blockAds: false, videoCodec: "no_av1" }).itags, [1], "App cache must drop the AV1 itag");
+  assert.deepEqual(cache({ blockAds: false, videoCodec: "avc" }).itags, [1], "App cache must keep H.264 only");
+});
+
+check("YouTube web cleanup hides the create and notification buttons", () => {
+  const button = (iconType) => ({ topbarButtonRenderer: { icon: { ytIcon: { iconType: { iconType } } } } });
+  const body = JSON.stringify({
+    topbar: {
+      desktopTopbarRenderer: {
+        topbarButtons: [button("YOUTUBE_ICON_TYPE_CREATE"), button("YOUTUBE_ICON_TYPE_NOTIFICATIONS"), button("YOUTUBE_ICON_TYPE_SEARCH")],
+      },
+    },
+  });
+  const url = "https://www.youtube.com/youtubei/v1/browse";
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const file = platform + "/youtube/js/youtube.response.js";
+    const runJson = (args) => run(file, body, url, args, { $request: { url }, $response: { url, status: 200, headers: { "content-type": "application/json" }, body } });
+
+    assert.deepEqual(Object.keys(runJson({ web: true })), [], platform + " must keep the topbar when the switch is off");
+    const buttons = JSON.parse(runJson({ webCleanup: true, web: true }).body).topbar.desktopTopbarRenderer.topbarButtons;
+    assert.deepEqual(buttons.map((entry) => entry.topbarButtonRenderer.icon.ytIcon.iconType.iconType), ["YOUTUBE_ICON_TYPE_SEARCH"], platform + " must keep only the search button");
+  }
+});
+
+check("YouTube Music cleanup locks the highest audio bitrate", () => {
+  const body = JSON.stringify({
+    streamingData: {
+      adaptiveFormats: [
+        { itag: 251, mimeType: 'audio/webm; codecs="opus"', bitrate: 130000 },
+        { itag: 140, mimeType: 'audio/mp4; codecs="mp4a.40.2"', bitrate: 129000 },
+        { itag: 137, mimeType: 'video/mp4; codecs="avc1.640028"', height: 1080 },
+      ],
+    },
+  });
+  const url = "https://music.youtube.com/youtubei/v1/player";
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const file = platform + "/youtube/js/youtube.response.js";
+    const itags = (args) => JSON.parse(run(file, body, url, args, { $request: { url }, $response: { url, status: 200, headers: { "content-type": "application/json" }, body } }).body).streamingData.adaptiveFormats.map((format) => format.itag);
+
+    assert.deepEqual(Object.keys(run(file, body, url, { maxHeight: "off", web: true }, { $request: { url }, $response: { url, status: 200, headers: { "content-type": "application/json" }, body } })), [], platform + " must keep every audio format by default");
+    assert.deepEqual(itags({ musicCleanup: true, maxHeight: "off", web: true }), [251, 137], platform + " must keep only the best audio track");
   }
 });
 

@@ -86,7 +86,11 @@
     EngagementPanel: [[138681066, "renderer", "EngagementPanelRenderer"]],
     EngagementPanelRenderer: [[3, "content", "BrowseContent"]],
     NextContent: [[51779735, "nextResult", "NextResult"]],
-    NextResult: [[1, "content", "BrowseContent"]],
+    NextResult: [
+      [1, "content", "BrowseContent"],
+      // 自动播放下一首（compactAutoplayRenderer）；关掉自动播放就整块删。
+      [3, "autoplay", "bytes"],
+    ],
     PlayerOverlays: [[78882851, "renderer", "PlayerOverlayRenderer"]],
     PlayerOverlayRenderer: [
       [2, "overflowMenu", "bytes"],

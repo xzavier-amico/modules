@@ -385,14 +385,45 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // 带货/商品版式。
   const SHOPPING_LAYOUT = /^(?:shopping_|products?_in_video_)[a-z0-9_]+\.eml(?:-js)?(?:-fe)?$/;
 
+  // 推荐流里的非视频卡片：新闻故事、社区图文帖子、轮播等。  // 只认版式名和 element 标识（跟 YTLitePlus / uYou 一样看 element 描述里的
+  // `xxx_shelf.eml` 这类内部名字）——它们是英文资源名，不随界面语言变化。
+  // 标题文案（「重大新闻」/「Top stories」…）一律不匹配：那些是本地化文案，
+  // 既会随语言失效，也会误删恰好叫这个名字的普通视频/货架。
+  const FEED_CARD_LAYOUT =
+    /^(?:post_shelf|carousel_headered_layout|carousel_footered_layout|landscape_image_wide_button_layout|square_image_layout|text_image_button_layout|grid_ads_image_layout|statement_banner|news_[a-z0-9_]+|breaking_news[a-z0-9_]*)\.eml(?:-js)?(?:-fe)?$/;
+  const FEED_CARD_MARKERS = [
+    textEncoder.encode("post_shelf"),
+    textEncoder.encode("backstage_post"),
+    textEncoder.encode("post_card"),
+    textEncoder.encode("postMultiImage"),
+    textEncoder.encode("news_card"),
+    textEncoder.encode("news_shelf"),
+    textEncoder.encode("news_story"),
+    textEncoder.encode("breaking_news"),
+  ];
+
+  // App 里 Shorts 卡片/货架的 element 标识（uYou / YTLite 用的也是这几个）。
+  // 最后一个是 reelWatchEndpoint 的字段标签：混在推荐流里的单个 Shorts 卡片。
+  const SHORTS_MARKERS = [
+    textEncoder.encode("shorts_video_cell"),
+    textEncoder.encode("shorts_shelf"),
+    new Uint8Array([0x8a, 0x9f, 0xc8, 0x94, 0x04]),
+  ];
+
+  // 播放页的评论区面板：engagementPanels 里靠这两个内部标识认出来，
+  // 和网页版 JSON 的 sectionIdentifier 是同一套名字，不随界面语言变化。
+  const COMMENT_PANEL_MARKERS = [textEncoder.encode("comment-item-section"), textEncoder.encode("comments-section")];
+
   // 会员专属徽章的文案，用来在列表里认出会员视频。
+  // App 的 protobuf 里只有本地化文案（枚举是 varint，脚本里没为它建模），
+  // 所以原生端按这几种语言的徽章文字精确匹配；网页版 JSON 有 style 枚举，
+  // 优先按 BADGE_STYLE_TYPE_MEMBERS_ONLY 判定，文案只作兜底。
   const MEMBERS_ONLY_LABELS = [
     "Members only",
     "会员专享",
     "會員專享",
     "メンバー限定",
     "멤버 전용",
-    "BADGE_MEMBERS_ONLY",
   ];
 
   // 侧栏/首页菜单项：值是可读别名，id 是 guide 响应里的 browseId。
@@ -668,6 +699,15 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return isMusicRequest(request) ? "youtubeMusic" : "youtube";
   }
 
+  // 编码偏好：any 不过滤，no_av1 去掉 AV1，avc 只留 H.264。
+  // 认的是 mimeType 里的 codecs 串（avc1 / av01 / vp9…），与界面语言无关。
+  function codecAllowed(mime, codec) {
+    const text = String(mime ?? "").toLowerCase();
+    if ("avc" === codec) return text.includes("avc1");
+    if ("no_av1" === codec) return !text.includes("av01");
+    return true;
+  }
+
   function isQualityEntry(entry) {
     return !!(
       entry &&
@@ -719,6 +759,15 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     jump_ahead: "jumpAhead",
     max_speed: "maxSpeed",
     web: "web",
+    // 新增参数放在末尾：12 项旧位置数组走 Object.keys 兜底时，前 12 位顺序不能变。
+    block_feed_cards: "blockFeedCards",
+    player_cleanup: "playerCleanup",
+    captions_mode: "captionsMode",
+    feed_cleanup: "feedCleanup",
+    watch_cleanup: "watchCleanup",
+    video_codec: "videoCodec",
+    web_cleanup: "webCleanup",
+    music_cleanup: "musicCleanup",
   };
 
   // 旧版插件的 26 个参数顺序。Loon 旧版按位置传数组时用它还原；
@@ -753,8 +802,8 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     "stripHotHash",
   ];
 
-  // 当前 Loon 位置数组（12 项，最后一项是 web）。web 是布尔值；
-  // 上一版 12 项数组的最后一项是 max_speed 字符串，用这个区分新旧 tuple。
+  // 当前 Loon 位置数组（20 项）。末尾追加的新参数按这个顺序还原；
+  // 旧长度的位置数组走下面按长度分的兼容表。
   const CURRENT_ARG_ORDER = [
     "block_ads",
     "block_ai",
@@ -768,7 +817,18 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     "jump_ahead",
     "max_speed",
     "web",
+    "block_feed_cards",
+    "player_cleanup",
+    "captions_mode",
+    "feed_cleanup",
+    "watch_cleanup",
+    "video_codec",
+    "web_cleanup",
+    "music_cleanup",
   ];
+
+  // 只加过 block_feed_cards 的那一版（13 项）：客户端缓存旧插件时仍按它的顺序还原。
+  const FEED_CARDS_ARG_ORDER = CURRENT_ARG_ORDER.slice(0, 13);
 
   // 上一版 Loon 位置数组（12 项，含 on_the_go）。升级插件前客户端可能还缓存着
   // 旧 tuple；按长度和最后一项类型区分，避免把旧数组当成新数组。
@@ -805,9 +865,12 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
           ? LEGACY_ARG_ORDER
           : raw.length === PREV_ARG_ORDER.length && "string" == typeof raw[raw.length - 1]
             ? PREV_ARG_ORDER
-            : raw.length === CURRENT_ARG_ORDER.length
-              ? CURRENT_ARG_ORDER
-              : Object.keys(ARG_ALIASES);
+            : raw.length === FEED_CARDS_ARG_ORDER.length
+              ? FEED_CARDS_ARG_ORDER
+              : raw.length === CURRENT_ARG_ORDER.length
+                ? CURRENT_ARG_ORDER
+                : // 其他长度（未来少传/多传）按别名表顺序兜底，前缀位置仍然对得上。
+                  Object.keys(ARG_ALIASES);
       order.forEach((key, index) => {
         if (index < raw.length) out[key] = raw[index];
       });
@@ -825,6 +888,18 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     if ("false" === text || "0" === text || "off" === text || "no" === text) return false;
     if ("true" === text || "1" === text || "on" === text || "yes" === text) return true;
     return fallback;
+  }
+
+  // 多级开关：off 关；基础档（standard / comments）；all 再多做一项。
+  // 旧式布尔值也能吃：true = 基础档，false = off。
+  function asLevel(value, base) {
+    if (true === value) return base;
+    if (false === value || 0 === value) return "off";
+    const text = String(value ?? "").trim().toLowerCase();
+    if (!text || "false" === text || "0" === text || "off" === text || "none" === text || "no" === text) return "off";
+    if ("all" === text) return "all";
+    if (base === text || "standard" === text || "true" === text || "1" === text || "on" === text || "yes" === text) return base;
+    return "off";
   }
 
   // 把 home_menu 里的一个 token 归一成 { hide, id }；认不出就返回 undefined。
@@ -976,11 +1051,47 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     options.blockAi = asBool(options.blockAi, true);
     // 这两项插件默认关闭，参数缺失时不能按「非 false 即 true」处理。
     options.blockShortsFeed = asBool(options.blockShortsFeed, false);
+    options.blockFeedCards = asBool(options.blockFeedCards, false);
     options.blockMembersOnly = asBool(options.blockMembersOnly, false);
     options.jumpAhead = asBool(options.jumpAhead, true);
     options.youtubeMusic = asBool(options.youtubeMusic, true);
     // 网页版 YouTube / YouTube Music 的 JSON 响应处理，默认开启。
     options.web = asBool(options.web, true);
+
+    // 播放器清理：去播放结束推荐墙 / 信息卡 / 播放器相关浮层；all 再关掉自动播放下一首。
+    const playerCleanup = asLevel(options.playerCleanup, "standard");
+    options.playerCleanup = playerCleanup;
+    options.blockEndscreen = "off" !== playerCleanup;
+    options.blockInfoCards = "off" !== playerCleanup;
+    options.blockAutoplay = "all" === playerCleanup;
+
+    // 信息流清理：去「继续观看」卡片与顶部筛选条；all 再去掉直播 / 首映卡片。
+    const feedCleanup = asLevel(options.feedCleanup, "standard");
+    options.feedCleanup = feedCleanup;
+    options.blockContinueWatching = "off" !== feedCleanup;
+    options.blockChipCloud = "off" !== feedCleanup;
+    options.blockLiveCards = "all" === feedCleanup;
+
+    // 播放页清理：去掉评论区；all 再去掉相关视频列表。
+    const watchCleanup = asLevel(options.watchCleanup, "comments");
+    options.watchCleanup = watchCleanup;
+    options.blockComments = "off" !== watchCleanup;
+    options.blockRelatedVideos = "all" === watchCleanup;
+
+    // 字幕：keep 保持现状，off 去掉自动生成（ASR）字幕轨且不自动开启，force 强制开启。
+    const captionsMode = String(options.captionsMode ?? "keep").trim().toLowerCase();
+    options.captionsMode = ["keep", "off", "force"].includes(captionsMode) ? captionsMode : "keep";
+    options.stripAutoCaptions = "off" === options.captionsMode;
+    options.forceCaptions = "force" === options.captionsMode;
+    if (options.stripAutoCaptions) options.captionLang = "off";
+
+    // 编码偏好：any 不动，no_av1 去掉 AV1，avc 只留 H.264。
+    const codec = String(options.videoCodec ?? "any").trim().toLowerCase();
+    options.videoCodec = ["any", "no_av1", "avc"].includes(codec) ? codec : "any";
+
+    // 网页版 topbar 按钮与 YouTube Music 首页推荐。
+    options.webCleanup = asBool(options.webCleanup, false);
+    options.musicCleanup = asBool(options.musicCleanup, false);
 
     const result = { ...defaults, ...options };
     if (noDefaults) OPTIONS_CACHE = result;

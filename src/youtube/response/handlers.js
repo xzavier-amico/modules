@@ -29,6 +29,8 @@
         $done({});
         return;
       }
+      // 网页版 Music 的音频锁与 App 走不同结构，这里把「是不是 Music」带给下游。
+      options.musicWeb = isMusicRequest($request);
       if (!rewriteJsonRoute(route, data, options)) {
         $done({});
         return;
@@ -73,7 +75,8 @@
         return;
       }
 
-      if (false !== options.autoHd) {
+      // 画质上限或编码偏好任一开启都要刷新缓存：request 阶段按缓存 itag 改写。
+      if (false !== options.autoHd || "any" !== options.videoCodec) {
         const players = (function () {
           if ("Player" === typeName) return [node];
           if ("Watch" === typeName) return node.contents.map((item) => item.player).filter(Boolean);
