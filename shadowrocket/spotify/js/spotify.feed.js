@@ -1782,7 +1782,9 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
           for (const fn of callbacks) fn(record);
         }, headers);
       };
-      const ranked = rankSongsWithFallback(songs, title, artist, duration, (item) => item.name, artistOf, durationOf);
+      // 先按严格规则找；落空后先走歌手 alias 核对，alias 也对不上时再放宽。
+      // 不能在 alias 之前就放宽歌手：同名的别的歌手版本会抢先命中，alias 白查。
+      const ranked = rankSongs(songs, title, artist, duration, (item) => item.name, artistOf, durationOf);
       if (ranked.length) {
         tryCandidates(ranked, fetchLyric, cb);
         return;
@@ -1824,7 +1826,9 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
             }
             left -= 1;
             if (!left) {
-              tryCandidates(rankSongsWithFallback(songs, title, artist, duration, (item) => item.name, artistOf, durationOf), fetchLyric, cb);
+              // 已经查过歌手 ID / alias 仍对不上，说明是另一位歌手的同名版本，
+              // 不再用「同名 + 时长」放宽，避免贴错歌词。
+              tryCandidates(rankSongs(songs, title, artist, duration, (item) => item.name, artistOf, durationOf), fetchLyric, cb);
             }
           }, headers);
         }
@@ -2166,15 +2170,18 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     if (stage && otherStage && stage[1] !== otherStage[1]) return false;
     const wantedDuration = durationSeconds(duration);
     const candidateSeconds = durationSeconds(candidateDuration);
-    if (Number.isFinite(wantedDuration) && wantedDuration > 0 &&
-        Number.isFinite(candidateSeconds) && candidateSeconds > 0) {
+    const timed = Number.isFinite(wantedDuration) && wantedDuration > 0 &&
+      Number.isFinite(candidateSeconds) && candidateSeconds > 0;
+    const singer = normalize(artist);
+    // 场次对不上又缺时长 / 歌手时无法确认是不是同一场，这里仍按严格轮拦。
+    if (stage && !otherStage && (!timed || !singer)) return false;
+    if (timed) {
       // 同名不同版的时长差通常远大于 10 秒；两边都有时长时用它挡掉翻唱 / 剪辑版。
       if (Math.abs(candidateSeconds - wantedDuration) > 12) return false;
       return true;
     }
     // 没有时长可对时只认「毫无歧义」的情况：名字完全一致，且歌手也对得上或
     // 曲库里根本没写歌手。宁可少补一首，也不要把别的歌的歌词贴上去。
-    const singer = normalize(artist);
     return !singer || !candidateArtist || matchesArtist(artist, candidateArtist);
   }
 

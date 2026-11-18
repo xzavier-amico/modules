@@ -146,7 +146,12 @@ function lyricsStore(id, source = "auto") {
 }
 for (const platform of ["loon", "egern", "shadowrocket"]) {
   const feed = platform + "/spotify/js/spotify.feed.js";
-  const originalList = serialize([b(1, serialize([s(2, "normal-card")])), v(99, 9007199254740999n)]);
+  // 真实滚动页的 section 带 section id（字段 23）；补卡前的形状校验依赖它。
+  const normalSection = serialize([
+    b(1, serialize([s(2, "normal-card")])),
+    b(23, serialize([s(1, "spotify:section:normal")])),
+  ]);
+  const originalList = serialize([b(1, normalSection), v(99, 9007199254740999n)]);
   const body = serialize([b(1, originalList), v(8, 123n)]);
   check(platform + " scroll: drops sponsored sections and adds the lyrics section once", () => {
     const lyrics = serialize([b(5, serialize([s(1, track)])), b(23, serialize([s(1, "spotify:section:donor")]))]);
@@ -361,6 +366,23 @@ check("Egern lyrics script declares body_required", () => {
   const response = entries.find((entry) => /^http_response:/.test(entry) && entry.includes("spotify_lyrics.js"));
   assert.ok(response, "lyrics response entry must exist");
   assert.ok(/body_required:\s*true/.test(response), "lyrics response entry must set body_required");
+});
+
+check("Shadowrocket lyrics response enables body rewriting over h2 MITM", () => {
+  // 不开 requires-body 时 Shadowrocket 不把响应 body 交给脚本，也不接受脚本返回的 body；
+  // spclient 走 HTTP/2，MITM 不开 h2 时同样拿不到 body。
+  const sr = read("shadowrocket/spotify/spotify-enhance.sgmodule");
+  const response = sr.split("\n").find((line) => line.startsWith("spotify.lyrics ="));
+  assert.ok(response, "lyrics response entry must exist");
+  assert.match(response, /requires-body=1/);
+  assert.match(sr, /\[MITM\][\s\S]*?^h2 = true$/m);
+});
+
+check("Shadowrocket Spotify module rejects desktop ad endpoints", () => {
+  const sr = read("shadowrocket/spotify/spotify-enhance.sgmodule");
+  const rewrite = sr.split("\n").filter((line) => line.startsWith("^https:"));
+  assert.ok(rewrite.some((line) => line.includes("\\/ads\\/") && line.endsWith("- reject")), "ads path");
+  assert.ok(rewrite.some((line) => line.includes("\\/premium-marketing\\/") && line.endsWith("- reject")), "premium marketing path");
 });
 
 check("Spotify modules drop if-none-match for track metadata too", () => {
@@ -807,7 +829,9 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     const missHttp = {
       get: (request, callback) => {
         missCalls += 1;
-        callback(null, { status: 200 }, JSON.stringify({}));
+        callback(null, { status: 200 }, JSON.stringify(
+          request.url.includes("oembed") ? { title: "Song", author_name: "Artist" } : {},
+        ));
       },
     };
     const miss = run(file, "", missUrl, ["lrclib", true], {
@@ -870,7 +894,10 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
   check(platform + " Spotify feed adds the lyrics card without waiting", () => {
     const file = platform + "/spotify/js/spotify.feed.js";
     const id = "0VjIjW4GlUZAMYd2vXMi3b";
-    const body = serialize([b(1, serialize([b(1, serialize([s(2, "normal-card")]))]))]);
+    const body = serialize([b(1, serialize([b(1, serialize([
+      b(1, serialize([s(2, "normal-card")])),
+      b(23, serialize([s(1, "spotify:section:normal")])),
+    ]))]))]);
     const args = { block_ads: false, enable_lyrics: true, lyrics_source: "lrclib" };
     const meta = { "spotify.track.meta.v2": JSON.stringify({ [id]: ["Song", "Artist", 210000, Date.now()] }) };
     const storeFor = (extra = {}) => {
@@ -1786,7 +1813,7 @@ check("Spotify auto can finish with QQ when NetEase has no match", () => {
   assert.equal(JSON.parse(out.body).lyrics.provider, "QQ Music");
 });
 
-check("Spotify auto queries the three sources concurrently, skips Musixmatch and uses the cover colour", () => {
+check("Spotify auto queries the three sources concurrently and starts the Musixmatch fallback", () => {
   const requests = [];
   const pending = new Map();
   let done;
@@ -1808,14 +1835,14 @@ check("Spotify auto queries the three sources concurrently, skips Musixmatch and
   vm.runInContext(read("loon/spotify/js/spotify_lyrics.js"), context);
   assert.equal(done, undefined);
   const providers = requests.filter((url) => !url.includes("oembed") && !url.includes("/embed/"));
-  assert.equal(providers.length, 5, "LRCLIB get / search / 歌名兜底 and the other two sources are all requested up front");
+  assert.equal(providers.length, 6, "LRCLIB get / search / 歌名兜底, the other two sources and the Musixmatch token are all requested up front");
   assert.ok(providers.some((url) => url.includes("lrclib.net/api/get")));
   assert.ok(providers.some((url) => url.includes("lrclib.net/api/search")));
   assert.ok(providers.some((url) => url.endsWith("lrclib.net/api/search?track_name=Song")), "name-only search is in the first batch");
   assert.ok(providers.some((url) => url.includes("music.163.com/api/search")));
   assert.ok(providers.some((url) => url.includes("search_for_qq_cp")));
   assert.ok(!providers.some((url) => url.includes("client_search_cp")), "the legacy QQ search endpoint is unreliable");
-  assert.ok(!requests.some((url) => url.includes("musixmatch")), "auto must skip Spotify's own upstream");
+  assert.ok(providers.some((url) => url.includes("apic.musixmatch.com/ws/1.1/token.get")), "Musixmatch is the last-resort fallback");
 
   const reply = (part) => [...pending.entries()].find(([url]) => url.includes(part));
   const [, netease] = reply("music.163.com/api/search");
@@ -1980,22 +2007,26 @@ check("Spotify NetEase requests candidate lyrics in parallel", () => {
 });
 
 for (const platform of ["loon", "egern", "shadowrocket"]) {
-  check(platform + " Spotify Live validates artist, performance and duration before fetching lyrics", () => {
+  check(platform + " Spotify Live validates version, stage and duration before fetching lyrics", () => {
     for (const sample of [
       { title: "落叶归根-四公live", candidate: "落叶归根 (Live版)", accept: true },
       { title: "落葉歸根 - 四公 live", candidate: "落叶归根 (Live版)", accept: true },
       { title: "落叶归根（四公 LIVE）", candidate: "落叶归根 (Live版)", accept: true },
       { title: "落叶归根 - 四公现场", candidate: "落叶归根 (Live版)", accept: true },
       { title: "落叶归根 - 四公 live", candidate: "落叶归根", accept: false },
-      { title: "落叶归根 - 四公 live", candidate: "落叶归根 (Live)", artist: "王力宏", accept: false },
-      { title: "落叶归根 - 四公 live", candidate: "落叶归根 (Live)", artist: "蔡国庆合唱团", accept: false },
+      // 放宽轮：同名 + 时长一致时不再要求歌手写法一致，救回挂名不同的现场版。
+      { title: "落叶归根 - 四公 live", candidate: "落叶归根 (Live)", artist: "王力宏", accept: true },
+      // 同名但时长差太大仍是别的版本。
+      { title: "落叶归根 - 四公 live", candidate: "落叶归根 (Live)", artist: "蔡国庆合唱团", seconds: 370, accept: false },
       { title: "落叶归根 - 四公 live", candidate: "落叶归根 (三公 live)", accept: false },
       { title: "落叶归根 - 四公 live", candidate: "落叶归根 (Live)", seconds: 328, accept: false },
       { title: "落叶归根 - 四公 live", candidate: "落叶归根 (Live)", seconds: 0, accept: false },
       { title: "落叶归根 - 四公 live", candidate: "落叶归根 (Live)", noMetadata: true, accept: false },
+      // 无时长、无场次可核对时，同名现场版必须歌手也对得上。
+      { title: "落叶归根 - 四公 live", candidate: "落叶归根 (Live)", artist: "王力宏", noMetadata: true, accept: false },
     ]) {
       const fetched = [];
-      const out = run(platform + "/spotify/js/spotify_lyrics.js", "", "https://spclient.wg.spotify.com/color-lyrics/v2/track/id", ["netease", true], {
+      const out = run(platform + "/spotify/js/spotify_lyrics.js", "", "https://spclient.wg.spotify.com/color-lyrics/v2/track/id", ["netease", true, "auto", "hans", true, true, false], {
         $response: { status: 404 },
         $httpClient: { get: (request, callback) => {
           let data;
@@ -2007,7 +2038,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
           } else if (request.url.includes("/search/get")) data = { result: { songs: [
             { id: 1, name: "其他歌名", artists: [{ name: "蔡国庆" }], duration: 349546 },
             { id: 2, name: "落叶归根", artists: [{ name: "王力宏" }], duration: 315000 },
-            { id: 3, name: "落叶归根 (Live)", artists: [{ name: "王力宏" }], duration: 349546 },
+            { id: 3, name: "落叶归根 (Live)", artists: [{ name: "王力宏" }], duration: 200000 },
             { id: 2090356012, name: sample.candidate, artists: [{ name: sample.artist || "蔡国庆" }, { name: "陈楚生" }], duration: (sample.seconds === undefined ? 349.546 : sample.seconds) * 1000 },
           ] } };
           else {
@@ -2036,7 +2067,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
       {},
     ]) {
       const fetched = [];
-      const out = run(platform + "/spotify/js/spotify_lyrics.js", "", "https://spclient.wg.spotify.com/color-lyrics/v2/track/id?format=json", ["auto", true], {
+      const out = run(platform + "/spotify/js/spotify_lyrics.js", "", "https://spclient.wg.spotify.com/color-lyrics/v2/track/id?format=json", ["auto", true, "auto", "hans", true, true, false], {
         $response: { status: 404 },
         $httpClient: { get: (request, callback) => {
           let data;
@@ -2049,6 +2080,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
             { songmid: "wrong", songname: "Song", singer: [{ name: "Other Artist" }] },
             { songmid: "right", songname: "Song", singer: [{ name: "Artist" }] },
           ] } } };
+          else if (request.url.includes("apic.musixmatch.com")) data = {};
           else {
             fetched.push(request.url);
             data = { lyric: "[00:01.00]Correct QQ result" };
@@ -2089,7 +2121,7 @@ check("Spotify auto keeps plain lyrics at deadline while looking for synchronize
 
 check("Spotify auto leaves unmatched Live lyrics empty instead of using a studio fallback", () => {
   const requests = [];
-  const out = run("loon/spotify/js/spotify_lyrics.js", "", "https://spclient.wg.spotify.com/color-lyrics/v2/track/id", ["auto", true], {
+  const out = run("loon/spotify/js/spotify_lyrics.js", "", "https://spclient.wg.spotify.com/color-lyrics/v2/track/id", ["auto", true, "auto", "hans", true, true, false], {
     $response: { status: 404 },
     $httpClient: { get: (request, callback) => {
       requests.push(request.url);
@@ -2174,7 +2206,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.equal(JSON.parse(out.body).lyrics.lines[0].words, "秋", platform);
   });
 
-  check(platform + " Spotify auto skips Musixmatch and retains correct plain lyrics", () => {
+  check(platform + " Spotify auto falls back to Musixmatch but keeps correct plain lyrics", () => {
     let checkedSubtitle = false;
     const out = run(platform + "/spotify/js/spotify_lyrics.js", "", "https://spclient.wg.spotify.com/color-lyrics/v2/track/id?format=json", ["auto", true], {
       $response: { status: 404 },
@@ -2194,7 +2226,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
         callback(null, { status: 200 }, JSON.stringify(data));
       } },
     });
-    assert.equal(checkedSubtitle, false, "auto must not query Spotify's own lyrics upstream");
+    assert.equal(checkedSubtitle, true, "auto must try Musixmatch as the last fallback");
     const lyrics = JSON.parse(out.body).lyrics;
     assert.equal(lyrics.provider, "LRCLIB");
     assert.equal(lyrics.syncType, "UNSYNCED");
@@ -2210,7 +2242,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
       { wanted: "Example Artist", translated: "示例歌手", alias: "Another Artist", id: 6498, accept: false },
     ]) {
       const fetched = [];
-      const out = run(platform + "/spotify/js/spotify_lyrics.js", "", "https://spclient.wg.spotify.com/color-lyrics/v2/track/id?format=json", ["netease", true], {
+      const out = run(platform + "/spotify/js/spotify_lyrics.js", "", "https://spclient.wg.spotify.com/color-lyrics/v2/track/id?format=json", ["netease", true, "auto", "hans", true, true, false], {
         $response: { status: 404 },
         $httpClient: { get: (request, callback) => {
           let data;
@@ -2332,22 +2364,25 @@ check("Loon passes arguments in the declared order", () => {
     const names = [...tuple.matchAll(/\$\{(\w+)\}/g)].map((match) => match[1]);
     for (const name of names) assert.ok(new RegExp("^" + name + " = ", "m").test(plugin));
     if (line.includes("spotify_lyrics.js")) {
-      assert.deepEqual(names, ["lyrics_source", "enable_lyrics", "desktop", "lyrics_script", "ignore_han_variants"]);
+      assert.deepEqual(names, ["lyrics_source", "enable_lyrics", "desktop", "lyrics_script", "ignore_han_variants", "sync_plain_lyrics", "lyrics_isrc"]);
     } else {
-      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source"]);
+      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source", "prefetch_lyrics", "sync_plain_lyrics", "lyrics_isrc"]);
     }
   }
-  // 位置参数：spoof, ads, unlock, lyrics, desktop, source。
+  // 位置参数：spoof, ads, unlock, lyrics, desktop, source, prefetch, plain, isrc。
   const context = serialize([s(1, track), s(2, "uid"), b(3, serialize([s(1, "has_lyrics"), s(2, "false")]))]);
-  const cards = serialize([b(1, serialize([b(1, serialize([s(2, "ordinary-card")]))]))]);
+  const cards = serialize([b(1, serialize([b(1, serialize([
+    b(1, serialize([s(2, "ordinary-card")])),
+    b(23, serialize([s(1, "spotify:section:ordinary")])),
+  ]))]))]);
   const lyricsUrl = "https://spclient.wg.spotify.com/color-lyrics/v2/track/id?format=json";
-  const args = [true, false, true, true, "ios", "lrclib"];
+  const args = [true, false, true, true, "ios", "lrclib", false, true, false];
   assert.ok(run("loon/spotify/js/spotify.js", context, "https://spclient.wg.spotify.com/connect-state/v1/player", args).body);
   assert.ok(run("loon/spotify/js/spotify.feed.js", cards, scroll, args, {
     $persistentStore: lyricsStore("0VjIjW4GlUZAMYd2vXMi3b"),
   }).body);
   let requests = 0;
-  const response = run("loon/spotify/js/spotify_lyrics.js", "", lyricsUrl, ["lrclib", true, "ios", "hans", true], {
+  const response = run("loon/spotify/js/spotify_lyrics.js", "", lyricsUrl, ["lrclib", true, "ios", "hans", true, true, false], {
     $response: { status: 404, body: "" },
     $httpClient: { get: (request, callback) => {
       requests++;
