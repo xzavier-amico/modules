@@ -681,10 +681,10 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return {};
   })();
 
-// Spotify Lyrics — 官方没有歌词时，用第三方歌词补上。
+// Spotify Lyrics — 官方歌词转简体；官方没有歌词时，用第三方歌词补上。
 //
 // 只处理 color-lyrics/v{N}/track/{id} 的响应：
-//   200 且歌词非空  -> 清掉额度限制后原样放行（官方歌词质量更好）
+//   200 且歌词非空  -> 按 lyrics_script 转简体（默认），清掉额度限制后放行
 //   404 / 空歌词    -> 取曲目元数据，按配置的歌词源查找，合成同结构响应
 //
 // spotify.js 补曲目 has_lyrics；feed 脚本在 scrollsita 缺少歌词 section 时补一格。
@@ -774,8 +774,9 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // 匹配用的繁→简折叠：Spotify 的中文曲名 / 歌手常是繁体，网易云 / QQ 曲库是
   // 简体；不折叠时「說謊」对不上「说谎」，「周杰倫」对不上「周杰伦」。
   const foldHanVariants = flag(opt.ignore_han_variants, true);
-  // 补全歌词的显示字形：hans（默认）转简体，source 保持歌词源原文。
-  // 只在整段判定为繁体时转换，简体 / 英文 / 日文歌词原样返回。
+  // 歌词显示字形：hans（默认）把官方与第三方歌词都转成简体，source 保持原文。
+  // 官方响应以 language 字段为准（zh-Hant / zh-TW 直接转，并同步改成 zh-Hans），
+  // 第三方歌词只在整段判定为繁体时转换；简体 / 英文 / 日文歌词原样返回。
   // 纯文本伪同步：只有纯文本歌词时，按歌曲时长把行均分出时间轴，让它能跟着滚动。
   // 默认开：反正拿不到同步歌词，能滚动比只能整屏文字有用；关掉则保持 UNSYNCED。
   const pseudoSync = flag(opt.sync_plain_lyrics, true);
@@ -1000,6 +1001,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     const valid = (value) => !!value && "object" == typeof value && !value.m &&
       Date.now() - Number(value.t || 0) < LYRICS_CACHE_HIT_TTL &&
       // 缓存存的是已经转换过的歌词；字形设置换过就不复用，避免显示成另一种字形。
+      // feed 预取没有携带词表，可能留下未转换的条目，命中时在下面再判一次。
       (HELPER || (Number(value.z) || 0) === (hansLyrics ? 1 : 0));
     let entry = map && map[key];
     // 配置换过歌词源（auto ↔ lrclib）时旧缓存 key 会不同；按曲目 id 再找一次，
@@ -1026,6 +1028,13 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       syllables: [],
       endTimeMs: "0",
     }));
+    // 预取由 feed 脚本完成，它没有携带 t2s 词表；旧版本写下的缓存也可能没转。
+    // 命中时再判一次，繁体就折叠，已经简体的缓存不受影响。
+    if (!HELPER && hansLyrics && typeof SPOTIFY_HAN_VARIANTS !== "undefined") {
+      if (SPOTIFY_HAN_VARIANTS.isTraditional(jsonSample(rebuilt).text)) {
+        for (let i = 0; i < rebuilt.length; i += 1) rebuilt[i].words = SPOTIFY_HAN_VARIANTS.fold(rebuilt[i].words);
+      }
+    }
     return {
       payload: {
         lyrics: {
@@ -1343,7 +1352,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       if (count !== 0) {
         // 免费号的歌词有每月额度，用完服务端会在 restriction（字段 14）里回
         // monthlyLimitReached，客户端就只显示「额度已用完」。归一成 showLyrics 再放行。
-        const cleaned = count > 0 ? normalizeRestrictionProto(inspected) : null;
+        const cleaned = count > 0 ? rewriteOfficialProto(inspected) : null;
         if (cleaned) {
           finish({ status: 200, headers: { "Content-Type": "application/x-protobuf" }, body: cleaned });
         } else {
@@ -1353,7 +1362,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         return;
       }
     } else if (hasLyrics(trimmed)) {
-      const cleaned = stripRestrictionJson(trimmed);
+      const cleaned = rewriteOfficialJson(trimmed);
       if (cleaned) {
         finish(jsonResponse(cleaned));
       } else {
@@ -2447,46 +2456,246 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return null;
   }
 
-  // 把 LyricsData.restriction（字段 14）统一成 1 = showLyrics。
-  // 免费号额度用完时服务端回 3，客户端只显示额度提示；这里改回 1 后正常放行。
-  function normalizeRestrictionProto(inspected) {
-    const top = inspected.top;
-    let changed = false;
-    const outTop = [];
-    for (let i = 0; i < top.length; i += 1) {
-      const f = top[i];
-      if (f !== inspected.lyrics) {
-        outTop.push(pbEncodeField(f));
-        continue;
-      }
-      const inner = inspected.inner;
-      const outInner = [];
-      for (let j = 0; j < inner.length; j += 1) {
-        const g = inner[j];
-        if (g.field === 14 && g.wire === 0) {
-          if (g.value !== 1) {
-            changed = true;
-          }
-          outInner.push(pbUint(14, 1));
-          continue;
-        }
-        outInner.push(pbEncodeField(g));
-      }
-      outTop.push(pbBytes(1, pbConcat(outInner)));
-    }
-    return changed ? pbConcat(outTop) : null;
+  // 官方歌词的语言标记决定要不要转简体：zh-Hant / zh-TW / zh-HK 直接转；
+  // zh-Hans / zh-CN 默认不动，但正文出现繁体特征字时仍会补一次转换；
+  // "zh" 或缺失时完全按正文判断。
+  function hanLanguage(value) {
+    const lang = String(value || "").trim().toLowerCase();
+    if (!lang) return "unknown";
+    if (!/^zh(?:$|[-_])/.test(lang)) return "other";
+    if (/hant|[-_](?:tw|hk|mo)(?:$|[-_])/.test(lang)) return "hant";
+    if (/hans|[-_](?:cn|sg)(?:$|[-_])/.test(lang)) return "hans";
+    return "zh";
   }
 
-  function stripRestrictionJson(text) {
+  // 语言标记明确是繁体时直接转；zh / 缺失 / 误标成 zh-Hans 时再看正文，
+  // 只有确实出现繁体特征字才转，简体文本不会被逐字改写。
+  function shouldFoldHan(kind, sample) {
+    if (kind === "hant") return true;
+    if (kind === "other") return false;
+    return CJK_MARK.test(sample) && SPOTIFY_HAN_VARIANTS.isTraditional(sample);
+  }
+
+  function protoLineText(field) {
     try {
-      const data = JSON.parse(text);
-      const lyrics = data && data.lyrics;
-      if (!lyrics || !Object.prototype.hasOwnProperty.call(lyrics, "restriction")) return null;
-      delete lyrics.restriction;
-      return JSON.stringify(data);
+      const line = pbFields(field.bytes);
+      for (let i = 0; i < line.length; i += 1) {
+        if (line[i].field === 2 && line[i].wire === 2) return toText(line[i].bytes);
+      }
+    } catch (e) {
+      // 单行解析失败时按没有正文处理，整条响应仍然可以放行。
+    }
+    return "";
+  }
+
+  // 采样时优先收集含汉字的行：前奏 / 英文段很长时，前 40 行可能全是英文，
+  // 只看开头会把后面真正的中文歌词漏掉。
+  function protoSample(inner) {
+    const sample = [];
+    const fallback = [];
+    let hasHan = false;
+    for (let i = 0; i < inner.length; i += 1) {
+      const field = inner[i];
+      if (!((field.field === 2 || field.field === 17) && field.wire === 2)) continue;
+      const text = protoLineText(field);
+      if (!text) continue;
+      if (CJK_MARK.test(text)) {
+        hasHan = true;
+        if (sample.length < 40) sample.push(text);
+        if (sample.length >= 40) break;
+      } else if (fallback.length < 40) {
+        fallback.push(text);
+      }
+    }
+    return { text: (sample.length ? sample : fallback).join(""), hasHan: hasHan };
+  }
+
+  // 只改 LyricsLine.content（字段 2），offsetMs 和未知字段按原字节保留。
+  // 官方歌词里有只带时间戳、没有正文的空行，这种行原样写回。
+  function foldProtoLine(field) {
+    let line;
+    try {
+      line = pbFields(field.bytes);
     } catch (e) {
       return null;
     }
+    let changed = false;
+    const out = [];
+    for (let i = 0; i < line.length; i += 1) {
+      const part = line[i];
+      if (part.field === 2 && part.wire === 2) {
+        const text = toText(part.bytes);
+        const folded = SPOTIFY_HAN_VARIANTS.fold(text);
+        if (folded !== text) {
+          // toText 是非 fatal 解码；非法 UTF-8 重编码后会变样，这种行不碰。
+          const original = encoder.encode(text);
+          let valid = original.length === part.bytes.length;
+          for (let j = 0; valid && j < original.length; j += 1) {
+            if (original[j] !== part.bytes[j]) valid = false;
+          }
+          if (valid) {
+            out.push(pbBytes(2, encoder.encode(folded)));
+            changed = true;
+            continue;
+          }
+        }
+      }
+      out.push(pbEncodeField(part));
+    }
+    return changed ? pbConcat(out) : null;
+  }
+
+  // 官方 protobuf 的改写：歌词转简体 + restriction 归一。
+  // 顶层 Response 与 LyricsData 的其它字段都按原字节写回，避免客户端解析异常。
+  function rewriteOfficialProto(inspected) {
+    if (!inspected) return null;
+    const inner = inspected.inner;
+    let language = "";
+    for (let i = 0; i < inner.length; i += 1) {
+      if (inner[i].field === 10 && inner[i].wire === 2) {
+        language = toText(inner[i].bytes);
+        break;
+      }
+    }
+    const kind = hanLanguage(language);
+    const sample = protoSample(inner);
+    const fold = hansLyrics && typeof SPOTIFY_HAN_VARIANTS !== "undefined" && shouldFoldHan(kind, sample.text);
+    const nextLanguage = fold && sample.hasHan && (kind === "hant" || kind === "zh") ? "zh-Hans" : "";
+
+    let changed = false;
+    const outInner = [];
+    for (let i = 0; i < inner.length; i += 1) {
+      const field = inner[i];
+      if (fold && (field.field === 2 || field.field === 17) && field.wire === 2) {
+        const folded = foldProtoLine(field);
+        if (folded) {
+          outInner.push(pbBytes(field.field, folded));
+          changed = true;
+          continue;
+        }
+      }
+      if (nextLanguage && field.field === 10 && field.wire === 2) {
+        outInner.push(pbBytes(10, encoder.encode(nextLanguage)));
+        changed = true;
+        continue;
+      }
+      // 免费号额度用完时服务端回 3，客户端只显示额度提示；改回 1 后正常放行。
+      if (field.field === 14 && field.wire === 0) {
+        if (field.value !== 1) changed = true;
+        outInner.push(pbUint(14, 1));
+        continue;
+      }
+      outInner.push(pbEncodeField(field));
+    }
+    if (!changed) return null;
+
+    const outTop = [];
+    for (let i = 0; i < inspected.top.length; i += 1) {
+      const field = inspected.top[i];
+      outTop.push(field === inspected.lyrics ? pbBytes(1, pbConcat(outInner)) : pbEncodeField(field));
+    }
+    return pbConcat(outTop);
+  }
+
+  function jsonSample(lines) {
+    const sample = [];
+    const fallback = [];
+    let hasHan = false;
+    if (!Array.isArray(lines)) return { text: "", hasHan: false };
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      if (!line || typeof line.words !== "string" || !line.words) continue;
+      if (CJK_MARK.test(line.words)) {
+        hasHan = true;
+        if (sample.length < 40) sample.push(line.words);
+        if (sample.length >= 40) break;
+      } else if (fallback.length < 40) {
+        fallback.push(line.words);
+      }
+    }
+    return { text: (sample.length ? sample : fallback).join(""), hasHan: hasHan };
+  }
+
+  // 桌面端 JSON：lines 与 previewLines 都要转，逐字同步的 syllables 也跟着转，
+  // 否则整行是简体、逐字高亮又跳回繁体。
+  function foldJsonLine(line) {
+    if (!line || "object" != typeof line) return false;
+    let changed = false;
+    if (typeof line.words === "string") {
+      const folded = SPOTIFY_HAN_VARIANTS.fold(line.words);
+      if (folded !== line.words) {
+        line.words = folded;
+        changed = true;
+      }
+    }
+    if (Array.isArray(line.syllables)) {
+      for (let i = 0; i < line.syllables.length; i += 1) {
+        const syllable = line.syllables[i];
+        if (!syllable || typeof syllable.words !== "string") continue;
+        const folded = SPOTIFY_HAN_VARIANTS.fold(syllable.words);
+        if (folded !== syllable.words) {
+          syllable.words = folded;
+          changed = true;
+        }
+      }
+    }
+    return changed;
+  }
+
+  function foldJsonLines(lines) {
+    if (!Array.isArray(lines)) return false;
+    let changed = false;
+    for (let i = 0; i < lines.length; i += 1) {
+      if (foldJsonLine(lines[i])) changed = true;
+    }
+    return changed;
+  }
+
+  // 官方 JSON 的改写：删掉额度限制，并按语言标记把正文转成简体。
+  // 返回 null 表示不需要改，调用方原样放行。
+  function rewriteOfficialJson(text) {
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      return null;
+    }
+    const lyrics = data && data.lyrics;
+    if (!lyrics || "object" != typeof lyrics) return null;
+
+    let changed = false;
+    if (Object.prototype.hasOwnProperty.call(lyrics, "restriction")) {
+      delete lyrics.restriction;
+      changed = true;
+    }
+    if (hansLyrics && typeof SPOTIFY_HAN_VARIANTS !== "undefined") {
+      const kind = hanLanguage(lyrics.language);
+      const sample = jsonSample(lyrics.lines);
+      const fold = shouldFoldHan(kind, sample.text);
+      if (fold) {
+        if (foldJsonLines(lyrics.lines)) changed = true;
+        if (foldJsonLines(lyrics.previewLines)) changed = true;
+        // alternatives 是另一份译文；只有它自己的语言也是繁体时才一起转。
+        const alternatives = Array.isArray(lyrics.alternatives) ? lyrics.alternatives : [];
+        for (let i = 0; i < alternatives.length; i += 1) {
+          const alt = alternatives[i];
+          if (!alt || "object" != typeof alt) continue;
+          const altKind = hanLanguage(alt.language);
+          const altSample = jsonSample(alt.lines);
+          if (!shouldFoldHan(altKind, altSample.text)) continue;
+          if (foldJsonLines(alt.lines)) changed = true;
+          if (altSample.hasHan && (altKind === "hant" || altKind === "zh")) {
+            alt.language = "zh-Hans";
+            changed = true;
+          }
+        }
+        if (sample.hasHan && (kind === "hant" || kind === "zh")) {
+          lyrics.language = "zh-Hans";
+          changed = true;
+        }
+      }
+    }
+    return changed ? JSON.stringify(data) : null;
   }
 
   function pbEncodeField(f) {

@@ -444,6 +444,29 @@ check("Spotify request phase passes through when the cache is empty", () => {
   }
 });
 
+check("Spotify cache hits fold traditional prefetch entries", () => {
+  // feed 预取没有携带 t2s 词表，写下的缓存可能还是繁体；歌词脚本命中时要补一次。
+  const id = "tradcache";
+  const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json";
+  const map = {
+    "spotify.lyrics.cache.v2": JSON.stringify({
+      ["auto|hans|" + id]: {
+        t: Date.now(), m: 0, z: 1, s: "LINE_SYNCED", p: "LRCLIB", i: "", l: "zh",
+        c: [-16777216, -1, -1], a: [[0, "我們的愛"], [2000, "說謊"]],
+      },
+    }),
+  };
+  const out = run("loon/spotify/js/spotify_lyrics.js", "", url, ["auto", true], {
+    $response: undefined,
+    $persistentStore: { read: (key) => (key in map ? map[key] : null), write: () => true },
+    $httpClient: { get: () => assert.fail("cache hit must not query providers") },
+  });
+  const payload = JSON.parse(out.response.body);
+  assert.equal(payload.lyrics.lines[0].words, "我们的爱");
+  assert.equal(payload.lyrics.lines[1].words, "说谎");
+  assert.equal(payload.lyrics.previewLines[0].words, "我们的爱");
+});
+
 check("Spotify lyrics leave the desktop CORS preflight untouched", () => {
   // 桌面端（macOS / Windows 新版播放器跑在 CEF 里）先发 OPTIONS 预检再发 GET。
   // 预检响应没有 body，脚本如果当成「官方没歌词」回一份歌词 JSON，CORS 头就被
@@ -631,6 +654,111 @@ check("Spotify official protobuf preserves opaque 64-bit and fixed-width fields"
   assert.deepEqual(first(top, 7).p, unknown);
   assert.deepEqual(first(top, 1).p.subarray(first(top, 1).p.length - unknown.length), unknown);
   assert.equal(Object.keys(run("loon/spotify/js/spotify_lyrics.js", new Uint8Array([10, 127]), "https://spclient.wg.spotify.com/color-lyrics/v2/track/id")).length, 0);
+});
+
+check("Spotify official protobuf lyrics fold to simplified by language", () => {
+  const line = (ms, words) => serialize(words === undefined ? [v(1, ms)] : [v(1, ms), s(2, words)]);
+  const colors = serialize([v(1, 0xff808080), v(2, 0xff000000), v(3, 0xffffffff)]);
+  const unknown = concat(serialize([v(90, 18446744073709551615n)]), new Uint8Array([0xed, 5, 1, 2, 3, 4]));
+  const data = concat(serialize([
+    v(1, 1),
+    b(2, line(1000, "我們的愛")),
+    b(2, line(1500)), // 官方歌词里只带时间戳的空行
+    b(2, line(2000, "說謊")),
+    s(3, "MusixMatch"),
+    s(4, "123"),
+    s(5, "Musixmatch"),
+    v(8, 1),
+    s(10, "zh-Hant"),
+    v(14, 3),
+    b(17, line(1000, "我們的愛")),
+  ]), unknown);
+  const body = serialize([b(1, data), b(2, colors), b(9, new Uint8Array([1, 2, 3]))]);
+  const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/id";
+
+  const out = run("loon/spotify/js/spotify_lyrics.js", body, url, ["auto", true]);
+  assert.ok(out.body, "official lyrics must be rewritten");
+  const top = parse(out.body);
+  const inner = parse(first(top, 1).p);
+  const lines = Array.from(inner.filter((f) => f.no === 2), (f) => text(first(parse(f.p), 2)) || "");
+  assert.deepEqual(lines, ["我们的爱", "", "说谎"]);
+  assert.equal(text(first(inner, 10)), "zh-Hans", "language must follow the simplified glyphs");
+  assert.equal(first(inner, 14).v, 1n, "restriction must be normalized");
+  assert.equal(text(first(parse(inner.find((f) => f.no === 17).p), 2)), "我们的爱", "preview lines must fold too");
+  assert.deepEqual(first(top, 2).p, colors, "colors must survive");
+  assert.deepEqual(first(top, 9).p, new Uint8Array([1, 2, 3]), "unknown top-level fields must survive");
+  assert.equal(first(inner, 90).v, 18446744073709551615n, "opaque 64-bit fields must survive");
+
+  // lyrics_script=source 保持官方原文，但仍要清额度限制。
+  const raw = run("loon/spotify/js/spotify_lyrics.js", body, url, ["auto", true, "auto", "source"]);
+  const rawInner = parse(first(parse(raw.body), 1).p);
+  assert.equal(text(first(parse(rawInner.find((f) => f.no === 2).p), 2)), "我們的愛");
+  assert.equal(text(first(rawInner, 10)), "zh-Hant");
+  assert.equal(first(rawInner, 14).v, 1n);
+});
+
+check("Spotify official lyrics sample past long English intros", () => {
+  // 前 45 行全是英文时，不能因为采样只看开头就漏掉后面的中文歌词。
+  const lines = [];
+  for (let i = 0; i < 45; i += 1) lines.push(b(2, serialize([v(1, i * 1000), s(2, "English line " + i)])));
+  lines.push(b(2, serialize([v(1, 50000), s(2, "我們的愛")])));
+  const body = serialize([b(1, serialize([v(1, 1)].concat(lines).concat([s(10, "zh-Hant")])))]);
+  const out = run("loon/spotify/js/spotify_lyrics.js", body, "https://spclient.wg.spotify.com/color-lyrics/v2/track/id", ["auto", true]);
+  assert.ok(out.body, "late Chinese lines must still be folded");
+  const inner = parse(first(parse(out.body), 1).p);
+  const contents = inner.filter((f) => f.no === 2).map((f) => text(first(parse(f.p), 2)) || "");
+  assert.equal(contents[contents.length - 1], "我们的爱");
+  assert.equal(text(first(inner, 10)), "zh-Hans");
+});
+
+check("Spotify official JSON lyrics fold to simplified by language", () => {
+  const id = "officialjson";
+  const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json";
+  const body = JSON.stringify({
+    lyrics: {
+      syncType: "LINE_SYNCED",
+      lines: [
+        { startTimeMs: "1000", words: "我們的愛", syllables: [
+          { startTimeMs: "1000", endTimeMs: "1200", words: "我們" },
+          { startTimeMs: "1200", endTimeMs: "1500", words: "的愛" },
+        ], endTimeMs: "0" },
+        { startTimeMs: "2000", words: "說謊", syllables: [], endTimeMs: "0" },
+      ],
+      provider: "MusixMatch",
+      providerLyricsId: "1",
+      providerDisplayName: "Musixmatch",
+      syncLyricsUri: "",
+      isDenseTypeface: true,
+      alternatives: [{ language: "zh-Hant", lines: [{ startTimeMs: "0", words: "我們的愛", syllables: [] }] }],
+      language: "zh-Hant",
+      isRtlLanguage: false,
+      fullscreenAction: "FULLSCREEN_LYRICS",
+      previewLines: [{ startTimeMs: "1000", words: "我們的愛", syllables: [] }],
+      restriction: 3,
+    },
+    colors: { background: -1, text: -16777216, highlightText: -1 },
+    hasVocalRemoval: false,
+  });
+
+  const out = run("loon/spotify/js/spotify_lyrics.js", body, url, ["auto", true]);
+  assert.ok(out.body, "official JSON must be rewritten");
+  const payload = JSON.parse(out.body);
+  assert.equal(payload.lyrics.lines[0].words, "我们的爱");
+  assert.deepEqual(payload.lyrics.lines[0].syllables.map((item) => item.words), ["我们", "的爱"]);
+  assert.equal(payload.lyrics.lines[1].words, "说谎");
+  assert.equal(payload.lyrics.previewLines[0].words, "我们的爱");
+  assert.equal(payload.lyrics.alternatives[0].lines[0].words, "我们的爱");
+  assert.equal(payload.lyrics.alternatives[0].language, "zh-Hans");
+  assert.equal(payload.lyrics.language, "zh-Hans");
+  assert.equal(payload.lyrics.restriction, undefined);
+  assert.deepEqual(payload.colors, { background: -1, text: -16777216, highlightText: -1 });
+  assert.equal(payload.hasVocalRemoval, false);
+
+  // 非中文官方歌词不动：日文语言标记下即使有汉字也原样放行。
+  const japanese = JSON.stringify({
+    lyrics: { syncType: "LINE_SYNCED", lines: [{ startTimeMs: "0", words: "僕らの愛を", syllables: [] }], language: "ja" },
+  });
+  assert.equal(Object.keys(run("loon/spotify/js/spotify_lyrics.js", japanese, url, ["auto", true])).length, 0);
 });
 
 check("Spotify desktop JSON track metadata gets has_lyrics", () => {
