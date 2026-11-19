@@ -1796,9 +1796,14 @@
   function protoLineText(field) {
     try {
       const line = pbFields(field.bytes);
+      let out = "";
       for (let i = 0; i < line.length; i += 1) {
-        if (line[i].field === 2 && line[i].wire === 2) return toText(line[i].bytes);
+        const part = line[i];
+        if (part.wire !== 2) continue;
+        const text = toText(part.bytes);
+        if (CJK_MARK.test(text)) out += text;
       }
+      return out;
     } catch (e) {
       // 单行解析失败时按没有正文处理，整条响应仍然可以放行。
     }
@@ -1827,7 +1832,9 @@
     return { text: (sample.length ? sample : fallback).join(""), hasHan: hasHan };
   }
 
-  // 只改 LyricsLine.content（字段 2），offsetMs 和未知字段按原字节保留。
+  // 只改歌词行里的文本字段，offsetMs（wire 0）和未知字段按原字节保留。
+  // 官方行通常只有 content(2)，逐字歌词还会带 syllables 之类的子消息；
+  // 这里对所有 wire 2 文本字段做折叠，字段号变了也能覆盖。
   // 官方歌词里有只带时间戳、没有正文的空行，这种行原样写回。
   function foldProtoLine(field) {
     let line;
@@ -1840,20 +1847,22 @@
     const out = [];
     for (let i = 0; i < line.length; i += 1) {
       const part = line[i];
-      if (part.field === 2 && part.wire === 2) {
+      if (part.wire === 2) {
         const text = toText(part.bytes);
-        const folded = SPOTIFY_HAN_VARIANTS.fold(text);
-        if (folded !== text) {
-          // toText 是非 fatal 解码；非法 UTF-8 重编码后会变样，这种行不碰。
-          const original = encoder.encode(text);
-          let valid = original.length === part.bytes.length;
-          for (let j = 0; valid && j < original.length; j += 1) {
-            if (original[j] !== part.bytes[j]) valid = false;
-          }
-          if (valid) {
-            out.push(pbBytes(2, encoder.encode(folded)));
-            changed = true;
-            continue;
+        if (CJK_MARK.test(text)) {
+          const folded = SPOTIFY_HAN_VARIANTS.fold(text);
+          if (folded !== text) {
+            // toText 是非 fatal 解码；非法 UTF-8 重编码后会变样，这种行不碰。
+            const original = encoder.encode(text);
+            let valid = original.length === part.bytes.length;
+            for (let j = 0; valid && j < original.length; j += 1) {
+              if (original[j] !== part.bytes[j]) valid = false;
+            }
+            if (valid) {
+              out.push(pbBytes(part.field, encoder.encode(folded)));
+              changed = true;
+              continue;
+            }
           }
         }
       }
