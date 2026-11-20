@@ -20,10 +20,12 @@
 | Delivery Clean | [安装](https://egernapp.com/modules/new?name=Delivery%20Clean&url=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Fegern%2Fdelivery%2Fdelivery-clean.yaml) | [安装](https://www.nsloon.com/openloon/import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Floon%2Fdelivery%2Fdelivery-clean.plugin) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/delivery/delivery-clean.sgmodule) | 京东 / 美团 / 饿了么：拒绝广告域名，MITM 改写美团开屏、点餐广告板与京东促销楼层，保守过滤信息流广告 |
 | CN Video Clean | [安装](https://egernapp.com/modules/new?name=CN%20Video%20Clean&url=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Fegern%2Fcnvideo%2Fcnvideo-clean.yaml) | [安装](https://www.nsloon.com/openloon/import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Floon%2Fcnvideo%2Fcnvideo-clean.plugin) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/cnvideo/cnvideo-clean.sgmodule) | 优酷 / 爱奇艺 / 腾讯视频：拒绝广告、广告 SDK 与遥测域名；纯规则 |
 | AMap Clean | [安装](https://egernapp.com/modules/new?name=AMap%20Clean&url=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Fegern%2Famap%2Famap-clean.yaml) | [安装](https://www.nsloon.com/openloon/import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Floon%2Famap%2Famap-clean.plugin) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/amap/amap-clean.sgmodule) | 高德地图：去开屏、首页信息流、探索推荐、路线页、打车页运营位与「我的」页面广告，拒绝广告素材和日志 / 曝光上报；需 MITM |
-| ADBlock | [安装](https://egernapp.com/modules/new?name=ADBlock&url=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Fegern%2Fadblock%2Fadblock.yaml) | [安装](https://www.nsloon.com/openloon/import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Floon%2Fadblock%2Fadblock.plugin) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/adblock/adblock.sgmodule) | 常见国内外广告 URL 重写拦截，并集中拦截广告平台、HTTPDNS 与通用遥测 / 归因 / 崩溃 SDK 域名 |
+| ADBlock | [安装](https://egernapp.com/modules/new?name=ADBlock&url=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Fegern%2Fadblock%2Fadblock.yaml) | [安装](https://www.nsloon.com/openloon/import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Floon%2Fadblock%2Fadblock.plugin) / [规则](https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/adblock/adblock.list) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/adblock/adblock.sgmodule) | 常见国内外广告 URL 重写拦截，并集中拦截广告平台、HTTPDNS 与通用遥测 / 归因 / 崩溃 SDK 域名；Loon 插件只含重写，域名规则需单独添加 adblock.list，Egern / Shadowrocket 已自动引用规则集 |
 | Xiaohongshu Clean | [安装](https://egernapp.com/modules/new?name=Xiaohongshu%20Clean&url=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Fegern%2Fxiaohongshu%2Fxiaohongshu-clean.yaml) | [安装](https://www.nsloon.com/openloon/import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2Fxzavier-amico%2Fmodules%2Fmaster%2Floon%2Fxiaohongshu%2Fxiaohongshu-clean.plugin) | [安装](https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/xiaohongshu/xiaohongshu-clean.sgmodule) | 小红书去广告：首页瀑布流、搜索结果、评论区、开屏与商品推广位；可选精简顶部分类栏的购物 / 市集 / 直播 tab（底部导航栏不动）；直播推荐卡与底部导航暂未处理 |
 
 命名约定：带播放、画质、歌词、字幕等功能增强的模块用 `Enhance`；只做去广告、界面精简的模块用 `Clean`；`Unlock` / `Mock` 保持原义。
+
+ADBlock 在 Loon 下分两步：先装 `adblock.plugin`（只含 Rewrite + MITM），再到「配置 → 远程规则」添加 `adblock.list`，策略选 `REJECT`。Egern / Shadowrocket 的模块已分别通过 `rule_set` / `RULE-SET` 自动引用规则集，导入模块即可。
 
 > 2026-11-14 模块统一改名：`BiliBili Clean` → `BiliBili Enhance`、`Spotify Premium` → `Spotify Enhance`、`* Ad-Free` → `* Clean`。旧 raw 地址不再更新，已导入的模块请删除后按上表重新导入；脚本内部 URL 未改，重新导入前旧规则通常仍能继续工作，但不会收到模块级更新。
 
@@ -68,7 +70,7 @@ Shadowrocket 的模块语法与 Loon 不同，转换时做了这些映射：
 ## 通用要求
 
 - 需要改写 HTTPS 响应的模块（YouTube、Spotify、Tubi、Pluto、Emby、Bilibili、Delivery、AMap、Xiaohongshu、ADBlock 的 HTTPS 规则）必须在客户端安装并信任 CA 证书，并开启 MITM；具体域名见各模块的 `mitm` / `[MitM]` / `[MITM]` 段。
-- CN Video Clean 是纯规则模块，不需要 MITM。ADBlock 的域名规则不需要 MITM，但其中的 URL 重写部分需要。
+- CN Video Clean 是纯规则模块，不需要 MITM。ADBlock 的域名规则不需要 MITM，但插件 / 模块里的 URL 重写部分需要。
 - YouTube 的 response / ump 脚本需要处理大响应，三端都已把 timeout 调到 60s；设备较慢时可继续调大。
 - YouTube 的脚本按请求阶段拆成 `youtube.request.js` / `youtube.key.js` / `youtube.response.js`，插件只把对应阶段的请求交给对应脚本；`ad_break` / `log_event` 请求不再强制读取 body。网页版 `www.youtube.com` / `m.youtube.com` 的 youtubei 响应是 JSON，脚本走单独的保守 JSON 改写路径，不套用 protobuf 解码。
 - YouTube 与 Bilibili 的「支持网页版」默认开启；关闭后网页版请求完全放行，App / gRPC 逻辑不受影响。Bilibili 网页版只改 API JSON，不改网页 HTML 里的 `__INITIAL_STATE__`。
@@ -96,6 +98,8 @@ loon/<module>/<module>.plugin       # Loon 插件
 loon/<module>/js/                   # Loon 脚本（生成物）
 shadowrocket/<module>/<module>.sgmodule  # Shadowrocket 模块
 shadowrocket/<module>/js/           # Shadowrocket 脚本（生成物）
+<platform>/adblock/adblock.list     # ADBlock 域名 REJECT 规则（Loon / Shadowrocket）
+egern/adblock/adblock.rules.yaml    # ADBlock 的 Egern 规则集（由 adblock.list 生成）
 <platform>/spotify/spotify-mock/    # Spotify Mock 归在 spotify 目录下，与 Premium 并列
 server/<service>/                   # 自建服务（Cloudflare Worker + 本机 Node）
 server/<service>/src/               # 服务端代码
