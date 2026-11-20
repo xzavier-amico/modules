@@ -59,6 +59,23 @@ const TNC_SUFFIXES = [
   "sgsnssdk.com",
 ];
 
+// HTTPDNS / 私有 DNS 端点不拦：会让 App 正常解析直接失败，
+// 而广告域名已经有 DOMAIN / DOMAIN-SUFFIX 兜底，收益很低。
+const NON_AD_DNS = new Set([
+  "aedns.weixin.qq.com",
+  "dns.jd.com",
+  "dns.weibo.cn",
+  "dns.weixin.qq.com",
+  "dns.weixin.qq.com.cn",
+  "doh.iqiyi.com",
+  "httpsdns.baidu.com",
+]);
+
+function isNonAdDns(value) {
+  const v = value.toLowerCase();
+  return v.includes("httpdns") || NON_AD_DNS.has(v);
+}
+
 const FILES = {
   loonPlugin: path.join(ROOT, "loon/adblock/adblock.plugin"),
   loonList: path.join(ROOT, "loon/adblock/adblock.list"),
@@ -178,6 +195,7 @@ function normalize(entries, suffix, exact) {
   for (const item of entries) {
     if (EXCLUDE.has(item.value)) continue;
     if (isTncCdn(item.value)) continue;
+    if (isNonAdDns(item.value)) continue;
     if (coveredBy(item.value, suffix, exact)) continue;
     const key = item.type + "|" + item.value;
     if (seen.has(key)) continue;
