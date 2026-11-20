@@ -189,6 +189,12 @@ function coveredBy(value, suffix, exact) {
   return false;
 }
 
+function compareEntries(a, b) {
+  if (a.value !== b.value) return a.value < b.value ? -1 : 1;
+  if (a.type !== b.type) return a.type < b.type ? -1 : 1;
+  return 0;
+}
+
 function normalize(entries, suffix, exact) {
   const seen = new Set();
   const out = [];
@@ -211,7 +217,7 @@ function normalize(entries, suffix, exact) {
       for (let i = 1; i < parts.length; i++) if (suffixes.has(parts.slice(i).join("."))) return false;
       return true;
     })
-    .sort((a, b) => (a.value < b.value ? -1 : a.value > b.value ? 1 : 0));
+    .sort(compareEntries);
 }
 
 function renderLoonRules(entries) {
@@ -358,6 +364,10 @@ function updateReadme(file, counts) {
     entries = await filterLive(entries);
     console.log(`DNS 存活 ${entries.length} 条`);
   }
+
+  // filterLive 是并发返回的，顺序不稳定；写回前统一排序，
+  // 避免上游或 DNS 查询顺序变化时整份列表出现大段无意义 diff。
+  entries.sort(compareEntries);
 
   const loonList = applyBlock(loonText, renderLoonRules(entries));
   const ruleLines = parseRuleLines(loonList);

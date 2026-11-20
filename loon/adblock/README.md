@@ -15,7 +15,7 @@
 
 ## 内容
 - 插件：[Rewrite] 744 条（其中 744 条 reject）+ [MITM] 637 hostnames
-- 规则列表：1728 条 REJECT
+- 规则列表：1714 条 REJECT
 
 ## 说明
 - 图标：Reject.png

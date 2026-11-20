@@ -15,7 +15,7 @@
 模块内已用 `rule_set` 引用规则集，导入模块即可，不需要再手动添加。
 
 ## 内容
-- Egern: 1728 rules + 744 url_rewrites + 637 mitm hostnames（rules 来自远程 rule_set）
+- Egern: 1714 rules + 744 url_rewrites + 637 mitm hostnames（rules 来自远程 rule_set）
 
 ## 说明
 - 图标：Reject.png
