@@ -228,8 +228,6 @@ url_rewrites:
   location: http://reject-200/
 - match: ^https?://api-mifit-cn2\.zepp\.com/discovery/mi/cards/(startpage_ad|homepage_ad)\?
   location: http://reject/
-- match: ^https?://mbasecc\.bas\.cmbchina\.com/Edge/api/mlife\.clientface\.clientservice\.api\.advertiseService/preCacheAdvertiseSec
-  location: http://reject/
 - match: ^https?://nam\.veta\.naver\.com/gfp/v1\?u\=ios_papago_top
   location: http://reject/
 - match: ^https?://newclient\.map\.baidu\.com/client/crossmarketing
@@ -1911,7 +1909,6 @@ mitm:
     - 'mapi.sfbest.com'
     - 'mapi.weibo.com'
     - 'mapi.xiaotucc.com'
-    - 'mbasecc.bas.cmbchina.com'
     - 'mbd.baidu.com'
     - 'mbs.boc.cn'
     - 'media.qyer.com'

@@ -14,7 +14,7 @@
 3. 需要 HTTPS 重写时开启 MITM 并信任证书。
 
 ## 内容
-- 插件：[Rewrite] 744 条（其中 744 条 reject）+ [MITM] 637 hostnames
+- 插件：[Rewrite] 743 条（其中 743 条 reject）+ [MITM] 636 hostnames
 - 规则列表：1714 条 REJECT
 
 ## 说明
