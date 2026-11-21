@@ -359,11 +359,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
     if (Array.isArray(raw)) {
       // Loon 位置参数：spoof, ads, unlock, enable_lyrics, desktop, lyrics_source,
-      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc。
+      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc, word_lyrics。
       opt = {
         spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2],
         enable_lyrics: raw[3], desktop: raw[4], lyrics_source: raw[5],
-        prefetch_lyrics: raw[6], sync_plain_lyrics: raw[7], lyrics_isrc: raw[8],
+        prefetch_lyrics: raw[6], sync_plain_lyrics: raw[7], lyrics_isrc: raw[8], word_lyrics: raw[9],
       };
     } else if (typeof raw === "string") {
       opt = JSON.parse(raw || "{}") || {};
@@ -658,16 +658,18 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       prefetch_lyrics: value.prefetch_lyrics,
       sync_plain_lyrics: value.sync_plain_lyrics,
       lyrics_isrc: value.lyrics_isrc,
+      word_lyrics: value.word_lyrics,
     });
     if (Array.isArray(raw)) {
       // Loon 位置参数：spoof, ads, unlock, enable_lyrics, desktop, lyrics_source,
-      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc。
+      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc, word_lyrics。
       return {
         enable_lyrics: raw[3],
         lyrics_source: raw[5],
         prefetch_lyrics: raw[6],
         sync_plain_lyrics: raw[7],
         lyrics_isrc: raw[8],
+        word_lyrics: raw[9],
       };
     }
     if (typeof raw === "string") {
@@ -729,6 +731,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
           ignore_han_variants: raw[4],
           sync_plain_lyrics: raw[5],
           lyrics_isrc: raw[6],
+          word_lyrics: raw[7],
         };
       }
       else if (typeof raw === "string") {
@@ -783,6 +786,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // ISRC 反查：前面几轮都没搜到时，用 Deezer 公开 API 反查 ISRC，再用 ISRC 直查
   // Musixmatch、用 Deezer 的规范曲名重查一遍。只在落空后才跑，不占主链路预算。
   const isrcLookup = flag(opt.lyrics_isrc, true);
+  const wordLyrics = flag(opt.word_lyrics, false);
   // 预取下一首：只有 feed 脚本（辅助模式）会用。
   const prefetchNextOn = flag(opt.prefetch_lyrics, true);
 
@@ -994,7 +998,8 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return wanted === "lrclib" || wanted === "musixmatch" || wanted === "netease" || wanted === "qq" ? wanted : "auto";
   }
 
-  const lyricsCacheKey = (id) => lyricsSourceKey() + "|" + (hansLyrics ? "hans" : "source") + "|" + id;
+  const lyricsCacheKey = (id) => lyricsSourceKey() + "|" + (hansLyrics ? "hans" : "source")
+    + "|" + (wordLyrics ? "word" : "line") + "|" + id;
 
   function readLyricsCache(key, id) {
     const map = readJsonMap(LYRICS_CACHE_KEY);
@@ -1007,10 +1012,16 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     // 配置换过歌词源（auto ↔ lrclib）时旧缓存 key 会不同；按曲目 id 再找一次，
     // 避免同一首歌已经缓存过却因为前缀不同重新查源。
     if (!valid(entry) && id) {
-      const suffix = "|" + id;
+      const suffix = "|" + (wordLyrics ? "word" : "line") + "|" + id;
+      const legacySuffix = "|" + id;
       for (const name of Object.keys(map || {})) {
-        if (name.slice(-suffix.length) !== suffix) continue;
+        const currentMode = name.slice(-suffix.length) === suffix;
+        const legacyMode = name.slice(-legacySuffix.length) === legacySuffix;
+        if (!currentMode && !legacyMode) continue;
         const candidate = map[name];
+        const hasWordLines = candidate && Array.isArray(candidate.a)
+          && candidate.a.some((line) => Array.isArray(line) && Array.isArray(line[3]) && line[3].length);
+        if (legacyMode && ((wordLyrics && !hasWordLines) || (!wordLyrics && hasWordLines))) continue;
         if (valid(candidate)) {
           entry = candidate;
           break;
@@ -1025,20 +1036,27 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     const rebuilt = lines.map((pair) => ({
       startTimeMs: String(Number(pair && pair[0]) || 0),
       words: String((pair && pair[1]) || ""),
-      syllables: [],
-      endTimeMs: "0",
+      syllables: Array.isArray(pair && pair[3]) ? pair[3].map((part) => ({
+        startTimeMs: String(Number(part && part[0]) || 0),
+        endTimeMs: String(Number(part && part[1]) || 0),
+        words: String((part && part[2]) || ""),
+      })) : [],
+      endTimeMs: String(Number(pair && pair[2]) || 0),
     }));
     // 预取由 feed 脚本完成，它没有携带 t2s 词表；旧版本写下的缓存也可能没转。
     // 命中时再判一次，繁体就折叠，已经简体的缓存不受影响。
     if (!HELPER && hansLyrics && typeof SPOTIFY_HAN_VARIANTS !== "undefined") {
       if (SPOTIFY_HAN_VARIANTS.isTraditional(jsonSample(rebuilt).text)) {
-        for (let i = 0; i < rebuilt.length; i += 1) rebuilt[i].words = SPOTIFY_HAN_VARIANTS.fold(rebuilt[i].words);
+        for (let i = 0; i < rebuilt.length; i += 1) {
+          rebuilt[i].words = SPOTIFY_HAN_VARIANTS.fold(rebuilt[i].words);
+          for (const part of rebuilt[i].syllables) part.words = SPOTIFY_HAN_VARIANTS.fold(part.words);
+        }
       }
     }
     return {
       payload: {
         lyrics: {
-          syncType: entry.s === "UNSYNCED" ? "UNSYNCED" : "LINE_SYNCED",
+          syncType: entry.s === "UNSYNCED" ? "UNSYNCED" : entry.s === "SYLLABLE_SYNCED" ? "SYLLABLE_SYNCED" : "LINE_SYNCED",
           lines: rebuilt,
           // 缓存里只存了行，重建时一样要补 previewLines：桌面端直接对它
           // .map()，缺字段会抛 TypeError，命中缓存的歌一律变成「无法加载」。
@@ -1063,6 +1081,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     };
   }
 
+
   function writeLyricsCache(key, payload) {
     // 只缓存真正拿到的歌词；查不到 / 超时都不写，下一次打开可以立刻重试。
     if (!payload) return;
@@ -1075,14 +1094,19 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     for (let i = 0; i < raw.length && i < LYRICS_CACHE_MAX_LINES; i += 1) {
       const line = raw[i];
       if (!line || typeof line.words !== "string" || !line.words.trim()) continue;
-      lines.push([Number(line.startTimeMs) || 0, line.words.slice(0, 200)]);
+      const syllables = Array.isArray(line.syllables) ? line.syllables.slice(0, 100).map((part) => [
+        Number(part.startTimeMs) || 0,
+        Number(part.endTimeMs) || 0,
+        String(part.words || "").slice(0, 80),
+      ]) : [];
+      lines.push([Number(line.startTimeMs) || 0, line.words.slice(0, 200), Number(line.endTimeMs) || 0, syllables]);
     }
     if (!lines.length) return;
     map[key] = {
       t: now,
       m: 0,
       z: hansLyrics ? 1 : 0,
-      s: lyrics.syncType === "UNSYNCED" ? "UNSYNCED" : "LINE_SYNCED",
+      s: lyrics.syncType === "UNSYNCED" ? "UNSYNCED" : lyrics.syncType === "SYLLABLE_SYNCED" ? "SYLLABLE_SYNCED" : "LINE_SYNCED",
       p: String(lyrics.provider || "LRCLIB"),
       i: lyrics.providerLyricsId === undefined || lyrics.providerLyricsId === null ? "" : String(lyrics.providerLyricsId),
       l: String(lyrics.language || "en"),
@@ -1306,7 +1330,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
             cached.payload.lyrics.language, cached.payload.colors);
           finish({ status: 200, headers: { "Content-Type": "application/vnd.google.protobuf" }, body: bytes });
         } else {
-          const body = JSON.stringify(cached.payload);
+          const body = JSON.stringify(jsonPayload(cached.payload));
           finish({ status: 200, headers: syntheticHeaders("application/json; charset=utf-8", encoder.encode(body).length), body: body });
         }
         return;
@@ -1418,7 +1442,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
           if (payload) writeLyricsCache(cacheKey, payload);
           return;
         }
-        if (payload && payload.lyrics.syncType === "LINE_SYNCED") {
+        if (payload && (payload.lyrics.syncType === "LINE_SYNCED" || payload.lyrics.syncType === "SYLLABLE_SYNCED")) {
           writeLyricsCache(cacheKey, payload);
           emit(payload);
           return;
@@ -1736,7 +1760,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         // 这一轮提前收工，得等真正的同步歌词；只有实在没有同步歌词时才用它兜底。
         const pseudo = !!(record && record.pseudo);
         const payload = buildPayload(record);
-        if (payload && (order.length === 1 || (payload.lyrics.syncType === "LINE_SYNCED" && !pseudo))) {
+        if (payload && (order.length === 1 || ((payload.lyrics.syncType === "LINE_SYNCED" || payload.lyrics.syncType === "SYLLABLE_SYNCED") && !pseudo))) {
           finished = true;
           done(payload);
           return;
@@ -1891,9 +1915,14 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
           return;
         }
         waiting[id] = [next];
-        httpGetJson("https://music.163.com/api/song/lyric?id=" + id + "&lv=-1&kv=-1&tv=-1", (lyric) => {
+        httpGetJson("https://music.163.com/api/song/lyric/v1?id=" + id + "&cp=false&lv=0&kv=0&tv=0&rv=0&yv="
+          + (wordLyrics ? "0" : "-1") + "&ytv=0&yrv=0", (lyric) => {
+          const wordText = lyric && lyric.yrc && lyric.yrc.lyric;
+          const wordLines = wordLyrics && typeof wordText === "string" ? parseYrc(wordText) : [];
           const text = lyric && lyric.lrc && lyric.lrc.lyric;
-          const record = text ? { provider: "NetEase", providerId: id, syncedLyrics: text } : null;
+          const record = wordLines.length
+            ? { provider: "NetEase", providerId: id, wordLyrics: wordLines, syncedLyrics: text || "" }
+            : text ? { provider: "NetEase", providerId: id, syncedLyrics: text } : null;
           lyrics[id] = record;
           const callbacks = waiting[id] || [];
           delete waiting[id];
@@ -2473,7 +2502,21 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
     // 桌面端是跨域 fetch：合成响应必须带上原响应的 CORS 头，否则浏览器判定
     // 实际响应不可读，App 显示「无法加载这首歌曲的歌词」。
-    finish(jsonResponse(JSON.stringify(payload)));
+    finish(jsonResponse(JSON.stringify(jsonPayload(payload))));
+  }
+
+  function jsonPayload(payload) {
+    const out = Object.assign({}, payload, { lyrics: Object.assign({}, payload.lyrics) });
+    const toClient = (line) => Object.assign({}, line, {
+      syllables: (line.syllables || []).map((part) => ({
+        startTimeMs: String(part.startTimeMs),
+        endTimeMs: String(part.endTimeMs),
+        numChars: String(Array.from(part.words || "").length),
+      })),
+    });
+    out.lyrics.lines = payload.lyrics.lines.map(toClient);
+    out.lyrics.previewLines = payload.lyrics.previewLines.map(toClient);
+    return out;
   }
 
   // 请求阶段合成没有官方响应头可抄。只有请求带 Origin（浏览器 / CEF 桌面端）
@@ -2545,11 +2588,22 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
   function encodeLine(line) {
     const content = encoder.encode(String(line.words || ""));
-    return pbConcat([pbUint(1, Number(line.startTimeMs) || 0), pbBytes(2, content)]);
+    const parts = [pbUint(1, Number(line.startTimeMs) || 0), pbBytes(2, content)];
+    const syllables = Array.isArray(line.syllables) ? line.syllables : [];
+    for (const syllable of syllables) {
+      const word = String(syllable.words || "");
+      if (!word) continue;
+      parts.push(pbBytes(3, pbConcat([
+        pbUint(1, Number(syllable.startTimeMs) || 0),
+        pbUint(2, Number(syllable.endTimeMs) || 0),
+        pbUint(3, Array.from(word).length),
+      ])));
+    }
+    return pbConcat(parts);
   }
 
   function encodeProto(lines, syncType, provider, providerId, language, colors) {
-    const parts = [pbUint(1, syncType === "LINE_SYNCED" ? 1 : 0)];
+    const parts = [pbUint(1, syncType === "UNSYNCED" ? 0 : 1)];
     for (let i = 0; i < lines.length; i += 1) parts.push(pbBytes(2, encodeLine(lines[i])));
     parts.push(pbBytes(3, encoder.encode(provider || "LRCLIB")));
     parts.push(pbBytes(4, encoder.encode(String(providerId === undefined || providerId === null ? "" : providerId))));
@@ -2967,6 +3021,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   function buildPayload(record) {
     if (!record || "object" != typeof record || record.instrumental) return null;
 
+    if (wordLyrics && Array.isArray(record.wordLyrics) && record.wordLyrics.length) {
+      const payload = makePayload("SYLLABLE_SYNCED", record.wordLyrics, record);
+      if (payload && payload.lyrics.lines.some((line) => line.syllables.length)) return payload;
+    }
+
     if (typeof record.syncedLyrics === "string") {
       const lines = parseLrc(record.syncedLyrics);
       if (lines.length) return makePayload("LINE_SYNCED", lines, record);
@@ -3005,7 +3064,12 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       if (!line || typeof line.words !== "string" || !line.words.trim()) continue;
       const ms = Number(line.startTimeMs);
       if (!Number.isSafeInteger(ms) || ms < 0) continue;
-      out.push({ startTimeMs: String(ms), words: line.words, syllables: [], endTimeMs: "0" });
+      const syllables = Array.isArray(line.syllables) ? line.syllables.filter((part) => part
+        && typeof part.words === "string" && part.words.length
+        && Number.isSafeInteger(Number(part.startTimeMs)) && Number(part.startTimeMs) >= 0
+        && Number.isSafeInteger(Number(part.endTimeMs)) && Number(part.endTimeMs) >= Number(part.startTimeMs))
+        .map((part) => ({ startTimeMs: String(Number(part.startTimeMs)), endTimeMs: String(Number(part.endTimeMs)), words: part.words })) : [];
+      out.push({ startTimeMs: String(ms), words: line.words, syllables: syllables, endTimeMs: String(Number(line.endTimeMs) || 0) });
     }
     out.sort((a, b) => Number(a.startTimeMs) - Number(b.startTimeMs));
     return out;
@@ -3029,18 +3093,22 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       const sample = [];
       for (let i = 0; i < lines.length && i < 40; i += 1) sample.push(lines[i].words);
       if (SPOTIFY_HAN_VARIANTS.isTraditional(sample)) {
-        for (let i = 0; i < lines.length; i += 1) lines[i].words = SPOTIFY_HAN_VARIANTS.fold(lines[i].words);
+        for (let i = 0; i < lines.length; i += 1) {
+          lines[i].words = SPOTIFY_HAN_VARIANTS.fold(lines[i].words);
+          for (const syllable of lines[i].syllables) syllable.words = SPOTIFY_HAN_VARIANTS.fold(syllable.words);
+        }
       }
     }
     const provider = record.provider || "LRCLIB";
     const id = record.providerId !== undefined ? record.providerId : record.id;
     const language = detectLanguage(lines);
+    const syllableSync = syncType === "SYLLABLE_SYNCED" && lines.some((line) => line.syllables.length);
     // 值是 32 位有符号整数。
     const signed = (v) => (v > 0x7fffffff ? v - 0x100000000 : v);
     const palette = albumColors(record);
     return {
       lyrics: {
-        syncType: syncType,
+        syncType: syncType === "SYLLABLE_SYNCED" && !syllableSync ? "LINE_SYNCED" : syncType,
         lines: lines,
         provider: provider,
         providerLyricsId: id === undefined || id === null ? "" : String(id),
@@ -3154,6 +3222,35 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     }
 
     out.sort((a, b) => Number(a.startTimeMs) - Number(b.startTimeMs));
+    return out;
+  }
+
+  function parseYrc(text) {
+    const out = [];
+    const stamp = /^\[(\d+),(\d+)\](.*)$/;
+    const token = /\((\d+),(\d+),\d+\)([\s\S]*?)(?=\(\d+,\d+,\d+\)|$)/g;
+    for (const raw of String(text || "").split(/\r?\n/)) {
+      const match = stamp.exec(raw.trim());
+      if (!match) continue;
+      const lineStart = Number(match[1]);
+      const lineDuration = Number(match[2]);
+      if (!Number.isSafeInteger(lineStart) || !Number.isSafeInteger(lineDuration)) continue;
+      const body = match[3];
+      const syllables = [];
+      let part;
+      token.lastIndex = 0;
+      while ((part = token.exec(body))) {
+        const words = part[3];
+        if (!words) continue;
+        const startTimeMs = Number(part[1]);
+        const durationMs = Number(part[2]);
+        if (!Number.isSafeInteger(startTimeMs) || !Number.isSafeInteger(durationMs) || durationMs < 0) continue;
+        syllables.push({ startTimeMs: String(startTimeMs), endTimeMs: String(startTimeMs + durationMs), words: words });
+      }
+      if (!syllables.length) continue;
+      out.push({ startTimeMs: String(lineStart), endTimeMs: String(lineStart + lineDuration),
+        words: syllables.map((item) => item.words).join(""), syllables: syllables });
+    }
     return out;
   }
 

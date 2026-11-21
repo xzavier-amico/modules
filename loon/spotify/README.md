@@ -27,6 +27,7 @@
 | `ignore_han_variants` | true | 查歌词时把繁体曲名 / 歌手按简体比较；关闭后繁简写法必须完全一致 |
 | `sync_plain_lyrics` | true | 只有纯文本歌词时按歌曲时长把每行均分出时间轴（伪同步），让它能跟着滚动；关闭则保持整屏纯文本 |
 | `lyrics_isrc` | true | 前面几轮都搜不到时，用 Deezer 公开接口反查 ISRC，再用 ISRC 直查 Musixmatch、并用 Deezer 的规范曲名重查一遍曲库 |
+| `word_lyrics` | false | 优先使用网易云 YRC 逐字时间轴；逐字数据缺失或格式无效时，同一响应里的 LRC 逐行歌词立即回退 |
 | `prefetch_lyrics` | true | 打开 Now Playing 时顺手把队列里下一首的歌词查好写进缓存，切歌后直接命中；fire-and-forget，不阻塞卡片渲染 |
 
 ## 时区
@@ -44,6 +45,7 @@
 合成规则：
 
 - `auto` 同时请求网易云、QQ、LRCLIB、Musixmatch，首个通过歌名 / 歌手 / Live 校验的同步歌词胜出；Musixmatch 是 Spotify 的官方歌词上游、能用 `track_spotify_id` 直查，排在最后只做兜底。iOS 上它与官方请求并行竞速。只有纯文本时继续等同步歌词或官方结果，并保留原有超时兜底。
+- 网易云逐字开关开启时，候选命中后用一个 `/api/song/lyric/v1` 响应同时读取 `yrc` 和 `lrc`；有效 YRC 胜出，否则使用同一响应的 LRC，不额外发请求或串行等待。其他歌词源仍并行查询。
 - 候选请求全部并行：LRCLIB 对完整曲名和去掉装饰括号后的曲名各发 `get` + `search`；网易云 / QQ 搜索后同时请求排名前 3 的候选歌词。任一同步歌词先通过校验就直接返回。
 - 歌名比较会忽略 `feat.` / `ft.` / `with` / `prod.`、`Remastered 2011` / `2011 Remaster`、`Radio Edit`、`Single Version`、`Album Version`、`Bonus Track`、`Deluxe Edition`、`Explicit` / `Clean` 等版本后缀；歌手按 `feat.` / `ft.` / `with` 和多歌手分隔符拆分，任意一位匹配即可。
 - 曲名 / 歌手比较默认做繁→简折叠（OpenCC t2s 表）：Spotify 的中文元数据常是繁体，网易云 / QQ 返回简体，不折叠时「說謊」对不上「说谎」、「周杰倫」对不上「周杰伦」。关闭 `ignore_han_variants` 后恢复逐字比较。
