@@ -29,7 +29,7 @@ DOMAIN-SUFFIX,aet.spotify.com,REJECT
 DOMAIN,music.163.com,DIRECT
 DOMAIN,c.y.qq.com,DIRECT
 # 强制 Spotify 的 QUIC 回落到 TCP，确保请求经过 HTTP 代理。
-# 个别版本拒绝 QUIC 后可能跳歌；Loon for Mac 遇到时改用 spotify-enhance-mac.plugin。
+# 个别版本拒绝 QUIC 后可能跳歌；通用插件按 User-Agent 识别 Loon for Mac。
 AND, ((DOMAIN-SUFFIX, spotify.com), (PROTOCOL, QUIC)), REJECT
 
 [Rewrite]

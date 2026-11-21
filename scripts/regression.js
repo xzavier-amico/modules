@@ -310,7 +310,7 @@ check("Module filenames and display names follow the Enhance / Clean convention"
 });
 
 check("Spotify client plugins route scrollsita to the updated ad filter", () => {
-  for (const file of ["loon/spotify/spotify-enhance.plugin", "loon/spotify/spotify-enhance-mac.plugin", "egern/spotify/spotify-enhance.yaml", "shadowrocket/spotify/spotify-enhance.sgmodule"]) {
+  for (const file of ["loon/spotify/spotify-enhance.plugin", "egern/spotify/spotify-enhance.yaml", "shadowrocket/spotify/spotify-enhance.sgmodule"]) {
     const rules = read(file).split("\n").filter((line) => !line.trim().startsWith("#"));
     assert.ok(rules.some((line) => line.includes("scrollsita")), file + " must match scrollsita");
     assert.ok(rules.some((line) => /spotify\.feed\.js\?v=\d{8}-\d+/.test(line)));
@@ -318,7 +318,7 @@ check("Spotify client plugins route scrollsita to the updated ad filter", () => 
 });
 
 check("Spotify modules route domestic lyrics sources directly", () => {
-  for (const file of ["loon/spotify/spotify-enhance.plugin", "loon/spotify/spotify-enhance-mac.plugin", "shadowrocket/spotify/spotify-enhance.sgmodule"]) {
+  for (const file of ["loon/spotify/spotify-enhance.plugin", "shadowrocket/spotify/spotify-enhance.sgmodule"]) {
     const text = read(file);
     assert.ok(text.includes("DOMAIN,music.163.com,DIRECT"), file + " must route NetEase directly");
     assert.ok(text.includes("DOMAIN,c.y.qq.com,DIRECT"), file + " must route QQ Music directly");
@@ -342,7 +342,7 @@ check("Spotify modules always spoof the timezone and leave Accept-Language alone
   assert.ok(!egern.includes("spoof_timezone"), "egern must not expose the retired timezone switch");
   assert.ok(egern.includes("spotify.headers.js"), "egern must run the headers script");
   assert.ok(!egern.includes("debug_log"), "egern must not expose the retired log switch");
-  for (const file of ["loon/spotify/spotify-enhance.plugin", "loon/spotify/spotify-enhance-mac.plugin"]) {
+  for (const file of ["loon/spotify/spotify-enhance.plugin"]) {
     const text = read(file);
     assert.ok(!text.includes("force_zh_hans = "), file + " must not expose the retired language switch");
     assert.ok(!text.includes("spoof_timezone = "), file + " must not expose the retired timezone switch");
@@ -389,7 +389,7 @@ check("Spotify modules drop if-none-match for track metadata too", () => {
   // metadata/4/track 是桌面端判断「这首歌有没有歌词」的来源。不禁用 304 时
   // 客户端会一直用浏览器缓存里的旧 has_lyrics，补了元数据也看不到歌词。
   const loonNeedle = "metadata\\/4\\/track";
-  for (const file of ["loon/spotify/spotify-enhance.plugin", "loon/spotify/spotify-enhance-mac.plugin"]) {
+  for (const file of ["loon/spotify/spotify-enhance.plugin"]) {
     const line = read(file).split("\n").find((item) => item.includes('request.header.del("if-none-match")'));
     assert.ok(line && line.includes(loonNeedle), file + " must drop if-none-match for metadata/4/track");
   }
@@ -401,7 +401,7 @@ check("Spotify modules drop if-none-match for track metadata too", () => {
 
 check("Spotify client plugins short-circuit cached lyrics at request phase", () => {
   // 请求阶段命中缓存时直接返回歌词，跳过可能很慢的官方 color-lyrics 请求。
-  for (const file of ["loon/spotify/spotify-enhance.plugin", "loon/spotify/spotify-enhance-mac.plugin", "shadowrocket/spotify/spotify-enhance.sgmodule"]) {
+  for (const file of ["loon/spotify/spotify-enhance.plugin", "shadowrocket/spotify/spotify-enhance.sgmodule"]) {
     const rules = read(file).split("\n").filter((line) => line.includes("spotify_lyrics.js"));
     assert.equal(rules.length, 2, file + " must have request and response lyrics entries");
     assert.equal(rules.filter((line) => /tag="spotify(?:\.mac)?\.lyrics\.req"/.test(line) || line.startsWith("spotify.lyrics.req =")).length, 1, file);
@@ -670,7 +670,7 @@ check("Spotify lyrics convert traditional supplements to simplified by default",
 });
 
 check("Spotify modules expose the han variant switches consistently", () => {
-  for (const file of ["loon/spotify/spotify-enhance.plugin", "loon/spotify/spotify-enhance-mac.plugin"]) {
+  for (const file of ["loon/spotify/spotify-enhance.plugin"]) {
     const text = read(file);
     assert.ok(text.includes("lyrics_script = select,hans,source"), file);
     assert.ok(text.includes("ignore_han_variants = switch,true"), file);
@@ -691,7 +691,7 @@ check("Spotify feed scripts get a 30s timeout", () => {
   const egern = read("egern/spotify/spotify-enhance.yaml").split(/\n\s*-\s+(?=http_request:|http_response:)/)
     .find((entry) => entry.includes('name: "spotify.feed"'));
   assert.ok(/timeout:\s*30/.test(egern), "egern feed timeout");
-  for (const file of ["loon/spotify/spotify-enhance.plugin", "loon/spotify/spotify-enhance-mac.plugin"]) {
+  for (const file of ["loon/spotify/spotify-enhance.plugin"]) {
     const line = read(file).split("\n").find((item) => /tag="spotify(?:\.mac)?\.feed"/.test(item));
     assert.ok(/timeout=30/.test(line), file + " feed timeout");
   }

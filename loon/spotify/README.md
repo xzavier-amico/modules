@@ -170,13 +170,8 @@ crossfade；这两项保持服务端与 App 自己的设置。AutoMix 仍在远�
   已知路径，再递归找 `UcsResponse`；只有确认是 UCS 才改写。
 
 安装后需开启 MitM，并在系统 / 钥匙串中信任 Loon 证书，然后完全退出并重新打开
-Spotify。桌面端如果一直看不到脚本执行记录，说明请求可能走了 QUIC；通用插件默认
-拒绝 QUIC，个别版本因此跳歌时改用 macOS 兼容入口：
-
-`https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/spotify-enhance-mac.plugin`
-
-该入口固定桌面模式、默认关闭 `unlock_playback`，且不主动拒绝 QUIC。已经安装通用
-插件的用户不需要再装它。
+Spotify。桌面端如果一直看不到脚本执行记录，说明请求可能走了 QUIC；通用插件会按
+User-Agent 识别 Loon for Mac，并默认拒绝 QUIC 以确保请求经过 MITM。
 
 ## 注意
 
