@@ -205,25 +205,37 @@
   }
 
   // 递归删除广告 / Shorts / 会员视频 / AI 控件；返回是否真的改过。
-  function jsonPruneTree(root, options) {
+  function jsonPruneTree(root, options, routeFilters = {}) {
     let changed = false;
+    const hiddenGuideItems = routeFilters.guide ? new Set(options.hiddenGuideItems ?? []) : null;
 
     function visit(node) {
       if (!node || "object" != typeof node) return;
       if (Array.isArray(node)) {
         for (let i = node.length - 1; i >= 0; i--) {
-          if (jsonIsCardItem(node[i], options)) {
+          const entry = node[i];
+          const guideId = entry?.guideEntryRenderer?.navigationEndpoint?.browseEndpoint?.browseId;
+          if (jsonIsCardItem(entry, options) || (guideId && hiddenGuideItems?.has(guideId))) {
             node.splice(i, 1);
             changed = true;
             continue;
           }
-          visit(node[i]);
+          visit(entry);
         }
         return;
       }
 
       for (const key of Object.keys(node)) {
         const value = node[key];
+        if (routeFilters.related && JSON_RELATED_FIELDS.has(key)) {
+          delete node[key];
+          changed = true;
+          continue;
+        }
+        if (routeFilters.related && "playerOverlayRenderer" === key && value && "object" == typeof value && value.related) {
+          delete value.related;
+          changed = true;
+        }
         if (false !== options.blockFeedAds && (JSON_PLAYER_AD_FIELDS.has(key) || JSON_AD_RENDERERS.has(key))) {
           delete node[key];
           changed = true;
@@ -285,6 +297,14 @@
         if (false !== options.blockMembersOnly && jsonIsMembersOnly(value)) {
           delete node[key];
           changed = true;
+          continue;
+        }
+        if (routeFilters.topbar && "topbarButtons" === key && Array.isArray(value)) {
+          const kept = value.filter((entry) => !JSON_TOPBAR_BLOCK_ICONS.test(String(entry?.topbarButtonRenderer?.icon?.ytIcon?.iconType?.iconType ?? "")));
+          if (kept.length !== value.length) {
+            node[key] = kept;
+            changed = true;
+          }
           continue;
         }
         visit(value);
@@ -470,61 +490,6 @@
     return true;
   }
 
-  // 相关视频：侧栏列表 + m 站播放器浮层里的 related。
-  function jsonDropRelated(root) {
-    let changed = false;
-
-    (function visit(node) {
-      if (!node || "object" != typeof node) return;
-      if (Array.isArray(node)) {
-        for (const item of node) visit(item);
-        return;
-      }
-      for (const key of Object.keys(node)) {
-        const value = node[key];
-        if (JSON_RELATED_FIELDS.has(key)) {
-          delete node[key];
-          changed = true;
-          continue;
-        }
-        if ("playerOverlayRenderer" === key && value && "object" == typeof value && value.related) {
-          delete value.related;
-          changed = true;
-        }
-        visit(value);
-      }
-    })(root);
-
-    return changed;
-  }
-
-  // 网页版顶部按钮：Create / 通知 / 上传，认图标枚举名。
-  function jsonFilterTopbar(root) {
-    let changed = false;
-
-    (function visit(node) {
-      if (!node || "object" != typeof node) return;
-      if (Array.isArray(node)) {
-        for (const item of node) visit(item);
-        return;
-      }
-      for (const key of Object.keys(node)) {
-        const value = node[key];
-        if ("topbarButtons" === key && Array.isArray(value)) {
-          const kept = value.filter((entry) => !JSON_TOPBAR_BLOCK_ICONS.test(String(entry?.topbarButtonRenderer?.icon?.ytIcon?.iconType?.iconType ?? "")));
-          if (kept.length !== value.length) {
-            node[key] = kept;
-            changed = true;
-          }
-          continue;
-        }
-        visit(value);
-      }
-    })(root);
-
-    return changed;
-  }
-
   // 网页播放器按 adaptiveFormats 里实际给的档位选画质。只保留目标高度
   // （max_height 与最高可用值取较小者），音频格式不动。
   function jsonApplyQuality(streamingData, maxHeight) {
@@ -654,11 +619,11 @@
       return changed;
     }
 
-    // browse / next / search / reel/reel_watch_sequence 共用同一套 renderer 过滤；
-    // 侧栏偶尔也塞在 browse 响应里，所以 guide 过滤一起跑。
-    let changed = jsonPruneTree(data, options);
-    changed = jsonFilterGuide(data, options) || changed;
-    if (options.blockRelatedVideos) changed = jsonDropRelated(data) || changed;
-    if (options.webCleanup) changed = jsonFilterTopbar(data) || changed;
-    return changed;
+    // browse / next / search / reel/reel_watch_sequence 共用一趟树遍历；
+    // 侧栏、相关视频和顶栏过滤在同一趟里执行。
+    return jsonPruneTree(data, options, {
+      guide: true,
+      related: options.blockRelatedVideos,
+      topbar: options.webCleanup,
+    });
   }
