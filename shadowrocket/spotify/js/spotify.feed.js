@@ -853,12 +853,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // 快速返回「没有」时仍会立刻放行。
   const LYRICS_DEADLINE_MS = 4500;
   const PLAIN_FALLBACK_MS = 3500;
-  const WORD_LYRICS_WAIT_MS = 2000;
-  let wordLyricsWaitStartedAt = null;
-  const beginWordLyricsWait = () => {
-    if (wordLyricsWaitStartedAt === null) wordLyricsWaitStartedAt = Date.now();
-    return Math.max(0, WORD_LYRICS_WAIT_MS - (Date.now() - wordLyricsWaitStartedAt));
-  };
   // 元数据回源（open.spotify.com 的 oEmbed / embed 页面）单次上限。两个请求
   // 并行发出，超时不会让整条链路多等一轮；卡住不返回的请求最多拖 2.5 秒。
   const META_TIMEOUT_MS = 2500;
@@ -1365,10 +1359,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       let officialDone = false;
       let officialMiss = null;
       let providersDone = false;
-      let officialLine = null;
-      let providerLine = null;
-      let wordWaitTimer;
-      let wordWaitStartedAt = 0;
       const finishOfficial = (error, response, data) => {
         if (settled) return;
         const code = Number(response && (response.status || response.statusCode));
@@ -1389,17 +1379,13 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         if (code === 200 && bytes.length) {
           if (isJson && hasLyrics(text)) {
             const rewritten = rewriteOfficialJson(text);
-            const value = { status: 200, headers: response.headers || {}, body: rewritten || data };
-            if (wordLyrics) return holdOfficialLine(value);
-            return winOfficial(value);
+            return winOfficial({ status: 200, headers: response.headers || {}, body: rewritten || data });
           }
           if (!isJson) {
             const inspected = inspectProto(bytes);
             if (inspected && inspected.count > 0) {
               const rewritten = rewriteOfficialProto(inspected);
-              const value = { status: 200, headers: response.headers || {}, body: rewritten || data };
-              if (wordLyrics) return holdOfficialLine(value);
-              return winOfficial(value);
+              return winOfficial({ status: 200, headers: response.headers || {}, body: rewritten || data });
             }
           }
         }
@@ -1424,39 +1410,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         headers["Content-Length"] = String(typeof value.body === "string" ? encoder.encode(value.body).length : toBytes(value.body).length);
         $done({ response: { status: value.status, headers: headers, body: value.body } });
       };
-      const winProviderLine = () => {
-        if (settled || !providerLine) return;
-        writeLyricsCache(cacheKey, providerLine);
-        emit(providerLine);
-      };
-      const finishWordWait = () => {
-        if (settled) return;
-        if (providerLine && String(providerLine.lyrics.provider || "").toLowerCase() === "netease") winProviderLine();
-        else if (officialLine) winOfficial(officialLine);
-        else if (providerLine) winProviderLine();
-        else if (officialDone && providersDone) finish(officialMiss || {});
-      };
-      const startWordWait = () => {
-        if (!wordLyrics || wordWaitTimer !== undefined || typeof setTimeout !== "function") return;
-        if (!wordWaitStartedAt) wordWaitStartedAt = Date.now();
-        const remaining = Math.max(0, WORD_LYRICS_WAIT_MS - (Date.now() - wordWaitStartedAt));
-        if (!remaining) return finishWordWait();
-        wordWaitTimer = setTimeout(finishWordWait, remaining);
-      };
-      const holdOfficialLine = (value) => {
-        officialLine = value;
-        if (providersDone) {
-          winOfficial(value);
-          return;
-        }
-        startWordWait();
-      };
       const maybeFinishRace = () => {
-        if (wordLyrics && (officialLine || providerLine)) {
-          if (providersDone) finishWordWait();
-          else startWordWait();
-          return;
-        }
         if (settled || !officialDone || (!providersDone && !plainFallback)) return;
         if (plainFallback) writeLyricsCache(cacheKey, plainFallback);
         if (plainFallback) emit(plainFallback);
@@ -1464,7 +1418,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       };
       const raceDeadline = () => {
         if (settled) return;
-        if (wordLyrics && (officialLine || providerLine)) return finishWordWait();
         if (plainFallback) {
           writeLyricsCache(cacheKey, plainFallback);
           emit(plainFallback);
@@ -1490,13 +1443,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
           return;
         }
         if (payload && (payload.lyrics.syncType === "LINE_SYNCED" || payload.lyrics.syncType === "SYLLABLE_SYNCED")) {
-          if (wordLyrics && payload.lyrics.syncType === "LINE_SYNCED") {
-            providerLine = payload;
-            if (String(payload.lyrics.provider || "").toLowerCase() === "netease") winProviderLine();
-            else if (officialLine || wordWaitStartedAt && Date.now() - wordWaitStartedAt >= WORD_LYRICS_WAIT_MS || officialDone) finishWordWait();
-            else startWordWait();
-            return;
-          }
           writeLyricsCache(cacheKey, payload);
           emit(payload);
           return;
@@ -1722,9 +1668,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     // 它只负责前三个都落空时再兜一层（以前只在显式选择时才查）。
     const auto = CJK_MARK.test(title + artist)
       ? ["netease", "qq", "lrclib", "musixmatch"] : ["lrclib", "netease", "qq", "musixmatch"];
-    if (wanted === "lrclib" || wanted === "musixmatch" || wanted === "netease" || wanted === "qq") {
-      return wordLyrics && wanted !== "netease" ? [wanted, "netease"] : [wanted];
-    }
+    if (wanted === "lrclib" || wanted === "musixmatch" || wanted === "netease" || wanted === "qq") return [wanted];
     return auto;
   }
 
@@ -1790,25 +1734,15 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     }
     let remaining = order.length;
     let finished = false;
-    let wordFallback = null;
-    let wordTimer;
-    let neteaseDone = !wordLyrics || order.indexOf("netease") < 0;
-    const finishWordFallback = () => {
-      if (finished || !wordFallback) return;
-      finished = true;
-      if (wordTimer !== undefined && typeof clearTimeout === "function") clearTimeout(wordTimer);
-      done(wordFallback);
-    };
     const checkAllDone = () => {
       if (!remaining && !finished) {
         finished = true;
-        done(wordFallback || plainFallback);
+        done(plainFallback);
       }
     };
     for (const name of order) {
       if (stopped() || finished) return;
       lookup(name, title, artist, duration, (record) => {
-        if (name === "netease") neteaseDone = true;
         // 伪同步要按歌曲时长均分时间轴，时长只能从这一层传下去。
         if (record && duration && !record.trackDurationMs) record.trackDurationMs = Number(duration) * 1000;
         if (stopped()) {
@@ -1826,30 +1760,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         // 这一轮提前收工，得等真正的同步歌词；只有实在没有同步歌词时才用它兜底。
         const pseudo = !!(record && record.pseudo);
         const payload = buildPayload(record);
-        if (wordLyrics && payload && payload.lyrics.syncType === "LINE_SYNCED" && !pseudo) {
-          if (name === "netease") {
-            finished = true;
-            if (wordTimer !== undefined && typeof clearTimeout === "function") clearTimeout(wordTimer);
-            done(payload);
-            return;
-          }
-          if (!wordFallback) wordFallback = payload;
-          if (wordTimer === undefined && typeof setTimeout === "function") {
-            const remainingWait = beginWordLyricsWait();
-            if (!remainingWait) {
-              finishWordFallback();
-              return;
-            }
-            wordTimer = setTimeout(finishWordFallback, remainingWait);
-          }
-          remaining -= 1;
-          if (neteaseDone) {
-            finishWordFallback();
-            return;
-          }
-          if (!remaining) finishWordFallback();
-          return;
-        }
         if (payload && (order.length === 1 || ((payload.lyrics.syncType === "LINE_SYNCED" || payload.lyrics.syncType === "SYLLABLE_SYNCED") && !pseudo))) {
           finished = true;
           done(payload);
@@ -1870,10 +1780,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
           }, PLAIN_FALLBACK_MS);
         }
         remaining -= 1;
-        if (wordFallback && neteaseDone) {
-          finishWordFallback();
-          return;
-        }
         checkAllDone();
       });
     }
