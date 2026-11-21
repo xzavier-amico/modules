@@ -9,18 +9,16 @@
       prefetch_lyrics: value.prefetch_lyrics,
       sync_plain_lyrics: value.sync_plain_lyrics,
       lyrics_isrc: value.lyrics_isrc,
-      word_lyrics: value.word_lyrics,
     });
     if (Array.isArray(raw)) {
       // Loon 位置参数：spoof, ads, unlock, enable_lyrics, desktop, lyrics_source,
-      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc, word_lyrics。
+      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc。
       return {
         enable_lyrics: raw[3],
         lyrics_source: raw[5],
         prefetch_lyrics: raw[6],
         sync_plain_lyrics: raw[7],
         lyrics_isrc: raw[8],
-        word_lyrics: raw[9],
       };
     }
     if (typeof raw === "string") {

@@ -75,11 +75,6 @@ env_schema:
     description: "前几轮都没搜到时，用 Deezer 公开接口反查 ISRC，再用 ISRC 直查 Musixmatch、并用 Deezer 的规范曲名重查一遍曲库；关掉可少两次请求"
     default_value: "true"
     options: ["true", "false"]
-  word_lyrics:
-      name: "逐字歌词"
-    description: "优先使用网易云逐字歌词；缺少逐字数据时立即回退到同一响应里的逐行歌词"
-    default_value: "false"
-    options: ["true", "false"]
   prefetch_lyrics:
     name: "预取下一首"
     description: "打开 Now Playing 时顺手把队列里下一首的歌词查好写进缓存，切歌后歌词卡 / 歌词页直接命中；不阻塞卡片渲染"
@@ -209,7 +204,7 @@ scriptings:
   - http_request:
       name: "spotify.lyrics.req"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261121-4"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261119-2"
       binary_body: true
       max_size: 2097152
       timeout: 10
@@ -222,7 +217,7 @@ scriptings:
   - http_response:
       name: "spotify.lyrics"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261121-4"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261119-2"
       body_required: true
       binary_body: true
       max_size: 2097152

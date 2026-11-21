@@ -2389,60 +2389,6 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.equal(JSON.parse(out.body).lyrics.lines[0].words, "秋", platform);
   });
 
-  check(platform + " Spotify uses NetEase YRC and keeps same-response LRC fallback", () => {
-    const id = "wordlyrics";
-    const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json";
-    const values = {
-      "spotify.track.meta.v2": JSON.stringify({ [id]: ["Test Song", "Artist", 120000, Date.now()] }),
-    };
-    const yrc = '[1000,1000](1000,400,0)Hel(1400,600,0)lo';
-    let lyricRequests = 0;
-    let requestedYrcVersion = "";
-    const request = (httpYrc, enabled) => run(platform + "/spotify/js/spotify_lyrics.js", "",
-      "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json",
-      ["netease", true, "ios", "source", true, true, false, enabled], {
-        $response: { status: 404, body: "" },
-        $persistentStore: { read: (key) => key === "spotify.track.meta.v2" ? values[key] : null, write: (value, key) => { if (key === "spotify.track.meta.v2") values[key] = value; return true; } },
-        $httpClient: { get: (options, callback) => {
-          if (options.url.includes("oembed")) {
-            callback(null, { status: 200 }, JSON.stringify({ title: "Test Song", author_name: "Artist" }));
-            return;
-          }
-          if (options.url.includes("/api/search/get")) {
-            callback(null, { status: 200 }, JSON.stringify({ result: { songs: [{ id: 123, name: "Test Song", duration: 120000, artists: [{ name: "Artist" }] }] } }));
-            return;
-          }
-          if (options.url.includes("/api/song/lyric/v1")) {
-            lyricRequests += 1;
-            requestedYrcVersion = new URL(options.url).searchParams.get("yv");
-            callback(null, { status: 200 }, JSON.stringify({
-              lrc: { lyric: "[00:01.00]Hello" }, yrc: { lyric: httpYrc },
-            }));
-            return;
-          }
-          callback(null, { status: 404 }, "");
-        } },
-      });
-
-    const word = request(yrc, true);
-    const wordPayload = JSON.parse(word.body);
-    assert.equal(wordPayload.lyrics.syncType, "SYLLABLE_SYNCED", platform);
-    assert.deepEqual(wordPayload.lyrics.lines[0].syllables.map((part) => part.numChars), ["3", "2"], platform);
-    assert.equal(requestedYrcVersion, "0", platform + " requests YRC when enabled");
-    assert.equal(lyricRequests, 1, platform + " one unified lyric request");
-
-    lyricRequests = 0;
-    const line = request("", true);
-    assert.equal(JSON.parse(line.body).lyrics.syncType, "LINE_SYNCED", platform);
-    assert.equal(lyricRequests, 1, platform + " LRC fallback is from the same response");
-
-    lyricRequests = 0;
-    const disabled = request(yrc, false);
-    assert.equal(JSON.parse(disabled.body).lyrics.syncType, "LINE_SYNCED", platform);
-    assert.equal(requestedYrcVersion, "-1", platform + " disables YRC upstream");
-    assert.equal(lyricRequests, 1, platform + " disabled mode still uses one lyric response");
-  });
-
   check(platform + " Spotify auto falls back to Musixmatch but keeps correct plain lyrics", () => {
     let checkedSubtitle = false;
     const out = run(platform + "/spotify/js/spotify_lyrics.js", "", "https://spclient.wg.spotify.com/color-lyrics/v2/track/id?format=json", ["auto", true], {
@@ -2601,9 +2547,9 @@ check("Loon passes arguments in the declared order", () => {
     const names = [...tuple.matchAll(/\$\{(\w+)\}/g)].map((match) => match[1]);
     for (const name of names) assert.ok(new RegExp("^" + name + " = ", "m").test(plugin));
     if (line.includes("spotify_lyrics.js")) {
-      assert.deepEqual(names, ["lyrics_source", "enable_lyrics", "desktop", "lyrics_script", "ignore_han_variants", "sync_plain_lyrics", "lyrics_isrc", "word_lyrics"]);
+      assert.deepEqual(names, ["lyrics_source", "enable_lyrics", "desktop", "lyrics_script", "ignore_han_variants", "sync_plain_lyrics", "lyrics_isrc"]);
     } else {
-      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source", "prefetch_lyrics", "sync_plain_lyrics", "lyrics_isrc", "word_lyrics"]);
+      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source", "prefetch_lyrics", "sync_plain_lyrics", "lyrics_isrc"]);
     }
   }
   // 位置参数：spoof, ads, unlock, lyrics, desktop, source, prefetch, plain, isrc。
@@ -2613,13 +2559,13 @@ check("Loon passes arguments in the declared order", () => {
     b(23, serialize([s(1, "spotify:section:ordinary")])),
   ]))]))]);
   const lyricsUrl = "https://spclient.wg.spotify.com/color-lyrics/v2/track/id?format=json";
-  const args = [true, false, true, true, "ios", "lrclib", false, true, false, true];
+  const args = [true, false, true, true, "ios", "lrclib", false, true, false];
   assert.ok(run("loon/spotify/js/spotify.js", context, "https://spclient.wg.spotify.com/connect-state/v1/player", args).body);
   assert.ok(run("loon/spotify/js/spotify.feed.js", cards, scroll, args, {
     $persistentStore: lyricsStore("0VjIjW4GlUZAMYd2vXMi3b"),
   }).body);
   let requests = 0;
-  const response = run("loon/spotify/js/spotify_lyrics.js", "", lyricsUrl, ["lrclib", true, "ios", "hans", true, true, false, false], {
+  const response = run("loon/spotify/js/spotify_lyrics.js", "", lyricsUrl, ["lrclib", true, "ios", "hans", true, true, false], {
     $response: { status: 404, body: "" },
     $httpClient: { get: (request, callback) => {
       requests++;
@@ -2629,7 +2575,7 @@ check("Loon passes arguments in the declared order", () => {
   assert.ok(response.body);
   assert.ok(requests > 0);
   // 关闭补全歌词后，元数据与歌词卡都放行。
-  const off = [true, false, true, false, "ios", "lrclib", false, true, true, false];
+  const off = [true, false, true, false, "ios", "lrclib"];
   assert.equal(Object.keys(run("loon/spotify/js/spotify.js", context, "https://spclient.wg.spotify.com/connect-state/v1/player", off)).length, 0);
   assert.equal(Object.keys(run("loon/spotify/js/spotify.feed.js", cards, scroll, off)).length, 0);
 });

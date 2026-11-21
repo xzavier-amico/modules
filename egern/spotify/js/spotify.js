@@ -357,11 +357,11 @@ export default async function (ctx) {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
     if (Array.isArray(raw)) {
       // Loon 位置参数：spoof, ads, unlock, enable_lyrics, desktop, lyrics_source,
-      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc, word_lyrics。
+      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc。
       opt = {
         spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2],
         enable_lyrics: raw[3], desktop: raw[4], lyrics_source: raw[5],
-        prefetch_lyrics: raw[6], sync_plain_lyrics: raw[7], lyrics_isrc: raw[8], word_lyrics: raw[9],
+        prefetch_lyrics: raw[6], sync_plain_lyrics: raw[7], lyrics_isrc: raw[8],
       };
     } else if (typeof raw === "string") {
       opt = JSON.parse(raw || "{}") || {};
