@@ -23,7 +23,7 @@ lyrics_script = select,hans,source,type=string,tag=歌词字形,desc=hans 把官
 ignore_han_variants = switch,true,type=boolean,tag=忽略简繁,desc=查歌词时把繁体曲名 / 歌手按简体比较，兼容 Spotify 的繁体元数据与简体曲库；关闭后繁简写法必须完全一致。
 sync_plain_lyrics = switch,true,type=boolean,tag=纯文本伪同步,desc=官方和曲库都只有纯文本歌词时，按歌曲时长把每行均分出时间轴，让它能跟着滚动；关掉则只按纯文本整齐显示（不滚动）。
 lyrics_isrc = switch,true,type=boolean,tag=ISRC 反查,desc=前几轮都没搜到时，用 Deezer 公开接口反查这首歌的 ISRC，再用 ISRC 直查 Musixmatch、并用 Deezer 的规范曲名重查一遍曲库；关掉可少两次请求。
-word_lyrics = switch,false,type=boolean,tag=逐字歌词,desc=优先使用网易云逐字歌词；没有逐字数据时立即回退到逐行歌词。
+word_lyrics = switch,true,type=boolean,tag=逐字歌词,desc=优先使用网易云逐字歌词；没有逐字数据时立即回退到逐行歌词。
 prefetch_lyrics = switch,true,type=boolean,tag=预取下一首,desc=打开 Now Playing 时顺手把队列里下一首的歌词查好写进缓存，切歌后歌词卡 / 歌词页直接命中；不阻塞卡片渲染。
 
 [Rule]
