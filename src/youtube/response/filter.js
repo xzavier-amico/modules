@@ -153,30 +153,6 @@
     return false;
   }
 
-  // 版式名：列表项本身通常没有 renderInfo，得往下钻两层
-  // （item → videoWithContextRenderer → videoRendererContent → renderInfo）。
-  function itemLayouts(node, depth = 0, out = []) {
-    if (!node || "object" != typeof node || ArrayBuffer.isView(node) || depth > 3) return out;
-    const eml = node.renderInfo?.layoutRender?.eml || node.layoutRender?.eml;
-    if (eml) out.push(String(eml).split("|")[0]);
-    for (const key of ["videoWithContextRenderer", "videoRendererContent", "elementRenderer", "content"]) itemLayouts(node[key], depth + 1, out);
-    return out;
-  }
-
-  // 新闻 / 图文卡片的版式名。item 本身可能不带 renderInfo，往下钻几层一起看。
-  function isFeedCardLayout(node) {
-    return itemLayouts(node).some((layout) => FEED_CARD_LAYOUT.test(layout));
-  }
-
-  // 新闻 / 图文卡片：只认已知的版式名和 element 标识。
-  //
-  // 这里**不能**加「结构兜底」（比如「不是视频卡片就删」）：richItemContents 这个
-  // 容器在评论、我的页面、视频信息里都会用到，按结构删会把这些列表项一起误删。
-  // 真机上遇到没被删掉的图文卡片，都应该补版式名 / 标识，而不是放宽结构判断。
-  function isFeedCard(node) {
-    return isFeedCardLayout(node) || hasMarker(node, FEED_CARD_MARKERS);
-  }
-
   const CONTAINER_KEYS = new Set(["richItemContents", "overlays"]);
   const LIST_KEYS = new Set(["richItemContents", "contents", "sectionListSupportedRenderers", "overlayCollections"]);
   const RENDERER_KEYS = new Set([
@@ -406,30 +382,24 @@
       hidePremium: true,
       blockFeedAds: true,
       blockShortsFeed: false,
-      blockFeedCards: false,
       blockMembersOnly: false,
       ...(options || {}),
     };
 
     let changed = rewriteSpeedMenu(root, opts.maxSpeed, opts.hidePremium);
 
-    // isItem：node 是不是 richItemContents 里的那一层卡片本身。
-    // inList 会传给子节点，结构判断只能认 isItem，否则会把卡片内部的
-    // element 节点当成「非视频卡片」连锅端。
-    function visit(node, inList = false, isItem = false) {
+    function visit(node, inList = false) {
       if (!node || "object" != typeof node || ArrayBuffer.isView(node)) return 0;
       if (inList && false !== opts.blockMembersOnly && hasMembersOnlyBadge(node) && isAllMembersOnly(node)) return 1;
 
-      // 列表项：Shorts 卡片 / 新闻图文卡片直接整项删掉。
+      // 列表项：Shorts 卡片直接整项删掉。
       if (inList && false !== opts.blockShortsFeed && (node.reelShelfRenderer || hasMarker(node, SHORTS_MARKERS))) return 1;
-      if (isItem && false !== opts.blockFeedCards && isFeedCard(node)) return 1;
 
-      // 货架：内部命中标识时整块删掉（Shorts 货架 / 新闻帖子货架）。
+      // Shorts 货架命中内部标识时整块删掉。
       // 货架标题是本地化文案，这里不参与判断；标题下的卡片被删空后，
       // 容器空了会顺着上面的空列表逻辑一起删掉。
       if (!inList && node.shelfRenderer) {
         if (false !== opts.blockShortsFeed && hasMarker(node, SHORTS_MARKERS)) return 2;
-        if (false !== opts.blockFeedCards && hasMarker(node, FEED_CARD_MARKERS)) return 2;
       }
       if (false !== opts.blockShortsFeed && node.reelShelfRenderer) return 2;
 
@@ -438,7 +408,7 @@
 
       if (Array.isArray(node)) {
         let result = 0;
-        for (const item of node) result |= 1 & visit(item, inList, false);
+        for (const item of node) result |= 1 & visit(item, inList);
         return result;
       }
 
@@ -471,7 +441,7 @@
         if (!value || "object" != typeof value || ArrayBuffer.isView(value)) continue;
 
         if (!Array.isArray(value)) {
-          const result = visit(value, inList, false);
+          const result = visit(value, inList);
           if (inList && 1 & result) return 1;
           isAd = !!(1 & result) || isAd;
           if (2 & result && RENDERER_KEYS.has(key)) isShortsShelf = true;
@@ -491,7 +461,7 @@
             (isTabs && isStoreTab(item)) ||
             (isAttachments && item.products?.length) ||
             (isPromoted && false !== opts.blockFeedAds && containsBytes(item));
-          const result = drop && !inList ? 0 : visit(item, inList || isContainer, "richItemContents" === key);
+          const result = drop && !inList ? 0 : visit(item, inList || isContainer);
 
           if (inList && 1 & result) return 1;
           isAd = !!(1 & result) || isAd;

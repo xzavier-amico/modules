@@ -383,24 +383,6 @@ export default async function (ctx) {
   // 带货/商品版式。
   const SHOPPING_LAYOUT = /^(?:shopping_|products?_in_video_)[a-z0-9_]+\.eml(?:-js)?(?:-fe)?$/;
 
-  // 推荐流里的非视频卡片：新闻故事、社区图文帖子、轮播等。  // 只认版式名和 element 标识（跟 YTLitePlus / uYou 一样看 element 描述里的
-  // `xxx_shelf.eml` 这类内部名字）——它们是英文资源名，不随界面语言变化。
-  // 标题文案（「重大新闻」/「Top stories」…）一律不匹配：那些是本地化文案，
-  // 既会随语言失效，也会误删恰好叫这个名字的普通视频/货架。
-  // 只认语义明确属于「帖子 / 新闻」的版式名。轮播、方图、大图按钮这些通用版式
-  // 普通视频卡片也在用，别列进来，否则会把首页正常内容一起删掉。
-  const FEED_CARD_LAYOUT = /^(?:post_shelf|news_[a-z0-9_]+|breaking_news[a-z0-9_]*)\.eml(?:-js)?(?:-fe)?$/;
-  const FEED_CARD_MARKERS = [
-    textEncoder.encode("post_shelf"),
-    textEncoder.encode("backstage_post"),
-    textEncoder.encode("post_card"),
-    textEncoder.encode("postMultiImage"),
-    textEncoder.encode("news_card"),
-    textEncoder.encode("news_shelf"),
-    textEncoder.encode("news_story"),
-    textEncoder.encode("breaking_news"),
-  ];
-
   // App 里 Shorts 卡片/货架的 element 标识（uYou / YTLite 用的也是这几个）。
   // 最后一个是 reelWatchEndpoint 的字段标签：混在推荐流里的单个 Shorts 卡片。
   const SHORTS_MARKERS = [
@@ -759,7 +741,6 @@ export default async function (ctx) {
     max_speed: "maxSpeed",
     web: "web",
     // 新增参数放在末尾：12 项旧位置数组走 Object.keys 兜底时，前 12 位顺序不能变。
-    block_feed_cards: "blockFeedCards",
     player_cleanup: "playerCleanup",
     captions_mode: "captionsMode",
     feed_cleanup: "feedCleanup",
@@ -801,7 +782,7 @@ export default async function (ctx) {
     "stripHotHash",
   ];
 
-  // 当前 Loon 位置数组（20 项）。末尾追加的新参数按这个顺序还原；
+  // 当前 Loon 位置数组（19 项）。
   // 旧长度的位置数组走下面按长度分的兼容表。
   const CURRENT_ARG_ORDER = [
     "block_ads",
@@ -816,7 +797,6 @@ export default async function (ctx) {
     "jump_ahead",
     "max_speed",
     "web",
-    "block_feed_cards",
     "player_cleanup",
     "captions_mode",
     "feed_cleanup",
@@ -826,8 +806,9 @@ export default async function (ctx) {
     "music_cleanup",
   ];
 
-  // 只加过 block_feed_cards 的那一版（13 项）：客户端缓存旧插件时仍按它的顺序还原。
-  const FEED_CARDS_ARG_ORDER = CURRENT_ARG_ORDER.slice(0, 13);
+  // 旧 tuple 仍可能包含已移除的 block_feed_cards 槽位，读取时忽略该值。
+  const REMOVED_FEED_CARDS_ARG_ORDER = [...CURRENT_ARG_ORDER.slice(0, 12), "removedBlockFeedCards", ...CURRENT_ARG_ORDER.slice(12)];
+  const FEED_CARDS_ARG_ORDER = [...CURRENT_ARG_ORDER.slice(0, 12), "removedBlockFeedCards"];
 
   // 上一版 Loon 位置数组（12 项，含 on_the_go）。升级插件前客户端可能还缓存着
   // 旧 tuple；按长度和最后一项类型区分，避免把旧数组当成新数组。
@@ -862,14 +843,16 @@ export default async function (ctx) {
       const order =
         raw.length === LEGACY_ARG_ORDER.length
           ? LEGACY_ARG_ORDER
-          : raw.length === PREV_ARG_ORDER.length && "string" == typeof raw[raw.length - 1]
-            ? PREV_ARG_ORDER
-            : raw.length === FEED_CARDS_ARG_ORDER.length
-              ? FEED_CARDS_ARG_ORDER
-              : raw.length === CURRENT_ARG_ORDER.length
-                ? CURRENT_ARG_ORDER
-                : // 其他长度（未来少传/多传）按别名表顺序兜底，前缀位置仍然对得上。
-                  Object.keys(ARG_ALIASES);
+          : raw.length === REMOVED_FEED_CARDS_ARG_ORDER.length
+            ? REMOVED_FEED_CARDS_ARG_ORDER
+            : raw.length === PREV_ARG_ORDER.length && "string" == typeof raw[raw.length - 1]
+              ? PREV_ARG_ORDER
+              : raw.length === FEED_CARDS_ARG_ORDER.length
+                ? FEED_CARDS_ARG_ORDER
+                : raw.length === CURRENT_ARG_ORDER.length
+                  ? CURRENT_ARG_ORDER
+                  : // 其他长度（未来少传/多传）按别名表顺序兜底，前缀位置仍然对得上。
+                    Object.keys(ARG_ALIASES);
       order.forEach((key, index) => {
         if (index < raw.length) out[key] = raw[index];
       });
@@ -1048,9 +1031,8 @@ export default async function (ctx) {
     options.captionLang = /^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/i.test(caption) ? caption : "off";
 
     options.blockAi = asBool(options.blockAi, true);
-    // 这两项插件默认关闭，参数缺失时不能按「非 false 即 true」处理。
+    // 此开关默认关闭，参数缺失时不能按「非 false 即 true」处理。
     options.blockShortsFeed = asBool(options.blockShortsFeed, false);
-    options.blockFeedCards = asBool(options.blockFeedCards, false);
     options.blockMembersOnly = asBool(options.blockMembersOnly, false);
     options.jumpAhead = asBool(options.jumpAhead, true);
     options.youtubeMusic = asBool(options.youtubeMusic, true);

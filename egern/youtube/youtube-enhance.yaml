@@ -31,7 +31,7 @@
 #=======================================================================================
 
 name: "YouTube Enhance"
-description: "去广告 + 字幕翻译 + YouTube Music 去广告/后台播放 + 默认分辨率 + 首页菜单、Shorts 与新闻/图文推荐过滤 + 播放器/评论区清理 + 编码偏好。\n后台播放与 PiP 常开，不再单独设开关。"
+description: "去广告 + 字幕翻译 + YouTube Music 去广告/后台播放 + 默认分辨率 + 首页菜单与 Shorts 推荐过滤 + 播放器/评论区清理 + 编码偏好。\n后台播放与 PiP 常开，不再单独设开关。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"
 manual: "https://github.com/xzavier-amico/modules/blob/master/egern/youtube/README.md"
@@ -69,11 +69,6 @@ env_schema:
   block_shorts_feed:
     name: "移除 Shorts 推荐"
     description: "移除首页、搜索和推荐信息流中的 Shorts 货架，以及混在推荐流里的单个 Shorts 卡片"
-    default_value: "false"
-    options: ["true", "false"]
-  block_feed_cards:
-    name: "移除新闻 / 图文推荐"
-    description: "移除推荐流里的新闻、社区图文帖子等非视频卡片；按版式名 / element 标识判断，不按标题文案"
     default_value: "false"
     options: ["true", "false"]
   youtube_music:
@@ -179,14 +174,14 @@ scriptings:
   - http_request:
       name: "youtube.request.log"
       match: "^https://(?:youtubei\\.googleapis\\.com|(?:www|m)\\.youtube\\.com|music\\.youtube\\.com)/youtubei/v1/log_event(?:\\?.*)?$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.request.js?v=20261120-1"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.request.js?v=20261121-1"
       timeout: 10
 
   # 请求阶段：initplayback / videoplayback 需要请求体。
   - http_request:
       name: "youtube.request.playback"
       match: "^https?://[\\w-]+\\.googlevideo\\.com/(?:initplayback|videoplayback)(?:\\?.*)?$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.request.js?v=20261120-1"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.request.js?v=20261121-1"
       body_required: true
       binary_body: true
       max_size: 8388608
@@ -196,7 +191,7 @@ scriptings:
   - http_response:
       name: "youtube.key"
       match: "^https://(?:youtubei\\.googleapis\\.com|music\\.youtube\\.com)/youtubei/v1/(?:config|log_event)(?:\\?.*)?$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.key.js?v=20261120-1"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.key.js?v=20261121-1"
       body_required: true
       binary_body: true
       max_size: 8388608
@@ -206,7 +201,7 @@ scriptings:
   - http_response:
       name: "youtube.response"
       match: "^https://(?:youtubei\\.googleapis\\.com|(?:www|m)\\.youtube\\.com|music\\.youtube\\.com)/youtubei/v1/(?:navigation/resolve_url|browse|next|player|search|reel/reel_watch_sequence|guide|account/get_setting|get_watch)(?:\\?.*)?$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.response.js?v=20261120-1"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.response.js?v=20261121-1"
       body_required: true
       binary_body: true
       max_size: 8388608
@@ -216,7 +211,7 @@ scriptings:
   - http_response:
       name: "youtube.ump"
       match: "^https?://[\\w-]+\\.googlevideo\\.com/initplayback(?:\\?.*)?$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.response.js?v=20261120-1"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.response.js?v=20261121-1"
       body_required: true
       binary_body: true
       max_size: 5242880

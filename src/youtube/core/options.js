@@ -18,7 +18,6 @@
     max_speed: "maxSpeed",
     web: "web",
     // 新增参数放在末尾：12 项旧位置数组走 Object.keys 兜底时，前 12 位顺序不能变。
-    block_feed_cards: "blockFeedCards",
     player_cleanup: "playerCleanup",
     captions_mode: "captionsMode",
     feed_cleanup: "feedCleanup",
@@ -60,7 +59,7 @@
     "stripHotHash",
   ];
 
-  // 当前 Loon 位置数组（20 项）。末尾追加的新参数按这个顺序还原；
+  // 当前 Loon 位置数组（19 项）。
   // 旧长度的位置数组走下面按长度分的兼容表。
   const CURRENT_ARG_ORDER = [
     "block_ads",
@@ -75,7 +74,6 @@
     "jump_ahead",
     "max_speed",
     "web",
-    "block_feed_cards",
     "player_cleanup",
     "captions_mode",
     "feed_cleanup",
@@ -85,8 +83,9 @@
     "music_cleanup",
   ];
 
-  // 只加过 block_feed_cards 的那一版（13 项）：客户端缓存旧插件时仍按它的顺序还原。
-  const FEED_CARDS_ARG_ORDER = CURRENT_ARG_ORDER.slice(0, 13);
+  // 旧 tuple 仍可能包含已移除的 block_feed_cards 槽位，读取时忽略该值。
+  const REMOVED_FEED_CARDS_ARG_ORDER = [...CURRENT_ARG_ORDER.slice(0, 12), "removedBlockFeedCards", ...CURRENT_ARG_ORDER.slice(12)];
+  const FEED_CARDS_ARG_ORDER = [...CURRENT_ARG_ORDER.slice(0, 12), "removedBlockFeedCards"];
 
   // 上一版 Loon 位置数组（12 项，含 on_the_go）。升级插件前客户端可能还缓存着
   // 旧 tuple；按长度和最后一项类型区分，避免把旧数组当成新数组。
@@ -121,14 +120,16 @@
       const order =
         raw.length === LEGACY_ARG_ORDER.length
           ? LEGACY_ARG_ORDER
-          : raw.length === PREV_ARG_ORDER.length && "string" == typeof raw[raw.length - 1]
-            ? PREV_ARG_ORDER
-            : raw.length === FEED_CARDS_ARG_ORDER.length
-              ? FEED_CARDS_ARG_ORDER
-              : raw.length === CURRENT_ARG_ORDER.length
-                ? CURRENT_ARG_ORDER
-                : // 其他长度（未来少传/多传）按别名表顺序兜底，前缀位置仍然对得上。
-                  Object.keys(ARG_ALIASES);
+          : raw.length === REMOVED_FEED_CARDS_ARG_ORDER.length
+            ? REMOVED_FEED_CARDS_ARG_ORDER
+            : raw.length === PREV_ARG_ORDER.length && "string" == typeof raw[raw.length - 1]
+              ? PREV_ARG_ORDER
+              : raw.length === FEED_CARDS_ARG_ORDER.length
+                ? FEED_CARDS_ARG_ORDER
+                : raw.length === CURRENT_ARG_ORDER.length
+                  ? CURRENT_ARG_ORDER
+                  : // 其他长度（未来少传/多传）按别名表顺序兜底，前缀位置仍然对得上。
+                    Object.keys(ARG_ALIASES);
       order.forEach((key, index) => {
         if (index < raw.length) out[key] = raw[index];
       });
@@ -307,9 +308,8 @@
     options.captionLang = /^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/i.test(caption) ? caption : "off";
 
     options.blockAi = asBool(options.blockAi, true);
-    // 这两项插件默认关闭，参数缺失时不能按「非 false 即 true」处理。
+    // 此开关默认关闭，参数缺失时不能按「非 false 即 true」处理。
     options.blockShortsFeed = asBool(options.blockShortsFeed, false);
-    options.blockFeedCards = asBool(options.blockFeedCards, false);
     options.blockMembersOnly = asBool(options.blockMembersOnly, false);
     options.jumpAhead = asBool(options.jumpAhead, true);
     options.youtubeMusic = asBool(options.youtubeMusic, true);

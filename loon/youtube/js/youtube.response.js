@@ -257,24 +257,6 @@
   // 带货/商品版式。
   const SHOPPING_LAYOUT = /^(?:shopping_|products?_in_video_)[a-z0-9_]+\.eml(?:-js)?(?:-fe)?$/;
 
-  // 推荐流里的非视频卡片：新闻故事、社区图文帖子、轮播等。  // 只认版式名和 element 标识（跟 YTLitePlus / uYou 一样看 element 描述里的
-  // `xxx_shelf.eml` 这类内部名字）——它们是英文资源名，不随界面语言变化。
-  // 标题文案（「重大新闻」/「Top stories」…）一律不匹配：那些是本地化文案，
-  // 既会随语言失效，也会误删恰好叫这个名字的普通视频/货架。
-  // 只认语义明确属于「帖子 / 新闻」的版式名。轮播、方图、大图按钮这些通用版式
-  // 普通视频卡片也在用，别列进来，否则会把首页正常内容一起删掉。
-  const FEED_CARD_LAYOUT = /^(?:post_shelf|news_[a-z0-9_]+|breaking_news[a-z0-9_]*)\.eml(?:-js)?(?:-fe)?$/;
-  const FEED_CARD_MARKERS = [
-    textEncoder.encode("post_shelf"),
-    textEncoder.encode("backstage_post"),
-    textEncoder.encode("post_card"),
-    textEncoder.encode("postMultiImage"),
-    textEncoder.encode("news_card"),
-    textEncoder.encode("news_shelf"),
-    textEncoder.encode("news_story"),
-    textEncoder.encode("breaking_news"),
-  ];
-
   // App 里 Shorts 卡片/货架的 element 标识（uYou / YTLite 用的也是这几个）。
   // 最后一个是 reelWatchEndpoint 的字段标签：混在推荐流里的单个 Shorts 卡片。
   const SHORTS_MARKERS = [
@@ -633,7 +615,6 @@
     max_speed: "maxSpeed",
     web: "web",
     // 新增参数放在末尾：12 项旧位置数组走 Object.keys 兜底时，前 12 位顺序不能变。
-    block_feed_cards: "blockFeedCards",
     player_cleanup: "playerCleanup",
     captions_mode: "captionsMode",
     feed_cleanup: "feedCleanup",
@@ -675,7 +656,7 @@
     "stripHotHash",
   ];
 
-  // 当前 Loon 位置数组（20 项）。末尾追加的新参数按这个顺序还原；
+  // 当前 Loon 位置数组（19 项）。
   // 旧长度的位置数组走下面按长度分的兼容表。
   const CURRENT_ARG_ORDER = [
     "block_ads",
@@ -690,7 +671,6 @@
     "jump_ahead",
     "max_speed",
     "web",
-    "block_feed_cards",
     "player_cleanup",
     "captions_mode",
     "feed_cleanup",
@@ -700,8 +680,9 @@
     "music_cleanup",
   ];
 
-  // 只加过 block_feed_cards 的那一版（13 项）：客户端缓存旧插件时仍按它的顺序还原。
-  const FEED_CARDS_ARG_ORDER = CURRENT_ARG_ORDER.slice(0, 13);
+  // 旧 tuple 仍可能包含已移除的 block_feed_cards 槽位，读取时忽略该值。
+  const REMOVED_FEED_CARDS_ARG_ORDER = [...CURRENT_ARG_ORDER.slice(0, 12), "removedBlockFeedCards", ...CURRENT_ARG_ORDER.slice(12)];
+  const FEED_CARDS_ARG_ORDER = [...CURRENT_ARG_ORDER.slice(0, 12), "removedBlockFeedCards"];
 
   // 上一版 Loon 位置数组（12 项，含 on_the_go）。升级插件前客户端可能还缓存着
   // 旧 tuple；按长度和最后一项类型区分，避免把旧数组当成新数组。
@@ -736,14 +717,16 @@
       const order =
         raw.length === LEGACY_ARG_ORDER.length
           ? LEGACY_ARG_ORDER
-          : raw.length === PREV_ARG_ORDER.length && "string" == typeof raw[raw.length - 1]
-            ? PREV_ARG_ORDER
-            : raw.length === FEED_CARDS_ARG_ORDER.length
-              ? FEED_CARDS_ARG_ORDER
-              : raw.length === CURRENT_ARG_ORDER.length
-                ? CURRENT_ARG_ORDER
-                : // 其他长度（未来少传/多传）按别名表顺序兜底，前缀位置仍然对得上。
-                  Object.keys(ARG_ALIASES);
+          : raw.length === REMOVED_FEED_CARDS_ARG_ORDER.length
+            ? REMOVED_FEED_CARDS_ARG_ORDER
+            : raw.length === PREV_ARG_ORDER.length && "string" == typeof raw[raw.length - 1]
+              ? PREV_ARG_ORDER
+              : raw.length === FEED_CARDS_ARG_ORDER.length
+                ? FEED_CARDS_ARG_ORDER
+                : raw.length === CURRENT_ARG_ORDER.length
+                  ? CURRENT_ARG_ORDER
+                  : // 其他长度（未来少传/多传）按别名表顺序兜底，前缀位置仍然对得上。
+                    Object.keys(ARG_ALIASES);
       order.forEach((key, index) => {
         if (index < raw.length) out[key] = raw[index];
       });
@@ -922,9 +905,8 @@
     options.captionLang = /^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/i.test(caption) ? caption : "off";
 
     options.blockAi = asBool(options.blockAi, true);
-    // 这两项插件默认关闭，参数缺失时不能按「非 false 即 true」处理。
+    // 此开关默认关闭，参数缺失时不能按「非 false 即 true」处理。
     options.blockShortsFeed = asBool(options.blockShortsFeed, false);
-    options.blockFeedCards = asBool(options.blockFeedCards, false);
     options.blockMembersOnly = asBool(options.blockMembersOnly, false);
     options.jumpAhead = asBool(options.jumpAhead, true);
     options.youtubeMusic = asBool(options.youtubeMusic, true);
@@ -1714,30 +1696,6 @@
     return false;
   }
 
-  // 版式名：列表项本身通常没有 renderInfo，得往下钻两层
-  // （item → videoWithContextRenderer → videoRendererContent → renderInfo）。
-  function itemLayouts(node, depth = 0, out = []) {
-    if (!node || "object" != typeof node || ArrayBuffer.isView(node) || depth > 3) return out;
-    const eml = node.renderInfo?.layoutRender?.eml || node.layoutRender?.eml;
-    if (eml) out.push(String(eml).split("|")[0]);
-    for (const key of ["videoWithContextRenderer", "videoRendererContent", "elementRenderer", "content"]) itemLayouts(node[key], depth + 1, out);
-    return out;
-  }
-
-  // 新闻 / 图文卡片的版式名。item 本身可能不带 renderInfo，往下钻几层一起看。
-  function isFeedCardLayout(node) {
-    return itemLayouts(node).some((layout) => FEED_CARD_LAYOUT.test(layout));
-  }
-
-  // 新闻 / 图文卡片：只认已知的版式名和 element 标识。
-  //
-  // 这里**不能**加「结构兜底」（比如「不是视频卡片就删」）：richItemContents 这个
-  // 容器在评论、我的页面、视频信息里都会用到，按结构删会把这些列表项一起误删。
-  // 真机上遇到没被删掉的图文卡片，都应该补版式名 / 标识，而不是放宽结构判断。
-  function isFeedCard(node) {
-    return isFeedCardLayout(node) || hasMarker(node, FEED_CARD_MARKERS);
-  }
-
   const CONTAINER_KEYS = new Set(["richItemContents", "overlays"]);
   const LIST_KEYS = new Set(["richItemContents", "contents", "sectionListSupportedRenderers", "overlayCollections"]);
   const RENDERER_KEYS = new Set([
@@ -1967,30 +1925,24 @@
       hidePremium: true,
       blockFeedAds: true,
       blockShortsFeed: false,
-      blockFeedCards: false,
       blockMembersOnly: false,
       ...(options || {}),
     };
 
     let changed = rewriteSpeedMenu(root, opts.maxSpeed, opts.hidePremium);
 
-    // isItem：node 是不是 richItemContents 里的那一层卡片本身。
-    // inList 会传给子节点，结构判断只能认 isItem，否则会把卡片内部的
-    // element 节点当成「非视频卡片」连锅端。
-    function visit(node, inList = false, isItem = false) {
+    function visit(node, inList = false) {
       if (!node || "object" != typeof node || ArrayBuffer.isView(node)) return 0;
       if (inList && false !== opts.blockMembersOnly && hasMembersOnlyBadge(node) && isAllMembersOnly(node)) return 1;
 
-      // 列表项：Shorts 卡片 / 新闻图文卡片直接整项删掉。
+      // 列表项：Shorts 卡片直接整项删掉。
       if (inList && false !== opts.blockShortsFeed && (node.reelShelfRenderer || hasMarker(node, SHORTS_MARKERS))) return 1;
-      if (isItem && false !== opts.blockFeedCards && isFeedCard(node)) return 1;
 
-      // 货架：内部命中标识时整块删掉（Shorts 货架 / 新闻帖子货架）。
+      // Shorts 货架命中内部标识时整块删掉。
       // 货架标题是本地化文案，这里不参与判断；标题下的卡片被删空后，
       // 容器空了会顺着上面的空列表逻辑一起删掉。
       if (!inList && node.shelfRenderer) {
         if (false !== opts.blockShortsFeed && hasMarker(node, SHORTS_MARKERS)) return 2;
-        if (false !== opts.blockFeedCards && hasMarker(node, FEED_CARD_MARKERS)) return 2;
       }
       if (false !== opts.blockShortsFeed && node.reelShelfRenderer) return 2;
 
@@ -1999,7 +1951,7 @@
 
       if (Array.isArray(node)) {
         let result = 0;
-        for (const item of node) result |= 1 & visit(item, inList, false);
+        for (const item of node) result |= 1 & visit(item, inList);
         return result;
       }
 
@@ -2032,7 +1984,7 @@
         if (!value || "object" != typeof value || ArrayBuffer.isView(value)) continue;
 
         if (!Array.isArray(value)) {
-          const result = visit(value, inList, false);
+          const result = visit(value, inList);
           if (inList && 1 & result) return 1;
           isAd = !!(1 & result) || isAd;
           if (2 & result && RENDERER_KEYS.has(key)) isShortsShelf = true;
@@ -2052,7 +2004,7 @@
             (isTabs && isStoreTab(item)) ||
             (isAttachments && item.products?.length) ||
             (isPromoted && false !== opts.blockFeedAds && containsBytes(item));
-          const result = drop && !inList ? 0 : visit(item, inList || isContainer, "richItemContents" === key);
+          const result = drop && !inList ? 0 : visit(item, inList || isContainer);
 
           if (inList && 1 & result) return 1;
           isAd = !!(1 & result) || isAd;
@@ -2263,7 +2215,7 @@
   //
   // www.youtube.com / m.youtube.com / music.youtube.com 的 youtubei 响应是 JSON，
   // 字段名和 protobuf 的 lowerCamelCase 属性一致。这里只做保守的结构删除：
-  // 认识的广告 renderer、播放器广告字段、Shorts 货架、新闻/图文卡片、会员徽章、AI 控件。
+  // 认识的广告 renderer、播放器广告字段、Shorts 货架、会员徽章、AI 控件。
   // 结构对不上就原样放行，最差是某个开关不生效，不会把页面改坏。
   //=====================================================================================
 
@@ -2301,17 +2253,6 @@
     "productSummaryRenderer",
     "paidContentOverlayRenderer",
     "paidContentOverlayViewModel",
-  ]);
-
-  // 推荐流里的新闻故事 / 社区图文帖子等非视频卡片。
-  const JSON_FEED_CARD_RENDERERS = new Set([
-    "postRenderer",
-    "backstagePostRenderer",
-    "sharedPostRenderer",
-    "postMultiImageRenderer",
-    "newsRenderer",
-    "breakingNewsRenderer",
-    "newsShelfRenderer",
   ]);
 
   const JSON_PLAYER_AD_FIELDS = new Set(["adPlacements", "playerAds", "adSlots", "adBreakHeartbeatParams"]);
@@ -2421,7 +2362,6 @@
     ) {
       return true;
     }
-    if (false !== options.blockFeedCards && jsonHasAnyKey(node, JSON_FEED_CARD_RENDERERS)) return true;
     if (false !== options.blockContinueWatching && jsonHasResumeOverlay(node)) return true;
     if (false !== options.blockLiveCards && jsonIsLiveCard(node)) return true;
     if (false !== options.blockMembersOnly) {
@@ -2434,7 +2374,7 @@
     return false !== options.blockFeedAds && true === node.adClientParams?.isAd;
   }
 
-  // 从上往下剥单键包装，命中广告 / Shorts / 新闻图文 / 会员视频就整项删掉。
+  // 从上往下剥单键包装，命中广告 / Shorts / 会员视频就整项删掉。
   function jsonIsCardItem(node, options) {
     let current = node;
     for (let depth = 0; current && "object" == typeof current && !Array.isArray(current) && depth < 6; depth++) {
@@ -2512,11 +2452,6 @@
           continue;
         }
         if (false !== options.blockShortsFeed && ("reelShelfRenderer" === key || "shortsLockupViewModel" === key)) {
-          delete node[key];
-          changed = true;
-          continue;
-        }
-        if (false !== options.blockFeedCards && JSON_FEED_CARD_RENDERERS.has(key)) {
           delete node[key];
           changed = true;
           continue;

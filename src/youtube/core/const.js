@@ -32,24 +32,6 @@
   // 带货/商品版式。
   const SHOPPING_LAYOUT = /^(?:shopping_|products?_in_video_)[a-z0-9_]+\.eml(?:-js)?(?:-fe)?$/;
 
-  // 推荐流里的非视频卡片：新闻故事、社区图文帖子、轮播等。  // 只认版式名和 element 标识（跟 YTLitePlus / uYou 一样看 element 描述里的
-  // `xxx_shelf.eml` 这类内部名字）——它们是英文资源名，不随界面语言变化。
-  // 标题文案（「重大新闻」/「Top stories」…）一律不匹配：那些是本地化文案，
-  // 既会随语言失效，也会误删恰好叫这个名字的普通视频/货架。
-  // 只认语义明确属于「帖子 / 新闻」的版式名。轮播、方图、大图按钮这些通用版式
-  // 普通视频卡片也在用，别列进来，否则会把首页正常内容一起删掉。
-  const FEED_CARD_LAYOUT = /^(?:post_shelf|news_[a-z0-9_]+|breaking_news[a-z0-9_]*)\.eml(?:-js)?(?:-fe)?$/;
-  const FEED_CARD_MARKERS = [
-    textEncoder.encode("post_shelf"),
-    textEncoder.encode("backstage_post"),
-    textEncoder.encode("post_card"),
-    textEncoder.encode("postMultiImage"),
-    textEncoder.encode("news_card"),
-    textEncoder.encode("news_shelf"),
-    textEncoder.encode("news_story"),
-    textEncoder.encode("breaking_news"),
-  ];
-
   // App 里 Shorts 卡片/货架的 element 标识（uYou / YTLite 用的也是这几个）。
   // 最后一个是 reelWatchEndpoint 的字段标签：混在推荐流里的单个 Shorts 卡片。
   const SHORTS_MARKERS = [

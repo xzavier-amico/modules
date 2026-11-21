@@ -1,6 +1,6 @@
 # YouTube Enhance — Egern 版
 
-**Egern** 模块：屏蔽广告、字幕翻译、YouTube Music 去广告与后台播放、默认分辨率、首页菜单、Shorts 与新闻/图文推荐过滤；支持 www / m / YouTube Music 网页版。
+**Egern** 模块：屏蔽广告、字幕翻译、YouTube Music 去广告与后台播放、默认分辨率、首页菜单与 Shorts 推荐过滤；支持 www / m / YouTube Music 网页版。
 
 脚本按请求阶段拆成 `js/youtube.request.js` / `js/youtube.key.js` / `js/youtube.response.js`，入口是 Egern 原生的
 `export default async function (ctx)`，参数经 `env_schema` → `ctx.env` 传入。构建时外层会套一层
@@ -56,7 +56,7 @@ modules:
 
 ## 参数
 
-共 20 个参数。广告、画质、首页菜单、播放器 / 信息流 / 播放页清理都做了聚合；后台播放、PiP、热更新哈希这些不再单独给开关，脚本常开。
+共 19 个参数。广告、画质、首页菜单、播放器 / 信息流 / 播放页清理都做了聚合；后台播放、PiP、热更新哈希这些不再单独给开关，脚本常开。
 
 ### 广告与 AI
 
@@ -83,7 +83,6 @@ modules:
 | --- | --- | --- |
 | `home_menu` | 空 | 首页/侧栏菜单保留项（多选，逗号分隔）。留空=旧默认（仅隐藏上传）；`all`=全部保留；`none`=全部隐藏；`-shorts`=保留全部但隐藏 Shorts；`upload,shorts`=只保留这两项 |
 | `block_shorts_feed` | false | 移除首页、搜索和推荐信息流中的 Shorts 货架，以及混在推荐流里的单个 Shorts 卡片 |
-| `block_feed_cards` | false | 移除推荐流里的新闻、社区图文帖子等非视频卡片。只认已知的版式名和 element 标识（不看标题文案）；网页版另按 renderer 名单删，并连 `richItemRenderer` 包装一起删 |
 | `home_cleanup` | standard | 首页内容清理：`standard`=Playables；`all`=再加竖屏直播；`off`=不清理 |
 | `block_members_only` | false | 从首页、频道页等列表中移除需要频道会员才能观看的视频 |
 | `feed_cleanup` | off | 信息流清理（网页版）：`standard`=去掉「继续观看」卡片与顶部筛选条；`all`=再去掉直播 / 首映卡片 |
@@ -106,9 +105,7 @@ modules:
 - `background_play`、`pip`、`strip_hot_hash` 已从参数表移除，脚本始终按开启处理。
 - On-the-go 依赖 YouTube Premium 的服务端校验，注入的入口点开仍会提示开通 Premium，已整体移除；`jump_ahead` 与原生章节显示不受影响。
 - `block_members_only` 只从列表页移除会员专属视频，不会解锁播放；网页版按徽章的 `BADGE_STYLE_TYPE_MEMBERS_ONLY` 枚举判定，和界面语言无关；原生 App 的 protobuf 里只有本地化徽章文字，脚本按 `会员专享` / `Members only` / 日文 / 韩文等几种文案精确匹配，其他语言会漏判，标题恰好同名的视频也可能被误删。
-- `block_feed_cards` 认的是版式名和 element 标识（如 `post_shelf` / `news_story` 这类内部资源名），不按「重大新闻」等标题文案判断：文案会随界面语言变化，也会误删恰好叫这个名字的普通视频或货架。货架里的卡片被删空后整块货架会一起消失。
-- 原生端的图文卡片如果版式名和 element 标识都不在名单里，就删不掉：richItemContents 这个容器在评论区、我的页面、视频信息里都会用到，按「不是视频卡片就删」的结构判断会把那些列表项一起误删（曾经踩过），所以宁可漏删。要收口只能先拿到真实的 renderer 名字再补名单。
-- 网页版响应是 JSON，脚本走单独的保守过滤：只删已知广告 renderer、播放器广告字段、Shorts 货架、新闻/图文卡片、会员专属视频与 AI/商店控件；卡片被包在 `richItemRenderer` 里时连包装一起删，不会留下空白卡片位；画质只裁剪 `streamingData.adaptiveFormats`，不改渐进式 `formats` 和音频。
+- 网页版响应是 JSON，脚本走单独的保守过滤：只删已知广告 renderer、播放器广告字段、Shorts 货架、会员专属视频与 AI/商店控件；画质只裁剪 `streamingData.adaptiveFormats`，不改渐进式 `formats` 和音频。
 - 网页版不处理网页 HTML 本身，也不改直播聊天 / 弹幕；网页播放页如果某些广告只在 HTML 里，脚本看不到。
 - 脚本按请求阶段拆分，独立维护，不自动同步外部改动；外部实现若有变化，需要人工对比后再决定是否跟进。
 - 三端都生效的：`captions_mode`、`video_codec`、`watch_cleanup`（评论区按 `comment-item-section` 标识、相关视频按播放器浮层字段）。

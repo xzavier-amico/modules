@@ -3,7 +3,7 @@
   //
   // www.youtube.com / m.youtube.com / music.youtube.com 的 youtubei 响应是 JSON，
   // 字段名和 protobuf 的 lowerCamelCase 属性一致。这里只做保守的结构删除：
-  // 认识的广告 renderer、播放器广告字段、Shorts 货架、新闻/图文卡片、会员徽章、AI 控件。
+  // 认识的广告 renderer、播放器广告字段、Shorts 货架、会员徽章、AI 控件。
   // 结构对不上就原样放行，最差是某个开关不生效，不会把页面改坏。
   //=====================================================================================
 
@@ -41,17 +41,6 @@
     "productSummaryRenderer",
     "paidContentOverlayRenderer",
     "paidContentOverlayViewModel",
-  ]);
-
-  // 推荐流里的新闻故事 / 社区图文帖子等非视频卡片。
-  const JSON_FEED_CARD_RENDERERS = new Set([
-    "postRenderer",
-    "backstagePostRenderer",
-    "sharedPostRenderer",
-    "postMultiImageRenderer",
-    "newsRenderer",
-    "breakingNewsRenderer",
-    "newsShelfRenderer",
   ]);
 
   const JSON_PLAYER_AD_FIELDS = new Set(["adPlacements", "playerAds", "adSlots", "adBreakHeartbeatParams"]);
@@ -161,7 +150,6 @@
     ) {
       return true;
     }
-    if (false !== options.blockFeedCards && jsonHasAnyKey(node, JSON_FEED_CARD_RENDERERS)) return true;
     if (false !== options.blockContinueWatching && jsonHasResumeOverlay(node)) return true;
     if (false !== options.blockLiveCards && jsonIsLiveCard(node)) return true;
     if (false !== options.blockMembersOnly) {
@@ -174,7 +162,7 @@
     return false !== options.blockFeedAds && true === node.adClientParams?.isAd;
   }
 
-  // 从上往下剥单键包装，命中广告 / Shorts / 新闻图文 / 会员视频就整项删掉。
+  // 从上往下剥单键包装，命中广告 / Shorts / 会员视频就整项删掉。
   function jsonIsCardItem(node, options) {
     let current = node;
     for (let depth = 0; current && "object" == typeof current && !Array.isArray(current) && depth < 6; depth++) {
@@ -252,11 +240,6 @@
           continue;
         }
         if (false !== options.blockShortsFeed && ("reelShelfRenderer" === key || "shortsLockupViewModel" === key)) {
-          delete node[key];
-          changed = true;
-          continue;
-        }
-        if (false !== options.blockFeedCards && JSON_FEED_CARD_RENDERERS.has(key)) {
           delete node[key];
           changed = true;
           continue;
