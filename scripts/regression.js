@@ -2368,7 +2368,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
 
   check(platform + " Spotify strips decorative parentheses and retries the title", () => {
     const getCalls = [];
-    const title = "晚秋（电影《晚秋》主题曲）";
+    const title = "晚秋（电影（晚秋）主题曲）";
     const out = run(platform + "/spotify/js/spotify_lyrics.js", "", "https://spclient.wg.spotify.com/color-lyrics/v2/track/id?format=json", ["lrclib", true], {
       $response: { status: 404 },
       $httpClient: { get: (request, callback) => {

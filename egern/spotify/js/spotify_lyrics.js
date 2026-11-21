@@ -2209,6 +2209,36 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     return DJ_VERSION_MARK.test(String(title));
   }
 
+  function stripDecorativeParentheses(value) {
+    const text = String(value || "");
+    const pairs = { "(": ")", "（": "）" };
+    const stack = [];
+    const remove = [];
+    for (let i = 0; i < text.length; i += 1) {
+      const char = text[i];
+      if (pairs[char]) {
+        stack.push({ start: i, close: pairs[char] });
+        continue;
+      }
+      if (!stack.length || char !== stack[stack.length - 1].close) continue;
+      const group = stack.pop();
+      if (!stack.length) {
+        const whole = text.slice(group.start, i + 1);
+        const inner = text.slice(group.start + 1, i);
+        if (!SONG_TITLE_VERSION_BRACKET.test(inner)) remove.push([group.start, i + 1]);
+        SONG_TITLE_VERSION_BRACKET.lastIndex = 0;
+      }
+    }
+    if (!remove.length) return text;
+    let out = "";
+    let start = 0;
+    for (const range of remove) {
+      out += text.slice(start, range[0]) + " ";
+      start = range[1];
+    }
+    return out + text.slice(start);
+  }
+
   // 去掉 DJ 版本标记后再比较曲名：Spotify 写 "Song (DJ版)"，曲库可能只写
   // "Song"；括号里是 "DJ Snake Remix" 这类制作人署名时不会误删。
   function stripDjVersion(title) {
@@ -2235,8 +2265,7 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     let text = stripDjVersion(String(title));
     text = text.replace(SONG_TITLE_DASH_FEAT, "").replace(SONG_TITLE_DASH_EDITION, "");
     text = text.replace(SONG_TITLE_BRACKET_NOISE, "");
-    text = text.replace(SONG_TITLE_BRACKET_GROUP, (whole, inner) =>
-      SONG_TITLE_VERSION_BRACKET.test(inner) ? whole : " ");
+    text = stripDecorativeParentheses(text);
     return text.replace(/\s+/g, " ").trim() || String(title);
   }
 

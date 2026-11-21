@@ -74,9 +74,9 @@ response if ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\
 
 # 官方有歌词时按 lyrics_script 转简体（默认），没有时用第三方歌词补全。
 # 不启用 requires_body：官方 404 时没有 body，脚本仍需执行。
-response if ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/color-lyrics\/v\d\/track\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_lyrics.js?v=20261121-1", {${lyrics_source}, ${enable_lyrics}, ${desktop}, ${lyrics_script}, ${ignore_han_variants}, ${sync_plain_lyrics}, ${lyrics_isrc}}) with enable=${enable_lyrics}, binary_body_mode=true, tag="spotify.mac.lyrics", timeout=30
+response if ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/color-lyrics\/v\d\/track\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_lyrics.js?v=20261121-2", {${lyrics_source}, ${enable_lyrics}, ${desktop}, ${lyrics_script}, ${ignore_han_variants}, ${sync_plain_lyrics}, ${lyrics_isrc}}) with enable=${enable_lyrics}, binary_body_mode=true, tag="spotify.mac.lyrics", timeout=30
 # 请求阶段：缓存命中直接返回；桌面端未命中仍由响应阶段处理。
-request if ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/color-lyrics\/v\d\/track\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_lyrics.js?v=20261121-1", {${lyrics_source}, ${enable_lyrics}, ${desktop}, ${lyrics_script}, ${ignore_han_variants}, ${sync_plain_lyrics}, ${lyrics_isrc}}) with enable=${enable_lyrics}, binary_body_mode=true, tag="spotify.mac.lyrics.req", timeout=30
+request if ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/color-lyrics\/v\d\/track\//i then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/spotify/js/spotify_lyrics.js?v=20261121-2", {${lyrics_source}, ${enable_lyrics}, ${desktop}, ${lyrics_script}, ${ignore_han_variants}, ${sync_plain_lyrics}, ${lyrics_isrc}}) with enable=${enable_lyrics}, binary_body_mode=true, tag="spotify.mac.lyrics.req", timeout=30
 
 [MitM]
 # 桌面端与 iOS 共用 spclient 主机；若出现跳歌，可尝试排除 guc3。
