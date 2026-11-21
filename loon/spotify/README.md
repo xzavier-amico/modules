@@ -27,7 +27,7 @@
 | `ignore_han_variants` | true | 查歌词时把繁体曲名 / 歌手按简体比较；关闭后繁简写法必须完全一致 |
 | `sync_plain_lyrics` | true | 只有纯文本歌词时按歌曲时长把每行均分出时间轴（伪同步），让它能跟着滚动；关闭则保持整屏纯文本 |
 | `lyrics_isrc` | true | 前面几轮都搜不到时，用 Deezer 公开接口反查 ISRC，再用 ISRC 直查 Musixmatch、并用 Deezer 的规范曲名重查一遍曲库 |
-| `word_lyrics` | true | 优先使用网易云 YRC 逐字时间轴；逐字数据缺失或格式无效时，同一响应里的 LRC 逐行歌词立即回退 |
+| `word_lyrics` | false | 优先使用网易云 YRC 逐字时间轴；逐字数据缺失或格式无效时，同一响应里的 LRC 逐行歌词立即回退 |
 | `prefetch_lyrics` | true | 打开 Now Playing 时顺手把队列里下一首的歌词查好写进缓存，切歌后直接命中；fire-and-forget，不阻塞卡片渲染 |
 
 ## 时区

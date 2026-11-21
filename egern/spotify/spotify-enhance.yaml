@@ -76,9 +76,9 @@ env_schema:
     default_value: "true"
     options: ["true", "false"]
   word_lyrics:
-    name: "逐字歌词"
+      name: "逐字歌词"
     description: "优先使用网易云逐字歌词；缺少逐字数据时立即回退到同一响应里的逐行歌词"
-    default_value: "true"
+    default_value: "false"
     options: ["true", "false"]
   prefetch_lyrics:
     name: "预取下一首"
