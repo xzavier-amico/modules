@@ -38,12 +38,12 @@
 ## 歌词
 
 1. `js/spotify.js` 把曲目元数据里的 `has_lyrics` 改为 `true`，客户端才会请求 `color-lyrics`；同时把同一条响应里的曲名、歌手、时长存进本地存储（`spotify.track.meta.v2`，最多 24 首）。
-2. `js/spotify_lyrics.js` 处理 `color-lyrics/v{N}/track/{id}`：官方有歌词时按 `lyrics_script` 转简体（默认）后放行；404 / 空歌词时先读上面那份元数据（零外部请求），没有命中才退回公开的 oEmbed / embed 页面，再用第三方歌词合成同结构响应。
+2. `js/spotify_lyrics.js` 处理 `color-lyrics/v{N}/track/{id}`：iOS 缓存未命中时由 Loon 请求脚本并行代发官方请求与第三方查询，同步歌词谁先到就先返回；官方歌词仍按 `lyrics_script` 转简体。桌面端保留官方响应后补全流程，避免改变 CEF 的 CORS 行为。查歌词优先读客户端元数据缓存（零额外请求），没有命中才退回公开的 oEmbed / embed 页面。
 3. 合成结果写入 `spotify.lyrics.cache.v2`：同一首歌再次请求时直接命中，不再重复查源。命中缓存保留 24 小时；查不到或超时不缓存，下次会重新查询；最多 24 首（总大小仍限制在 400KB）。换了歌词源（`auto` ↔ `lrclib`）时会按曲目 id 复用旧缓存。从 oEmbed / embed 拿到的曲名、歌手与封面色也会写回 `spotify.track.meta.v2`。
 
 合成规则：
 
-- `auto` 同时请求网易云、QQ、LRCLIB、Musixmatch，首个通过歌名 / 歌手 / Live 校验的同步歌词胜出；Musixmatch 是 Spotify 的官方歌词上游、能用 `track_spotify_id` 直查，排在最后只做兜底。只有纯文本时等全部结束，或在 5 秒后先发纯文本，避免一直等到总超时。
+- `auto` 同时请求网易云、QQ、LRCLIB、Musixmatch，首个通过歌名 / 歌手 / Live 校验的同步歌词胜出；Musixmatch 是 Spotify 的官方歌词上游、能用 `track_spotify_id` 直查，排在最后只做兜底。iOS 上它与官方请求并行竞速。只有纯文本时继续等同步歌词或官方结果，并保留原有超时兜底。
 - 候选请求全部并行：LRCLIB 对完整曲名和去掉装饰括号后的曲名各发 `get` + `search`；网易云 / QQ 搜索后同时请求排名前 3 的候选歌词。任一同步歌词先通过校验就直接返回。
 - 歌名比较会忽略 `feat.` / `ft.` / `with` / `prod.`、`Remastered 2011` / `2011 Remaster`、`Radio Edit`、`Single Version`、`Album Version`、`Bonus Track`、`Deluxe Edition`、`Explicit` / `Clean` 等版本后缀；歌手按 `feat.` / `ft.` / `with` 和多歌手分隔符拆分，任意一位匹配即可。
 - 曲名 / 歌手比较默认做繁→简折叠（OpenCC t2s 表）：Spotify 的中文元数据常是繁体，网易云 / QQ 返回简体，不折叠时「說謊」对不上「说谎」、「周杰倫」对不上「周杰伦」。关闭 `ignore_han_variants` 后恢复逐字比较。
@@ -55,7 +55,7 @@
 - 只有纯文本歌词时（`sync_plain_lyrics`），按歌曲时长把每行均分出时间轴再返回：从第 1.2 秒排到最后 4 秒，`syncType` 仍是 `LINE_SYNCED`，所以歌词页能跟着滚。这是编出来的时间轴，只用来兜底 —— 有真正的同步歌词时一律以真歌词为准（伪同步不会让这一轮提前收工）。时长未知或不足 20 秒时不编，保持 `UNSYNCED`。
 - 前面几轮都落空时（`lyrics_isrc`），用 Deezer 公开 API（无需 token）按曲名 + 歌手反查这首歌，拿到规范曲名 / 歌手 / 时长 / ISRC 后同时打两枪：① Musixmatch 用 `track_isrc` 直查字幕，完全不依赖名字匹配；② 用 Deezer 的规范写法把 LRCLIB / 网易云 / QQ 再查一遍。这一轮通常已经过了客户端 4.5 秒窗口，结果是写进缓存（下次打开歌词页 / 卡片直接命中）。
 - 第三方请求超时、429、5xx 或所有源都没结果时都不写缓存，下次打开会立即重试。
-- 歌词页总时限 4.5 秒（从官方响应到达开始算），单个外部请求 4 秒；纯文本在 3.5 秒兜底。打开 Now Playing 时 feed 可能刚把 scrollsita 里的曲名 / 歌手写进缓存，歌词脚本会每 100ms 看一次元数据、最多 2 秒，命中就直接查歌词，不必等 open.spotify.com。scrollsita 补卡**不等歌词**：打开 Now Playing 时客户端先渲染列表，晚到的响应只更新模型、不重绘，所以收到 scroll 就立刻补卡，内容由随后的 color-lyrics 响应填充。
+- 歌词查询总时限 4.5 秒；iOS 竞速从请求阶段开始计时，桌面端从官方响应到达后开始计时。单个外部请求默认 4 秒；纯文本保留 3.5 秒兜底窗口。打开 Now Playing 时 feed 可能刚把 scrollsita 里的曲名 / 歌手写进缓存，歌词脚本会每 100ms 看一次元数据、最多 2 秒，命中就直接查歌词，不必等 open.spotify.com。scrollsita 补卡**不等歌词**：打开 Now Playing 时客户端先渲染列表，晚到的响应只更新模型、不重绘，所以收到 scroll 就立刻补卡，内容由随后的 color-lyrics 响应填充。
 - protobuf 补齐官方字段（含歌词卡使用的 `previewLines`），并将歌词额度限制归一为可显示状态。
 - 配色：未激活行黑字，当前 / 已唱行白字；命中元数据缓存时不再请求 embed，用缓存里的封面色，没有缓存时用默认中灰底。
 - scrollsita 列表缺少歌词 section 时立刻补一格，补在最前面；官方已有则不重复补；列表形状认不出来（没有 section id / 曲目引用，body 里也没有当前曲目的 URI）时原样放行，不往里插，避免把整包结构写坏后出现「整页空白」。

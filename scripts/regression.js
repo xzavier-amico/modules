@@ -444,6 +444,61 @@ check("Spotify request phase passes through when the cache is empty", () => {
   }
 });
 
+check("Loon Spotify request phase returns official lyrics directly", () => {
+  const id = "0VjIjW4GlUZAMYd2vXMi3b";
+  const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json";
+  const official = JSON.stringify({ lyrics: { lines: [{ startTimeMs: "0", words: "official" }], restriction: { reason: "monthlyLimitReached" }, language: "en" } });
+  const out = run("loon/spotify/js/spotify_lyrics.js", "", url, ["auto", true], {
+    $request: { url, method: "GET", headers: { Authorization: "Bearer test", Accept: "application/json" } },
+    $response: undefined,
+    $loon: "iPhone",
+    $persistentStore: { read: () => null, write: () => true },
+    $httpClient: { get: (options, callback) => {
+      assert.equal(options.url, url);
+      assert.equal(options.headers.Authorization, "Bearer test");
+      callback(null, { status: 200, headers: { "Content-Type": "application/json", "Content-Length": "999", "Content-Encoding": "gzip" } }, official);
+    } },
+  });
+  assert.equal(out.response.status, 200);
+  const payload = JSON.parse(out.response.body);
+  assert.equal(payload.lyrics.lines[0].words, "official");
+  assert.equal(Object.hasOwn(payload.lyrics, "restriction"), false);
+  assert.equal(out.response.headers["Content-Encoding"], undefined);
+  assert.equal(Number(out.response.headers["Content-Length"]), new TextEncoder().encode(out.response.body).length);
+});
+
+check("Loon Spotify request phase returns a synchronized auto result before official", () => {
+  const id = "0VjIjW4GlUZAMYd2vXMi3b";
+  const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json";
+  const values = {
+    "spotify.track.meta.v2": JSON.stringify({ [id]: ["Blinding Lights", "The Weeknd", 200000, Date.now()] }),
+  };
+  let officialPending = false;
+  const out = run("loon/spotify/js/spotify_lyrics.js", "", url, ["lrclib", true], {
+    $request: { url, method: "GET", headers: { Authorization: "Bearer test", Accept: "application/json" } },
+    $response: undefined,
+    $loon: "iPhone",
+    $persistentStore: { read: (key) => values[key] || null, write: (value, key) => { values[key] = value; return true; } },
+    $httpClient: { get: (options, callback) => {
+      if (options.url === url) {
+        officialPending = true;
+        return;
+      }
+      if (/lrclib\.net\/api\//.test(options.url)) {
+        callback(null, { status: 200, headers: { "Content-Type": "application/json" } }, JSON.stringify({
+          id: 12, trackName: "Blinding Lights", artistName: "The Weeknd", duration: 200,
+          syncedLyrics: "[00:01.00]third-party line",
+        }));
+        return;
+      }
+      callback(null, { status: 404, headers: {} }, "");
+    } },
+  });
+  assert.equal(officialPending, true, "official request starts before third-party lookup");
+  assert.equal(out.response.status, 200);
+  assert.equal(JSON.parse(out.response.body).lyrics.lines[0].words, "third-party line");
+});
+
 check("Spotify cache hits fold traditional prefetch entries", () => {
   // feed 预取没有携带 t2s 词表，写下的缓存可能还是繁体；歌词脚本命中时要补一次。
   const id = "tradcache";

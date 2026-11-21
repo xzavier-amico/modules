@@ -1209,6 +1209,7 @@ const SPOTIFY_HAN_VARIANTS = (() => {
   let plainFallback = null;
   // plainFallback 里的时间轴是不是「按行均分」编出来的（伪同步）。
   let plainFallbackPseudo = false;
+  let onPlainFallback = null;
   let cacheKey = "";
   // 第三方源的应答情况。miss 标记（5 分钟内不再补卡）只在「确实有源回了答、
   // 且都说没歌词」时才写；全部请求都失败时是临时故障（代理没连上、App 在后台
@@ -1231,15 +1232,13 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     settled = true;
     if (deadline !== undefined && typeof clearTimeout === "function") clearTimeout(deadline);
     if (plainTimer !== undefined && typeof clearTimeout === "function") clearTimeout(plainTimer);
+    writeMark(PENDING_KEY, null);
     // 请求阶段没有 $response：Loon / Egern / Shadowrocket 用 { response } 直接
     // 返回合成结果，跳过官方 color-lyrics 请求。
     if (!res) {
       $done(value && (value.status || value.body) ? { response: value } : {});
       return;
     }
-    // 响应已经交给客户端，这次歌词请求不会再产出结果；清掉 pending，
-    // 让 feed 不用一直按「还在查」延长等待（超时后晚到的结果仍会写缓存）。
-    writeMark(PENDING_KEY, null);
     $done(value);
   };
 
@@ -1301,45 +1300,7 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     return;
   }
 
-  // 请求阶段：缓存命中直接返回合成歌词，跳过官方请求；未命中立即放行。
-  // 桌面端不做请求阶段合成：凭空造一份跨域响应要自己补 CORS 头，稍有出入浏览器
-  // 就整条请求失败；桌面端的官方歌词请求本身很快（没有就 404），留到响应阶段
-  // 合并原有响应头更稳。iOS 仍然走原来的缓存直达逻辑。
-  if (!res) {
-    if (!HELPER && !desktop && trackId && flag(opt.enable_lyrics, true)) {
-      cacheKey = lyricsCacheKey(trackId);
-      const cached = readLyricsCache(cacheKey, trackId);
-      const proto = requestedProtoMode();
-      if (cached) {
-        writeMark(MISS_KEY, null);
-        writeMark(PENDING_KEY, null);
-        if (proto) {
-          const bytes = encodeProto(cached.payload.lyrics.lines, cached.payload.lyrics.syncType,
-            cached.payload.lyrics.provider, cached.payload.lyrics.providerLyricsId,
-            cached.payload.lyrics.language, cached.payload.colors);
-          finish({
-            status: 200,
-            headers: { "Content-Type": "application/vnd.google.protobuf" },
-            body: bytes,
-          });
-        } else {
-          const body = JSON.stringify(cached.payload);
-          finish({
-            status: 200,
-            headers: syntheticHeaders("application/json; charset=utf-8", encoder.encode(body).length),
-            body: body,
-          });
-        }
-        return;
-      }
-    }
-    // 未命中：官方请求还要飞一会儿，先标 pending，feed 据此判断歌词正在查。
-    markPending();
-    finish({});
-    return;
-  }
-
-  const rawBody = res.body;
+  const rawBody = res ? res.body : null;
   const rawBytes = toBytes(rawBody);
   const rawLength = "string" == typeof rawBody ? rawBody.length : rawBytes.length;
   if (rawLength > MAX_LYRICS_BYTES) {
@@ -1353,7 +1314,7 @@ const SPOTIFY_HAN_VARIANTS = (() => {
   while (start < rawBytes.length && (rawBytes[start] === 32 || rawBytes[start] === 9 || rawBytes[start] === 10 || rawBytes[start] === 13)) start++;
   const trimmed = typeof rawBody === "string" ? rawBody.trim() : rawBytes[start] === 123 ? toText(rawBytes).trim() : "";
   const hasBody = typeof rawBody === "string" ? trimmed.length > 0 : rawBytes.length > 0;
-  const status = Number(res.status || res.statusCode);
+  const status = Number(res && (res.status || res.statusCode));
 
   function headerValue(headers, name) {
     if (!headers || "object" != typeof headers) return "";
@@ -1380,6 +1341,151 @@ const SPOTIFY_HAN_VARIANTS = (() => {
   const protoMode = status === 200 && hasBody
     ? trimmed.charAt(0) !== "{"
     : requestedProtoMode();
+
+  // iOS request hook: proxy the official request ourselves and race it against the
+  // third-party lookup. Loon's request script can return a synthetic response, so this
+  // removes the request/response phase handoff and starts both paths at once.
+  if (!res) {
+    const loonRuntime = typeof $loon !== "undefined";
+    if (!HELPER && !desktop && trackId && flag(opt.enable_lyrics, true)) {
+      cacheKey = lyricsCacheKey(trackId);
+      const cached = readLyricsCache(cacheKey, trackId);
+      if (cached) {
+        writeMark(MISS_KEY, null);
+        writeMark(PENDING_KEY, null);
+        if (requestedProtoMode()) {
+          const bytes = encodeProto(cached.payload.lyrics.lines, cached.payload.lyrics.syncType,
+            cached.payload.lyrics.provider, cached.payload.lyrics.providerLyricsId,
+            cached.payload.lyrics.language, cached.payload.colors);
+          finish({ status: 200, headers: { "Content-Type": "application/vnd.google.protobuf" }, body: bytes });
+        } else {
+          const body = JSON.stringify(cached.payload);
+          finish({ status: 200, headers: syntheticHeaders("application/json; charset=utf-8", encoder.encode(body).length), body: body });
+        }
+        return;
+      }
+
+      if (!loonRuntime) {
+        markPending();
+        finish({});
+        return;
+      }
+      if (typeof $httpClient === "undefined" || !$httpClient || typeof $httpClient.get !== "function") {
+        markPending();
+        finish({});
+        return;
+      }
+      markPending();
+      const officialHeaders = {};
+      const requestHeaders = req && req.headers && typeof req.headers === "object" ? req.headers : {};
+      for (const key in requestHeaders) {
+        if (!Object.prototype.hasOwnProperty.call(requestHeaders, key)) continue;
+        const lower = String(key).toLowerCase();
+        if (lower === "host" || lower === "content-length" || lower === "connection" || lower === "accept-encoding") continue;
+        officialHeaders[key] = requestHeaders[key];
+      }
+      const officialUrl = url;
+      let officialDone = false;
+      let officialMiss = null;
+      let providersDone = false;
+      const finishOfficial = (error, response, data) => {
+        if (settled) return;
+        const code = Number(response && (response.status || response.statusCode));
+        if (error || !response) {
+          officialDone = true;
+          return maybeFinishRace();
+        }
+        const bytes = typeof data === "string" ? encoder.encode(data) : toBytes(data);
+        if (bytes.length > MAX_LYRICS_BYTES) {
+          officialDone = true;
+          officialMiss = { status: code || 502, headers: response.headers || {}, body: data };
+          return maybeFinishRace();
+        }
+        let first = 0;
+        while (first < bytes.length && (bytes[first] === 32 || bytes[first] === 9 || bytes[first] === 10 || bytes[first] === 13)) first += 1;
+        const text = typeof data === "string" ? data.trim() : (bytes[first] === 123 ? toText(bytes).trim() : "");
+        const isJson = text.charAt(0) === "{";
+        if (code === 200 && bytes.length) {
+          if (isJson && hasLyrics(text)) {
+            const rewritten = rewriteOfficialJson(text);
+            return winOfficial({ status: 200, headers: response.headers || {}, body: rewritten || data });
+          }
+          if (!isJson) {
+            const inspected = inspectProto(bytes);
+            if (inspected && inspected.count > 0) {
+              const rewritten = rewriteOfficialProto(inspected);
+              return winOfficial({ status: 200, headers: response.headers || {}, body: rewritten || data });
+            }
+          }
+        }
+        officialDone = true;
+        officialMiss = { status: code || 404, headers: response.headers || {}, body: data };
+        maybeFinishRace();
+      };
+      const winOfficial = (value) => {
+        if (settled) return;
+        settled = true;
+        if (deadline !== undefined && typeof clearTimeout === "function") clearTimeout(deadline);
+        if (plainTimer !== undefined && typeof clearTimeout === "function") clearTimeout(plainTimer);
+        writeMark(PENDING_KEY, null);
+        writeMark(MISS_KEY, null);
+        const headers = {};
+        const source = value.headers || {};
+        for (const key in source) {
+          const lower = String(key).toLowerCase();
+          if (lower === "content-length" || lower === "content-encoding" || lower === "transfer-encoding") continue;
+          headers[key] = source[key];
+        }
+        headers["Content-Length"] = String(typeof value.body === "string" ? encoder.encode(value.body).length : toBytes(value.body).length);
+        $done({ response: { status: value.status, headers: headers, body: value.body } });
+      };
+      const maybeFinishRace = () => {
+        if (settled || !officialDone || (!providersDone && !plainFallback)) return;
+        if (plainFallback) writeLyricsCache(cacheKey, plainFallback);
+        if (plainFallback) emit(plainFallback);
+        else finish(officialMiss ? { status: officialMiss.status, headers: officialMiss.headers, body: officialMiss.body } : {});
+      };
+      const raceDeadline = () => {
+        if (settled) return;
+        if (plainFallback) {
+          writeLyricsCache(cacheKey, plainFallback);
+          emit(plainFallback);
+        } else if (officialDone && officialMiss) {
+          finish(officialMiss);
+        } else {
+          finish({});
+        }
+      };
+      onPlainFallback = maybeFinishRace;
+      if (typeof setTimeout === "function") deadline = setTimeout(raceDeadline, LYRICS_DEADLINE_MS);
+
+      try {
+        $httpClient.get({ url: officialUrl, headers: officialHeaders, timeout: LYRICS_DEADLINE_MS, "binary-mode": true }, finishOfficial);
+      } catch (e) {
+        officialDone = true;
+      }
+      if (settled) return;
+      resolveLyrics((payload) => {
+        providersDone = true;
+        if (settled) {
+          if (payload) writeLyricsCache(cacheKey, payload);
+          return;
+        }
+        if (payload && payload.lyrics.syncType === "LINE_SYNCED") {
+          writeLyricsCache(cacheKey, payload);
+          emit(payload);
+          return;
+        }
+        if (payload) plainFallback = payload;
+        else markMiss();
+        maybeFinishRace();
+      });
+      return;
+    }
+    markPending();
+    finish({});
+    return;
+  }
 
   // 不把登录、限流或服务端错误伪装成有歌词。
   if (status !== 200 && status !== 404) {
@@ -1696,7 +1802,10 @@ const SPOTIFY_HAN_VARIANTS = (() => {
           if (typeof setTimeout === "function") plainTimer = setTimeout(() => {
             if (!plainFallback) return;
             writeLyricsCache(cacheKey, plainFallback);
-            if (!settled) emit(plainFallback);
+            if (!settled) {
+              if (onPlainFallback) onPlainFallback();
+              else emit(plainFallback);
+            }
           }, PLAIN_FALLBACK_MS);
         }
         remaining -= 1;
