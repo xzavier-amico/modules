@@ -1,0 +1,25 @@
+#!name=VidHub Unlock
+#!desc=把 VidHub 的 /api/v1/licenses 响应替换成伪造 license，用于验证客户端是否只信服务端 JSON。不修改 App 二进制，也不改动请求签名。
+#!category=VidHub
+#!author=xzavier-amico
+#!homepage=https://github.com/xzavier-amico/modules
+#!tag=VidHub
+#!system=iOS,iPadOS
+
+[Argument]
+mode = select,"array","array","object","string","raw",type=string,tag=data 结构,desc=array=对象数组，object=单个对象，string=JSON 字符串，raw=原样字符串（例如 AES base64）
+vip = input,"1",type=string,tag=vip 值,desc=伪造 license 的 vip 字段
+expire = input,"2099-12-31 23:59:59",type=string,tag=到期时间,desc=伪造 license 的 expire 字段
+raw = input,"",type=string,tag=raw data,desc=仅 mode=raw 时使用，直接作为 data 的值
+
+[Rule]
+# 强制回落 TCP，避免 HTTP/3 绕过 Loon 的 MITM 与脚本。
+AND, ((DOMAIN, vh.api.okaapps.com), (PROTOCOL, QUIC)), REJECT
+AND, ((IP-CIDR, 121.43.145.95/32), (PROTOCOL, QUIC)), REJECT
+
+[Script]
+response if ${url} ~= /^https:\/\/(?:vh\.api\.okaapps\.com|121\.43\.145\.95)\/api\/v1\/licenses(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/vidhub/js/vidhub_unlock.js", {${mode}, ${vip}, ${expire}, ${raw}}) with requires_body=true, tag="VidHub.license", timeout=10
+response if ${url} ~= /^https:\/\/(?:vh\.api\.okaapps\.com|121\.43\.145\.95)\/api\/v1\/licenses\/apple(?:\?.*)?$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/vidhub/js/vidhub_unlock.js", {${mode}, ${vip}, ${expire}, ${raw}}) with requires_body=true, tag="VidHub.apple", timeout=10
+
+[MitM]
+hostname = vh.api.okaapps.com, 121.43.145.95

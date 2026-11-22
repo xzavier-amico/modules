@@ -171,6 +171,13 @@ const TARGETS = [
     title: "Emby Unlock — mb3admin 授权校验 mock",
     standalone: "emby_unlock.js",
   },
+  {
+    module: "vidhub",
+    file: "vidhub_unlock.js",
+    title: "VidHub Unlock — /api/v1/licenses 响应伪造（测试）",
+    standalone: "vidhub_unlock.js",
+    platforms: ["loon"],
+  },
 ];
 
 const OBSOLETE = ["loon/youtube/js/youtube.js", "egern/youtube/js/youtube.js", "shadowrocket/youtube/js/youtube.js"];
