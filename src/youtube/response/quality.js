@@ -7,7 +7,8 @@
   function updateQualityCache(players, options) {
     if (!players.length) return;
 
-    const maxHeight = Math.max(144, Math.min(4320, parseInt(options.maxHeight) || 4320));
+    const maxHeight = Math.max(144, Math.min(4320, parseInt(options.maxHeight, 10) || 4320));
+    const codec = options.videoCodec ?? "any";
     const metadata = players.map((player) => unknownFields(player).find((field) => 4 === field.no && 2 === field.wire)?.data).filter(Boolean);
     if (!metadata.length) return;
 
@@ -25,10 +26,11 @@
 
     for (const videoId of keys.slice(-MAX_QUALITY_ENTRIES)) {
       const entry = cache[videoId];
-      if (videoId.length > 256 || !isQualityEntry(entry) || entry.height > maxHeight) {
+      if (videoId.length > 256 || !isQualityEntry(entry) || entry.height > maxHeight || (entry.codec ?? "any") !== codec) {
         dirty = true;
       } else {
         next[videoId] = { height: entry.height, itags: entry.itags };
+        if ("any" !== codec) next[videoId].codec = codec;
         if (entry.premiumItags?.length) next[videoId].premiumItags = entry.premiumItags;
         if (Object.keys(entry).length !== Object.keys(next[videoId]).length) dirty = true;
       }
@@ -36,33 +38,44 @@
 
     for (const bytes of metadata) {
       try {
-        const fields = parseFields(bytes);
-        const urlField = fields.find((field) => 15 === field.no && 2 === field.wire);
-        const match = urlField && /[?&]id=([^&]+)/.exec(strictUtf8.decode(urlField.data));
+        const urlBytes = fieldData(bytes, 15);
+        const match = urlBytes && /[?&]id=([^&]+)/.exec(looseUtf8.decode(urlBytes));
         if (!match) continue;
 
         const videoId = decodeURIComponent(match[1]);
         const entry = { height: 0, itags: [] };
+        if ("any" !== codec) entry.codec = codec;
         if (videoId.length > 256) continue;
 
         const seen = new Set();
         let truncated = false;
-        for (const field of fields) {
-          if (3 !== field.no || 2 !== field.wire) continue;
+        wireForEachField(bytes, (no, wire, dataStart, dataEnd) => {
+          if (3 !== no || 2 !== wire) return false;
+          const formatBytes = bytes.subarray(dataStart, dataEnd);
+          let itag = 0;
+          let width = 0;
+          let rawHeight = 0;
+          let mimeBytes;
+          let premiumBytes;
 
-          const format = parseFields(field.data);
-          const mime = format.find((item) => 5 === item.no && 2 === item.wire);
-          if (!mime) continue;
-          const mimeText = strictUtf8.decode(mime.data);
-          if (!mimeText.startsWith("video/") || !codecAllowed(mimeText, options.videoCodec)) continue;
+          wireForEachField(formatBytes, (fno, fwire, fStart, fEnd) => {
+            if (0 === fwire) {
+              if (1 === fno && !itag) itag = readVarintValue(formatBytes.subarray(fStart, fEnd));
+              else if (7 === fno && !width) width = readVarintValue(formatBytes.subarray(fStart, fEnd));
+              else if (8 === fno && !rawHeight) rawHeight = readVarintValue(formatBytes.subarray(fStart, fEnd));
+            } else if (2 === fwire) {
+              if (5 === fno && !mimeBytes) mimeBytes = formatBytes.subarray(fStart, fEnd);
+              else if (26 === fno && !premiumBytes) premiumBytes = formatBytes.subarray(fStart, fEnd);
+            }
+            return false;
+          });
 
-          const numberField = (fieldNo) => {
-            const item = format.find((entry) => entry.no === fieldNo && 0 === entry.wire);
-            return item ? readVarintValue(item.data) : 0;
-          };
-          const height = Math.min(numberField(7), numberField(8));
-          const itag = numberField(1);
-          if (!itag || !height || height > 2147483647 || height > maxHeight || height < entry.height) continue;
+          if (!mimeBytes) return false;
+          const mimeText = looseUtf8.decode(mimeBytes);
+          if (!mimeText.startsWith("video/") || !codecAllowed(mimeText, codec)) return false;
+
+          const height = Math.min(width, rawHeight);
+          if (!itag || !height || height > 2147483647 || height > maxHeight || height < entry.height) return false;
 
           if (height > entry.height) {
             entry.height = height;
@@ -71,17 +84,17 @@
             seen.clear();
             truncated = false;
           }
-          if (truncated || seen.has(itag)) continue;
+          if (truncated || seen.has(itag)) return false;
           if (256 === seen.size) {
             truncated = true;
-            continue;
+            return false;
           }
 
           seen.add(itag);
           entry.itags.push(itag);
-          const premium = format.find((item) => 26 === item.no && 2 === item.wire);
-          if (premium && /\bPremium\b/i.test(strictUtf8.decode(premium.data))) (entry.premiumItags ??= []).push(itag);
-        }
+          if (premiumBytes && /\bPremium\b/i.test(looseUtf8.decode(premiumBytes))) (entry.premiumItags ??= []).push(itag);
+          return false;
+        });
 
         if (truncated || !isQualityEntry(entry) || sameQuality(next[videoId], entry)) continue;
         delete next[videoId];
@@ -103,7 +116,7 @@
         delete next[Object.keys(next)[0]];
         json = JSON.stringify(next);
       }
-      writeStore(next, QUALITY_KEY);
+      $persistentStore.write(json, QUALITY_KEY);
     } catch (e) {
       // 存不进去就算了，不影响本次播放。
     }

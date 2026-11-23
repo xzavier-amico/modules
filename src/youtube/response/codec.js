@@ -42,29 +42,34 @@
 
     const obj = {};
     const fields = parseFields(bytes);
-    const repeatedCount = fields.length > 1 ? new Map() : null;
     const state = { bytes, fields, parent: parentState, parentName, eager };
-    const specsByNo = (SPEC_CACHE[typeName] ??= new Map(SCHEMA[typeName].map((spec) => [spec[0], spec])));
+    const specs = SCHEMA[typeName];
+    const specsByNo = (SPEC_CACHE[typeName] ??= new Map(specs.map((spec) => [spec[0], spec])));
+    if (!SPEC_NAME_CACHE[typeName]) SPEC_NAME_CACHE[typeName] = new Map(specs.map((spec) => [spec[1], spec]));
 
     Object.defineProperty(obj, WIRE_STATE, { value: state });
-    for (const [, name, , repeated] of SCHEMA[typeName]) if (repeated) obj[name] = [];
+    for (const [, name, , repeated] of specs) if (repeated) obj[name] = [];
 
-    // 先给每个字段挂上 spec，并统计同名字段出现次数。
-    if (repeatedCount) {
-      for (const field of fields) {
-        const spec = specsByNo.get(field.no);
-        if (spec && (field.wire === wireTypeOf(spec[2]) || isPackedNumeric(spec, field))) {
-          field.spec = spec;
-          if (!spec[3]) repeatedCount.set(spec[1], (repeatedCount.get(spec[1]) ?? 0) + 1);
+    // 绑定 spec 并记录重复出现的非 repeated 字段（标量按最后一次生效，子消息按 protobuf 规范合并）。
+    let seenSingular = null;
+    let duplicateSingular = null;
+    for (const field of fields) {
+      const spec = specsByNo.get(field.no);
+      if (spec && (field.wire === wireTypeOf(spec[2]) || isPackedNumeric(spec, field))) {
+        field.spec = spec;
+        if (!spec[3]) {
+          const name = spec[1];
+          if (seenSingular && seenSingular.has(name)) (duplicateSingular ??= new Set()).add(name);
+          else (seenSingular ??= new Set()).add(name);
         }
       }
     }
 
     let deferredNames;
+    let mergedHandled;
     for (const field of fields) {
-      const spec = repeatedCount ? field.spec : specsByNo.get(field.no);
-      if (!spec || (field.wire !== wireTypeOf(spec[2]) && !isPackedNumeric(spec, field))) continue;
-      field.spec = spec;
+      const spec = field.spec;
+      if (!spec) continue;
 
       const [, name, valueType, repeated] = spec;
       if (isPackedNumeric(spec, field)) {
@@ -79,22 +84,44 @@
         for (const value of values) obj[name].push("bool" === valueType ? 0 !== value : value);
         continue;
       }
-      if (!repeated && (repeatedCount?.get(name) ?? 0) > 1) {
-        delete field.spec;
+
+      // 重复出现的非 repeated 子消息：合并所有分片字节后统一解码。
+      if (!repeated && duplicateSingular?.has(name) && SCHEMA[valueType]) {
+        if (mergedHandled?.has(name)) continue;
+        (mergedHandled ??= new Set()).add(name);
+        const chunks = [];
+        for (const item of fields) if (item.spec?.[1] === name) chunks.push(item.data);
+        const mergedBytes = concatBytes(chunks);
+        if (!eager.has(valueType)) {
+          state.type = typeName;
+          state.deferred = true;
+          Object.defineProperty(obj, name, {
+            enumerable: true,
+            configurable: true,
+            get() {
+              const value = decodeMessage(valueType, mergedBytes, depth + 1, state, name, eager);
+              Object.defineProperty(obj, name, { value, enumerable: true, writable: true, configurable: true });
+              return value;
+            },
+          });
+        } else {
+          obj[name] = decodeMessage(valueType, mergedBytes, depth + 1, state, name, eager);
+        }
         continue;
       }
+
       if (SCHEMA[valueType] && !eager.has(valueType)) {
         // 同一名字段只挂一个 getter，第一次读时才真正展开。
         if (deferredNames?.has(name)) continue;
         (deferredNames ??= new Set()).add(name);
-        const group = fields.filter((item) => item.spec?.[1] === name);
+        const group = repeated ? fields.filter((item) => item.spec?.[1] === name) : null;
         state.type = typeName;
         state.deferred = true;
         Object.defineProperty(obj, name, {
           enumerable: true,
           configurable: true,
           get() {
-            const value = repeated ? group.map((item) => readFieldValue(item, depth, state, eager)) : readFieldValue(group[0], depth, state, eager);
+            const value = repeated ? group.map((item) => readFieldValue(item, depth, state, eager)) : readFieldValue(field, depth, state, eager);
             Object.defineProperty(obj, name, { value, enumerable: true, writable: true, configurable: true });
             return value;
           },
@@ -120,7 +147,7 @@
   function readFieldValue(field, depth, state, eager) {
     const [, name, valueType] = field.spec;
     if ("bytes" === valueType) return field.data;
-    if ("string" === valueType) return strictUtf8.decode(field.data);
+    if ("string" === valueType) return looseUtf8.decode(field.data);
     if ("bool" === valueType) return 0 !== readVarintValue(field.data);
     if ("uint" === valueType) return readVarintValue(field.data);
     return decodeMessage(valueType, field.data, depth + 1, state, name, eager);
@@ -141,12 +168,22 @@
       return repeated ? (obj[name] ?? []) : void 0 === obj[name] ? [] : [obj[name]];
     };
 
-    // 数组字段：先把改动过的元素按原始字节做一次索引，重写时按原顺序取。
+    // 数组字段：按原始字节/字符串值建立 FIFO 队列索引，避免重复项被 Map 去重或 string/Uint8Array 错配。
     // 数字数组单独处理（可能 packed），不放进这个索引。
     for (const spec of SCHEMA[typeName]) {
       const [, name, valueType, repeated] = spec;
       if (repeated && state?.changed?.has(name) && "uint" !== valueType && "bool" !== valueType) {
-        repeatedPool.set(name, new Map(valuesOf(spec).map((value) => [rawOf(value, valueType), value])));
+        const pool = new Map();
+        for (const value of valuesOf(spec)) {
+          const key = rawOf(value, valueType);
+          let queue = pool.get(key);
+          if (!queue) {
+            queue = [];
+            pool.set(key, queue);
+          }
+          queue.push(value);
+        }
+        repeatedPool.set(name, pool);
       }
     }
 
@@ -156,26 +193,34 @@
         continue;
       }
       const [, name, valueType, repeated] = field.spec;
-      written.add(name);
 
-      // repeated 数字字段可能是 packed 或 unpacked：整体按原形式重写一次，避免逐条对不上。
+      // repeated 数字字段可能是 packed 或 unpacked：整体按原形式重写一次；空数组不写空 tag。
       if (repeated && ("uint" === valueType || "bool" === valueType)) {
+        written.add(name);
         if (!numericWritten.has(name)) {
           const values = obj[name] ?? [];
-          if (2 === field.wire) parts.push(encodePackedField(field.spec, values));
-          else for (const value of values) parts.push(encodeField(field.spec, value));
+          if (values.length) {
+            if (2 === field.wire) parts.push(encodePackedField(field.spec, values));
+            else for (const value of values) parts.push(encodeField(field.spec, value));
+          }
           numericWritten.add(name);
         }
         continue;
       }
 
       if (repeated) {
+        written.add(name);
         const pool = repeatedPool.get(name);
-        if (!pool.has(field.data)) continue;
-        const value = pool.get(field.data);
-        pool.delete(field.data);
+        const lookupKey = "string" === valueType ? looseUtf8.decode(field.data) : field.data;
+        const queue = pool.get(lookupKey);
+        if (!queue?.length) continue;
+        const value = queue.shift();
+        if (!queue.length) pool.delete(lookupKey);
         parts.push(SCHEMA[valueType] && value[WIRE_STATE]?.changed ? encodeField(field.spec, value) : field.raw);
       } else {
+        // 原消息里出现多次的 singular 字段只写出一次，避免合并/覆盖后写出重复字段。
+        if (written.has(name)) continue;
+        written.add(name);
         const value = obj[name];
         if (void 0 === value) continue;
         const needsWrite = rawOf(value, valueType) !== field.data || (SCHEMA[valueType] && value[WIRE_STATE]?.changed);
@@ -188,7 +233,9 @@
       const [, name, , repeated] = spec;
       if (state && !state.changed.has(name)) continue;
       if (repeated && repeatedPool.has(name)) {
-        for (const value of repeatedPool.get(name).values()) parts.push(encodeField(spec, value));
+        for (const queue of repeatedPool.get(name).values()) {
+          for (const value of queue) parts.push(encodeField(spec, value));
+        }
       } else if (!written.has(name)) {
         for (const value of valuesOf(spec)) parts.push(encodeField(spec, value));
       }
@@ -236,6 +283,7 @@
   }
 
   const SPEC_CACHE = Object.create(null);
+  const SPEC_NAME_CACHE = Object.create(null);
 
   function messageCodec(typeName, eager = EAGER_TYPES.youtubei) {
     return { fromBinary: (bytes) => decodeMessage(typeName, bytes, 0, undefined, undefined, eager), toBinary: (obj) => encodeMessage(typeName, obj) };

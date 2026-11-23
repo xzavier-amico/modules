@@ -5,15 +5,24 @@
   const HOME_AD_NAME = /\|(?:brand-ad|hpto|[a-z0-9-]*-ad)$/;
   const HOME_AD_FIELDS = new Set([20, 21]);
 
+  // 只读前两个字段（字段 1 名称、第 2 个字段号），不解析整块几百 KB 的 section。
   function describeHomeSection(section) {
-    const fields = parse(section);
-    if (!fields || !fields.length) return null;
-    const header = fields[0];
-    if (!header || header.no !== 1 || header.w !== 2) return null;
-    const name = text(header);
+    const state = { i: 0 };
+    const total = section.length;
+    if (!total) return null;
+    const tag1 = readCount(section, state);
+    if (tag1 < 0 || (tag1 >>> 3) !== 1 || (tag1 & 7) !== 2) return null;
+    const len1 = readCount(section, state);
+    if (len1 < 0 || len1 > total - state.i) return null;
+    const name = wireDecodeText(section.subarray(state.i, state.i + len1));
     if (name === null) return null;
+    state.i += len1;
     let contentField = -1;
-    if (fields.length > 1) contentField = fields[1].no;
+    if (state.i < total) {
+      const tag2 = readCount(section, state);
+      if (tag2 < 0 || !(tag2 >>> 3)) return null;
+      contentField = tag2 >>> 3;
+    }
     return { name: name, contentField: contentField };
   }
 
@@ -104,7 +113,8 @@
           changed = true;
           continue;
         }
-        if (depth < BROWSE_AD_MAX_DEPTH) {
+        // 目标字段本身大于 BROWSE_AD_MIN_SIZE，长度不足的子消息不可能包含它，直接剪枝。
+        if (depth < BROWSE_AD_MAX_DEPTH && field.data.length > BROWSE_AD_MIN_SIZE) {
           const inner = renameDeepField(field.data, depth + 1);
           if (inner) {
             parts.push(wireEncodeField(field.no, 2, inner));

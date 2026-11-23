@@ -14,9 +14,11 @@
 
   const textEncoder = new TextEncoder();
   const strictUtf8 = new TextDecoder("utf-8", { fatal: true });
+  const looseUtf8 = new TextDecoder("utf-8");
 
   // 用来在字节流里认东西的标记。
-  const PREMIUM_UPSELL_MARKER = textEncoder.encode("PAyouchat");
+  // PAyouchat 是 YouTube Ask AI（YouChat）面板的 targetId；SPunlimited 是 Premium 入口/推广标识。
+  const ASK_AI_MARKER = textEncoder.encode("PAyouchat");
   const AI_SUMMARY_MARKER = textEncoder.encode("ai_summary_");
   const PAGEAD_MARKER = textEncoder.encode("/pagead/");
   const MINI_GAME_MARKER = textEncoder.encode("mini_game_card.eml");
@@ -55,6 +57,8 @@
     "メンバー限定",
     "멤버 전용",
   ];
+  const MEMBERS_ONLY_LABEL_BYTES = MEMBERS_ONLY_LABELS.map((label) => textEncoder.encode(label));
+  const MAX_MEMBERS_LABEL_BYTES = 64;
 
   // 侧栏/首页菜单项：值是可读别名，id 是 guide 响应里的 browseId。
   // home_menu 用别名或 browseId 都可以，多个用英文逗号分隔。

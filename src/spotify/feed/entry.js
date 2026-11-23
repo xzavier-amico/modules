@@ -148,15 +148,11 @@
   // 补卡不等歌词：Now Playing 打开时客户端先渲染列表，之后才合并 scrollsita 的
   // 响应；晚到的响应只更新模型、不重绘列表，卡片要收起再展开才出现。
   // 所以立刻补卡，内容由随后的 color-lyrics 响应填充。
+  // 传入惰性判定函数，只在响应本身确实缺歌词 section 时才读本地存储。
   if (isScroll && wantCard) {
     const card = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsCard : null;
-    const hasCard = typeof hasLyricsCard === "function" && safePatch(() => hasLyricsCard(body));
-    const allowed = !!trackId && !hasCard && (typeof card === "function" ? card(trackId) : true);
-    if (!allowed) {
-      finish(safePatch(() => patchScroll(body, trackId, wantAds, false)));
-      return;
-    }
-    finish(safePatch(() => patchScroll(body, trackId, wantAds, true)));
+    const allowCard = () => !!trackId && (typeof card === "function" ? card(trackId) : true);
+    finish(safePatch(() => patchScroll(body, trackId, wantAds, allowCard)));
     return;
   }
 

@@ -46,7 +46,8 @@ export default async function (ctx) {
     }
   };
 
-  const requestBody = await readBody(ctx.request);
+  // 响应阶段脚本不读请求体，跳过 ctx.request.arrayBuffer() 避免额外缓冲与内存占用。
+  const requestBody = ctx.response ? undefined : await readBody(ctx.request);
   const responseBody = await readBody(ctx.response);
 
   const request = ctx.request

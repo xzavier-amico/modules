@@ -25,7 +25,7 @@
       if (clientKey?.length && encryptKey?.length && clientKey.length <= 4096 && encryptKey.length <= 4096) {
         const key = clientKeyFor($request);
         const config = readStore();
-        const entry = { clientKey: clientKey.toBase64(), encryptKey: encryptKey.toBase64() };
+        const entry = { clientKey: bytesToBase64(clientKey), encryptKey: bytesToBase64(encryptKey) };
 
         if (config[key]?.clientKey !== entry.clientKey || config[key]?.encryptKey !== entry.encryptKey) {
           const previous = (

@@ -203,6 +203,18 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   function wireEncodeVarint(value) {
+    if ("number" == typeof value && value >= 0 && value <= 0x7fffffff) {
+      let n = value | 0;
+      const len = n < 0x80 ? 1 : n < 0x4000 ? 2 : n < 0x200000 ? 3 : n < 0x10000000 ? 4 : 5;
+      const out = new Uint8Array(len);
+      let at = 0;
+      while (n >= 0x80) {
+        out[at++] = (n & 0x7f) | 0x80;
+        n >>>= 7;
+      }
+      out[at] = n;
+      return out;
+    }
     let rest = BigInt(value);
     const out = new Uint8Array(wireVarintLength(rest));
     let at = 0;
@@ -337,6 +349,39 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return false;
   }
 
+  // 流式遍历字段，不分配字段对象与子数组；回调返回 true 时提前停止。
+  function wireForEachField(bytes, onField) {
+    const state = { i: 0 };
+    while (state.i < bytes.length) {
+      const rawStart = state.i;
+      const tag = wireReadCount(bytes, state);
+      const no = tag >>> 3;
+      const wire = tag & 7;
+      if (!no) throw new Error("Invalid protobuf field");
+
+      let dataStart = state.i;
+      if (wire === 2) {
+        const length = wireReadCount(bytes, state);
+        if (length > bytes.length - state.i) throw new Error("Truncated protobuf field");
+        dataStart = state.i;
+        state.i += length;
+      } else if (wire === 1) {
+        state.i += 8;
+      } else if (wire === 5) {
+        state.i += 4;
+      } else if (wire === 0) {
+        wireSkipVarint(bytes, state);
+      } else if (wire === 3) {
+        state.i = wireSkipGroup(bytes, state.i, no);
+      } else {
+        throw new Error("Unsupported protobuf wire type " + wire);
+      }
+      if (state.i > bytes.length) throw new Error("Truncated protobuf field");
+      if (onField(no, wire, dataStart, state.i, rawStart, state.i)) return true;
+    }
+    return false;
+  }
+
   // 按 no / wire 编码一个字段；payload 对 wire 0 是 varint 字节，其余是字段值。
   function wireEncodeField(no, wire, payload) {
     const tag = wireEncodeVarint(BigInt(no) * 8n + BigInt(wire));
@@ -367,9 +412,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
   const textEncoder = new TextEncoder();
   const strictUtf8 = new TextDecoder("utf-8", { fatal: true });
+  const looseUtf8 = new TextDecoder("utf-8");
 
   // 用来在字节流里认东西的标记。
-  const PREMIUM_UPSELL_MARKER = textEncoder.encode("PAyouchat");
+  // PAyouchat 是 YouTube Ask AI（YouChat）面板的 targetId；SPunlimited 是 Premium 入口/推广标识。
+  const ASK_AI_MARKER = textEncoder.encode("PAyouchat");
   const AI_SUMMARY_MARKER = textEncoder.encode("ai_summary_");
   const PAGEAD_MARKER = textEncoder.encode("/pagead/");
   const MINI_GAME_MARKER = textEncoder.encode("mini_game_card.eml");
@@ -408,6 +455,8 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     "メンバー限定",
     "멤버 전용",
   ];
+  const MEMBERS_ONLY_LABEL_BYTES = MEMBERS_ONLY_LABELS.map((label) => textEncoder.encode(label));
+  const MAX_MEMBERS_LABEL_BYTES = 64;
 
   // 侧栏/首页菜单项：值是可读别名，id 是 guide 响应里的 browseId。
   // home_menu 用别名或 browseId 都可以，多个用英文逗号分隔。
@@ -497,46 +546,82 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return values;
   }
 
-  // YouTube 的 params 是 URL-safe base64，去掉填充后长度可能差一位。
+  const BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let base64DecodeTable;
+
+  function decodeBase64Fallback(clean) {
+    if (!base64DecodeTable) {
+      base64DecodeTable = new Int16Array(128).fill(-1);
+      for (let i = 0; i < BASE64_CHARS.length; i++) base64DecodeTable[BASE64_CHARS.charCodeAt(i)] = i;
+    }
+    const len = clean.length;
+    const outLen = Math.floor((len * 3) / 4);
+    const out = new Uint8Array(outLen);
+    let pos = 0;
+    for (let i = 0; i < len; i += 4) {
+      const c0 = clean.charCodeAt(i);
+      const c1 = i + 1 < len ? clean.charCodeAt(i + 1) : 65;
+      const c2 = i + 2 < len ? clean.charCodeAt(i + 2) : 65;
+      const c3 = i + 3 < len ? clean.charCodeAt(i + 3) : 65;
+      const a = c0 < 128 ? base64DecodeTable[c0] : -1;
+      const b = c1 < 128 ? base64DecodeTable[c1] : -1;
+      const c = c2 < 128 ? base64DecodeTable[c2] : -1;
+      const d = c3 < 128 ? base64DecodeTable[c3] : -1;
+      if (a < 0 || b < 0 || c < 0 || d < 0) throw new Error("Invalid base64");
+      const n = (a << 18) | (b << 12) | (c << 6) | d;
+      if (pos < outLen) out[pos++] = (n >> 16) & 255;
+      if (pos < outLen) out[pos++] = (n >> 8) & 255;
+      if (pos < outLen) out[pos++] = n & 255;
+    }
+    return out;
+  }
+
+  function bytesToBase64(bytes) {
+    if ("function" == typeof bytes.toBase64) return bytes.toBase64();
+    let out = "";
+    for (let i = 0; i < bytes.length; i += 3) {
+      const b0 = bytes[i];
+      const b1 = i + 1 < bytes.length ? bytes[i + 1] : 0;
+      const b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
+      out += BASE64_CHARS[b0 >> 2];
+      out += BASE64_CHARS[((b0 & 3) << 4) | (b1 >> 4)];
+      out += i + 1 < bytes.length ? BASE64_CHARS[((b1 & 15) << 2) | (b2 >> 6)] : "=";
+      out += i + 2 < bytes.length ? BASE64_CHARS[b2 & 63] : "=";
+    }
+    return out;
+  }
+
+  // YouTube 的 params 是 URL-safe base64，去掉填充后长度可能差一位；
+  // 兼容缺少 Uint8Array.fromBase64 的旧版 JSC（iOS < 18.2 的 Loon / Egern）。
   function base64ToBytes(text) {
     const normalized = text.replace(/[-_\s=]/g, (ch) => (ch === "-" ? "+" : ch === "_" ? "/" : ""));
     const needsPad = normalized.length % 4 === 1;
-    const bytes = Uint8Array.fromBase64(needsPad ? normalized + "A" : normalized);
+    const input = needsPad ? normalized + "A" : normalized;
+    const bytes = "function" == typeof Uint8Array.fromBase64 ? Uint8Array.fromBase64(input) : decodeBase64Fallback(input);
     return needsPad ? bytes.subarray(0, -1) : bytes;
   }
 
-  // 在字节流里找一段子串。先顺序扫，命中太稀疏时切成两段再找，
-  // 避免在超大响应上退化成 O(n*m)。
+  // 在字节流里找一段子串：全程走原生 TypedArray.indexOf（C++/SIMD），
+  // 先校验尾字节过滤掉绝大多数假命中，避免退化成纯 JS 逐字节循环。
   function containsBytes(haystack, needle = PAGEAD_MARKER) {
-    if (!needle.length) return true;
-    const lastStart = haystack.length - needle.length;
-    let probes = 0;
-    let lastProbeAt = 0;
-    for (let start = haystack.indexOf(needle[0]); start >= 0 && start <= lastStart; start = haystack.indexOf(needle[0], start + 1)) {
+    const nLen = needle.length;
+    if (!nLen) return true;
+    const lastStart = haystack.length - nLen;
+    if (lastStart < 0) return false;
+    const first = needle[0];
+    if (1 === nLen) return haystack.indexOf(first) >= 0;
+    const lastIdx = nLen - 1;
+    const last = needle[lastIdx];
+    for (let start = haystack.indexOf(first); start >= 0 && start <= lastStart; start = haystack.indexOf(first, start + 1)) {
+      if (haystack[start + lastIdx] !== last) continue;
       let hit = true;
-      for (let i = 1; i < needle.length; i++) {
+      for (let i = 1; i < lastIdx; i++) {
         if (haystack[start + i] !== needle[i]) {
           hit = false;
           break;
         }
       }
       if (hit) return true;
-      if (8 === ++probes) {
-        // 连续 8 次没中且都挤在 256 字节内，说明这段是噪声，直接往后跳。
-        if (start - lastProbeAt < 256) return containsBytesSlow(haystack, needle, start + 1);
-        lastProbeAt = start;
-        probes = 0;
-      }
-    }
-    return false;
-  }
-
-  function containsBytesSlow(haystack, needle, from) {
-    outer: for (let start = from; start <= haystack.length - needle.length; start++) {
-      for (let i = 0; i < needle.length; i++) {
-        if (haystack[start + i] !== needle[i]) continue outer;
-      }
-      return true;
     }
     return false;
   }
@@ -569,17 +654,32 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // 返回 [{ no, wire, data, raw }]，data 是字段值，raw 是含 tag 的整段字节。
   const parseFields = wireParseFields;
 
-  // 取第一个（或最后一个）指定字段的值。
+  // 取第一个（或最后一个）指定 wire-2 字段的值；走流式扫描避免构建完整字段数组。
   function fieldData(bytes, fieldNo, last = false) {
-    let found;
-    for (const field of parseFields(bytes)) {
-      if (field.no === fieldNo && 2 === field.wire) {
-        if (!last) return field.data;
-        if (found) return;
-        found = field.data;
+    let foundStart = -1;
+    let foundEnd = -1;
+    wireForEachField(bytes, (no, wire, dataStart, dataEnd) => {
+      if (no === fieldNo && 2 === wire) {
+        foundStart = dataStart;
+        foundEnd = dataEnd;
+        if (!last) return true;
       }
-    }
-    return found;
+      return false;
+    });
+    return foundStart >= 0 ? bytes.subarray(foundStart, foundEnd) : undefined;
+  }
+
+  // 取第一个指定 wire-0 字段的 varint 数值；找不到返回 undefined。
+  function firstVarintField(bytes, fieldNo) {
+    let result;
+    wireForEachField(bytes, (no, wire, dataStart, dataEnd) => {
+      if (no === fieldNo && 0 === wire) {
+        result = readVarintValue(bytes.subarray(dataStart, dataEnd));
+        return true;
+      }
+      return false;
+    });
+    return result;
   }
 
   // 按字段号逐层往下钻，任意一层缺失就返回 undefined。
@@ -630,52 +730,108 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   // 判断某条嵌套路径上的最后一个值是否等于 marker（prefixOnly 时只比前缀）。
-  function matchesPath(bytes, path, marker = PAGEAD_MARKER, prefixOnly = false) {
-    return path.length
-      ? parseFields(bytes).some((field) => field.no === path[0] && 2 === field.wire && matchesPath(field.data, path.slice(1), marker, prefixOnly))
-      : bytesEqual(prefixOnly ? bytes.subarray(0, marker.length) : bytes, marker);
+  // 默认匹配 ASK_AI_MARKER（PAyouchat），用于识别 Ask AI 的命令/面板路径。
+  function matchesPath(bytes, path, marker = ASK_AI_MARKER, prefixOnly = false, depth = 0) {
+    if (depth >= path.length) {
+      if (prefixOnly) return bytes.length >= marker.length && bytesEqual(bytes.subarray(0, marker.length), marker);
+      return bytesEqual(bytes, marker);
+    }
+    const targetNo = path[depth];
+    return wireForEachField(
+      bytes,
+      (no, wire, dataStart, dataEnd) => no === targetNo && 2 === wire && matchesPath(bytes.subarray(dataStart, dataEnd), path, marker, prefixOnly, depth + 1),
+    );
   }
 
   // 对某个字段的每个出现位置跑一次 rewriter，返回 undefined 表示整条删掉。
   function rewriteRepeatedField(bytes, fieldNo, rewriter) {
     let changed = false;
-    const parts = parseFields(bytes).flatMap((field) => {
-      if (field.no !== fieldNo || 2 !== field.wire) return [field.raw];
+    const fields = parseFields(bytes);
+    const parts = [];
+    for (const field of fields) {
+      if (field.no !== fieldNo || 2 !== field.wire) {
+        parts.push(field.raw);
+        continue;
+      }
       const next = rewriter(field.data);
-      return next && bytesEqual(next, field.data) ? [field.raw] : ((changed = true), next ? [encodeField([fieldNo, "", "bytes"], next)] : []);
-    });
+      if (next && bytesEqual(next, field.data)) {
+        parts.push(field.raw);
+      } else {
+        changed = true;
+        if (next) parts.push(encodeField([fieldNo, "", "bytes"], next));
+      }
+    }
     return changed ? concatBytes(parts) : bytes;
   }
 
   // 按路径下钻，对命中位置的字节跑 rewriter。
-  function rewritePath(bytes, path, rewriter) {
-    if (!path.length) return rewriter(bytes);
+  function rewritePath(bytes, path, rewriter, depth = 0) {
+    if (depth >= path.length) return rewriter(bytes);
+    const targetNo = path[depth];
     let changed = false;
-    const parts = parseFields(bytes).map((field) => {
-      if (field.no !== path[0] || 2 !== field.wire) return field.raw;
-      const next = rewritePath(field.data, path.slice(1), rewriter);
-      return bytesEqual(next, field.data) ? field.raw : ((changed = true), encodeField([field.no, "", "bytes"], next));
-    });
+    const fields = parseFields(bytes);
+    const parts = new Array(fields.length);
+    for (let i = 0; i < fields.length; i++) {
+      const field = fields[i];
+      if (field.no !== targetNo || 2 !== field.wire) {
+        parts[i] = field.raw;
+        continue;
+      }
+      const next = rewritePath(field.data, path, rewriter, depth + 1);
+      if (bytesEqual(next, field.data)) {
+        parts[i] = field.raw;
+      } else {
+        changed = true;
+        parts[i] = encodeField([field.no, "", "bytes"], next);
+      }
+    }
     return changed ? concatBytes(parts) : bytes;
   }
 
-  // 判断请求是不是 YouTube Music（iOS App 的 UA / client-name 都带 music）。
-  function isMusicRequest(request) {
-    if (/^https?:\/\/music\.youtube\.com\//i.test(String(request?.url ?? ""))) return true;
-    for (const [key, value] of Object.entries(request?.headers ?? {})) {
-      const name = key.toLowerCase();
-      const text = String(value ?? "");
-      if ("user-agent" === name && /music/i.test(text)) return true;
-      // WEB_REMIX（YouTube Music Web/iOS 的 InnerTube 客户端）的 client-name 是 67。
-      if ("x-youtube-client-name" === name && ("67" === text.trim() || /music|remix/i.test(text))) return true;
-      if ("x-youtube-client-version" === name && /music|remix/i.test(text)) return true;
+  const WEB_HOST_RE = /^https?:\/\/(?:www|m|music)\.youtube\.com(?:\/|$)/i;
+  const MUSIC_HOST_RE = /^https?:\/\/music\.youtube\.com(?:\/|$)/i;
+
+  let cachedReqInfoRef = null;
+  let cachedReqInfo = null;
+
+  function inspectRequest(request) {
+    if (request && request === cachedReqInfoRef) return cachedReqInfo;
+    const url = String(request?.url ?? "");
+    let isMusic = MUSIC_HOST_RE.test(url);
+    let isWeb = WEB_HOST_RE.test(url);
+    const headers = request?.headers;
+    if (headers && (!isMusic || !isWeb)) {
+      for (const key in headers) {
+        if (!Object.hasOwn(headers, key)) continue;
+        const name = key.toLowerCase();
+        const text = String(headers[key] ?? "");
+        if (!isMusic) {
+          if ("user-agent" === name && /music/i.test(text)) isMusic = true;
+          // WEB_REMIX（YouTube Music Web/iOS 的 InnerTube 客户端）的 client-name 是 67。
+          else if ("x-youtube-client-name" === name && ("67" === text.trim() || /music|remix/i.test(text))) isMusic = true;
+          else if ("x-youtube-client-version" === name && /music|remix/i.test(text)) isMusic = true;
+          else if (("origin" === name || "referer" === name) && MUSIC_HOST_RE.test(text)) isMusic = true;
+        }
+        if (!isWeb && ("origin" === name || "referer" === name) && WEB_HOST_RE.test(text)) isWeb = true;
+        if (isMusic && isWeb) break;
+      }
     }
-    return false;
+    const info = { isMusic, isWeb };
+    if (request && "object" == typeof request) {
+      cachedReqInfoRef = request;
+      cachedReqInfo = info;
+    }
+    return info;
   }
 
-  // 网页版 YouTube / YouTube Music。移动网页最终也会落到 www.youtube.com。
+  // 判断请求是不是 YouTube Music（iOS App 的 UA / client-name，以及网页版 URL / Origin / Referer）。
+  function isMusicRequest(request) {
+    return inspectRequest(request).isMusic;
+  }
+
+  // 网页版 YouTube / YouTube Music；含从网页发往 googlevideo.com 的播放请求（看 Origin / Referer）。
   function isWebRequest(request) {
-    return /^https?:\/\/(?:www|m|music)\.youtube\.com\//i.test(String(request?.url ?? ""));
+    return inspectRequest(request).isWeb;
   }
 
   function clientKeyFor(request) {
@@ -704,6 +860,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       entry.itags.length <= 256 &&
       entry.itags.every((itag) => Number.isInteger(itag) && itag > 0 && itag <= 4294967295) &&
       new Set(entry.itags).size === entry.itags.length &&
+      (void 0 === entry.codec || "any" === entry.codec || "no_av1" === entry.codec || "avc" === entry.codec) &&
       (void 0 === entry.premiumItags ||
         (Array.isArray(entry.premiumItags) &&
           entry.premiumItags.length <= entry.itags.length &&
@@ -716,6 +873,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return (
       void 0 !== left &&
       left.height === right.height &&
+      (left.codec ?? "any") === (right.codec ?? "any") &&
       left.itags.length === right.itags.length &&
       right.itags.every((itag) => left.itags.includes(itag)) &&
       (left.premiumItags?.length ?? 0) === (right.premiumItags?.length ?? 0) &&
@@ -892,13 +1050,14 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     if (!text) return undefined;
 
     const hide = text.startsWith("-") || text.startsWith("!");
-    const name = (hide ? text.slice(1) : text).trim().toLowerCase();
+    const rawName = (hide ? text.slice(1) : text).trim();
+    const name = rawName.toLowerCase();
     if (!name) return undefined;
 
     const item = MENU_ITEMS.find((entry) => entry.id.toLowerCase() === name || entry.keys.some((key) => key.toLowerCase() === name));
     if (item) return { hide, id: item.id };
-    // 也允许直接写 browseId；只接受像 ID 的字符串，避免把说明文字当成入口。
-    if (/^[a-z0-9_]+$/i.test(name)) return { hide, id: name };
+    // 也允许直接写 browseId；保留原始大小写以匹配区分大小写的 browseId（如 FEmusic_explore / VLWL）。
+    if (/^[a-z0-9_]+$/i.test(rawName)) return { hide, id: rawName };
     return undefined;
   }
 
@@ -999,12 +1158,15 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
     // 首页清理：off 全关，standard 只清 Playables，all 再加竖屏直播。
     // 创作者商店/商品卡属于付费推广，跟随 blockAds。
-    let cleanup = String(options.homeCleanup ?? "").toLowerCase();
-    if (!cleanup) {
+    let cleanup;
+    if (void 0 !== options.homeCleanup && null !== options.homeCleanup && "" !== String(options.homeCleanup).trim()) {
+      cleanup = asLevel(options.homeCleanup, "standard");
+    } else {
       const games = void 0 === options.blockGames ? true : asBool(options.blockGames, true);
       const vertical = void 0 !== options.blockVerticalLive && asBool(options.blockVerticalLive, false);
       cleanup = vertical ? "all" : games ? "standard" : "off";
     }
+    options.homeCleanup = cleanup;
     options.blockStore = blockAds;
     options.blockGames = "off" !== cleanup;
     options.blockVerticalLive = "all" === cleanup;
@@ -1024,13 +1186,25 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       if (extra.length) options.homeMenu = [options.homeMenu, ...extra.map((item) => `-${item}`)].filter(Boolean).join(",");
     }
 
-    options.hiddenGuideItems = resolveHiddenMenu(options.homeMenu, blockAds);
+    // 延迟计算 hiddenGuideItems：请求阶段与非 guide 响应不会读它，省去每次构建 Set 与查表。
+    const rawHomeMenu = options.homeMenu;
+    Object.defineProperty(options, "hiddenGuideItems", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        const list = resolveHiddenMenu(rawHomeMenu, blockAds);
+        Object.defineProperty(this, "hiddenGuideItems", { value: list, enumerable: true, writable: true, configurable: true });
+        return list;
+      },
+    });
 
-    const speed = String(options.maxSpeed ?? "4").toLowerCase();
-    options.maxSpeed = "off" === speed || false === options.maxSpeed ? false : Math.max(2, Math.min(4, parseInt(speed) || 4));
+    const speed = String(options.maxSpeed ?? "4").trim().toLowerCase();
+    options.maxSpeed =
+      "off" === speed || "false" === speed || "0" === speed || false === options.maxSpeed ? false : Math.max(2, Math.min(4, parseInt(speed, 10) || 4));
 
     const caption = String(options.captionLang ?? "zh-Hans").trim();
-    options.captionLang = /^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/i.test(caption) ? caption : "off";
+    options.captionLang =
+      "off" !== caption.toLowerCase() && /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,4}){0,2}$/i.test(caption) ? caption : "off";
 
     options.blockAi = asBool(options.blockAi, true);
     // 此开关默认关闭，参数缺失时不能按「非 false 即 true」处理。
@@ -1076,9 +1250,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     options.webCleanup = asBool(options.webCleanup, false);
     options.musicCleanup = asBool(options.musicCleanup, false);
 
-    const result = { ...defaults, ...options };
-    if (noDefaults) OPTIONS_CACHE = result;
-    return result;
+    if (noDefaults) {
+      OPTIONS_CACHE = options;
+      return options;
+    }
+    return { ...defaults, ...options };
   }
 
   //=====================================================================================
@@ -1092,13 +1268,14 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   function readRequestBody(request) {
     const body = request.body;
     if (ArrayBuffer.isView(body)) return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+    if (typeof ArrayBuffer !== "undefined" && body instanceof ArrayBuffer) return new Uint8Array(body);
     if (body?.length) throw new Error("YouTube requires binary-body-mode for request bodies");
     const contentLength = Object.entries(request.headers ?? {}).find(([key]) => "content-length" === key.toLowerCase())?.[1];
     if (Number(contentLength) > 0) throw new Error("YouTube request body unavailable; requires-body must be enabled");
   }
 
   // 把请求里的 itag 相关字段改成缓存里的目标值；quality 为空表示只要最高分辨率。
-  function applyQuality(bytes, quality) {
+  function applyQuality(bytes, quality, maxHeight) {
     const targets = new Map(
       quality
         ? [
@@ -1110,7 +1287,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
             [30, 0],
           ]
         : [
-            [16, Math.max(144, Math.min(4320, parseInt(readOptions().maxHeight) || 4320))],
+            [16, Math.max(144, Math.min(4320, parseInt(maxHeight ?? readOptions().maxHeight, 10) || 4320))],
             [26, 1],
             [30, 0],
           ],
@@ -1155,8 +1332,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   // initplayback 请求：校验请求里带的密钥是不是我们存的；不匹配就回空，让客户端重协商。
-  function handleInitPlaybackRequest(request, options) {
-    const body = readRequestBody(request);
+  function handleInitPlaybackRequest(request, options, body) {
     if (void 0 === body || 0 === body.length) return undefined;
 
     const key = clientKeyFor(request);
@@ -1188,19 +1364,21 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   // 只有一条 chunk 的 initplayback 请求：把画质字段改成最高档。
-  function rewriteInitPlaybackBody(body) {
+  function rewriteInitPlaybackBody(body, options) {
     const fields = parseFields(body);
     const chunks = fields.filter((field) => 2 === field.no && 2 === field.wire);
     if (1 !== chunks.length) return body;
 
     const chunk = chunks[0];
-    const next = applyQuality(chunk.data, void 0);
+    const next = applyQuality(chunk.data, void 0, options?.maxHeight);
     if (next === chunk.data) return body;
     return concatBytes(fields.map((field) => (field === chunk ? concatBytes([encodeVarint(18), encodeVarint(next.length), next]) : field.raw)));
   }
 
   // videoplayback 请求：按缓存挑一组 itag，替换请求里的 17 号字段。
-  function rewriteVideoPlaybackBody(body, url) {
+  // 当 autoHd=false 但开启了 videoCodec 时，只改 17 号字段的编码格式列表，不强锁分辨率。
+  function rewriteVideoPlaybackBody(body, url, options) {
+    const opts = options ?? readOptions();
     const fields = parseFields(body);
 
     const quality = (function () {
@@ -1214,34 +1392,40 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
         const cached = readStore(QUALITY_KEY, MAX_QUALITY_JSON)?.[decodeURIComponent(match[1])];
         if (!isQualityEntry(cached)) return;
+        if ((cached.codec ?? "any") !== (opts.videoCodec ?? "any")) return;
 
+        const itagSet = new Set(cached.itags);
+        const premiumSet = cached.premiumItags?.length ? new Set(cached.premiumItags) : null;
         const formats = [];
         const premiumFormats = [];
-        for (const format of parseFields(inner)) {
-          if (6 !== format.no || 2 !== format.wire) continue;
-          const itagField = parseFields(format.data).find((field) => 1 === field.no && 0 === field.wire);
-          if (!itagField) continue;
-          const itag = readVarintValue(itagField.data);
-          if (!cached.itags.includes(itag)) continue;
-          formats.push(format.data);
-          if (cached.premiumItags?.includes(itag)) premiumFormats.push(format.data);
-        }
-        return formats.length ? { height: cached.height, formats: premiumFormats.length && false !== readOptions().preferPremium ? premiumFormats : formats } : void 0;
+        wireForEachField(inner, (no, wire, dataStart, dataEnd) => {
+          if (6 !== no || 2 !== wire) return false;
+          const formatData = inner.subarray(dataStart, dataEnd);
+          const itag = firstVarintField(formatData, 1);
+          if (void 0 === itag || !itagSet.has(itag)) return false;
+          formats.push(formatData);
+          if (premiumSet?.has(itag)) premiumFormats.push(formatData);
+          return false;
+        });
+        return formats.length ? { height: cached.height, formats: premiumFormats.length && false !== opts.preferPremium ? premiumFormats : formats } : void 0;
       } catch {
         return;
       }
     })();
 
+    const lockHeight = false !== opts.autoHd;
     const existing = fields.filter((field) => 17 === field.no && 2 === field.wire);
     const replaceFormats = quality && (existing.length !== quality.formats.length || existing.some((field, i) => !bytesEqual(field.data, quality.formats[i])));
+
+    if (!lockHeight && !replaceFormats) return body;
 
     const parts = [];
     let sawChunk = false;
     let changed = !!replaceFormats;
 
     for (const field of fields) {
-      if (1 === field.no && 2 === field.wire) {
-        const next = applyQuality(field.data, quality);
+      if (lockHeight && 1 === field.no && 2 === field.wire) {
+        const next = applyQuality(field.data, quality, opts.maxHeight);
         if (next === field.data) {
           parts.push(field.raw);
         } else {
@@ -1255,8 +1439,8 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       }
     }
 
-    if (!sawChunk) {
-      const empty = applyQuality(new Uint8Array(), quality);
+    if (lockHeight && !sawChunk) {
+      const empty = applyQuality(new Uint8Array(), quality, opts.maxHeight);
       parts.push(encodeVarint(10), encodeVarint(empty.length), empty);
       changed = true;
     }
@@ -1282,6 +1466,15 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     const path = request.url.split("?")[0];
 
     try {
+      // 无请求体的 videoplayback（如常规 GET 媒体分片）最频繁，直接早退省去参数解析。
+      if (path.endsWith("/videoplayback") && !request.body) {
+        const contentLength = Object.entries(request.headers ?? {}).find(([key]) => "content-length" === key.toLowerCase())?.[1];
+        if (!(Number(contentLength) > 0)) {
+          $done(undefined);
+          return;
+        }
+      }
+
       // 参数解析也放进 try：任何异常都不能让 ad_break 漏过去。
       const options = readOptions();
       // 网页版开关关闭时，网页请求完全放行，不拦 ad_break、不剥热更新头。
@@ -1304,23 +1497,23 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
           $done(undefined);
           return;
         }
-        let result = handleInitPlaybackRequest(request, options);
         const body = readRequestBody(request);
+        let result = handleInitPlaybackRequest(request, options, body);
         if (!result && body?.length && false !== options.autoHd) {
-          const rewritten = rewriteInitPlaybackBody(body);
+          const rewritten = rewriteInitPlaybackBody(body, options);
           if (rewritten !== body) result = { body: rewritten };
         }
         $done(result);
         return;
       }
       if (path.endsWith("/videoplayback")) {
-        if (musicDisabled) {
+        if (musicDisabled || (false === options.autoHd && "any" === options.videoCodec)) {
           $done(undefined);
           return;
         }
-        const body = false === options.autoHd ? undefined : readRequestBody(request);
+        const body = readRequestBody(request);
         if (body?.length) {
-          const rewritten = rewriteVideoPlaybackBody(body, request.url);
+          const rewritten = rewriteVideoPlaybackBody(body, request.url, options);
           $done(rewritten !== body ? { body: rewritten } : undefined);
           return;
         }

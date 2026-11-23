@@ -278,6 +278,18 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   function wireEncodeVarint(value) {
+    if ("number" == typeof value && value >= 0 && value <= 0x7fffffff) {
+      let n = value | 0;
+      const len = n < 0x80 ? 1 : n < 0x4000 ? 2 : n < 0x200000 ? 3 : n < 0x10000000 ? 4 : 5;
+      const out = new Uint8Array(len);
+      let at = 0;
+      while (n >= 0x80) {
+        out[at++] = (n & 0x7f) | 0x80;
+        n >>>= 7;
+      }
+      out[at] = n;
+      return out;
+    }
     let rest = BigInt(value);
     const out = new Uint8Array(wireVarintLength(rest));
     let at = 0;
@@ -408,6 +420,39 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       }
       if (state.i > bytes.length) throw new Error("Truncated protobuf field");
       if (onField(no)) return true;
+    }
+    return false;
+  }
+
+  // 流式遍历字段，不分配字段对象与子数组；回调返回 true 时提前停止。
+  function wireForEachField(bytes, onField) {
+    const state = { i: 0 };
+    while (state.i < bytes.length) {
+      const rawStart = state.i;
+      const tag = wireReadCount(bytes, state);
+      const no = tag >>> 3;
+      const wire = tag & 7;
+      if (!no) throw new Error("Invalid protobuf field");
+
+      let dataStart = state.i;
+      if (wire === 2) {
+        const length = wireReadCount(bytes, state);
+        if (length > bytes.length - state.i) throw new Error("Truncated protobuf field");
+        dataStart = state.i;
+        state.i += length;
+      } else if (wire === 1) {
+        state.i += 8;
+      } else if (wire === 5) {
+        state.i += 4;
+      } else if (wire === 0) {
+        wireSkipVarint(bytes, state);
+      } else if (wire === 3) {
+        state.i = wireSkipGroup(bytes, state.i, no);
+      } else {
+        throw new Error("Unsupported protobuf wire type " + wire);
+      }
+      if (state.i > bytes.length) throw new Error("Truncated protobuf field");
+      if (onField(no, wire, dataStart, state.i, rawStart, state.i)) return true;
     }
     return false;
   }

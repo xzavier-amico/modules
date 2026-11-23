@@ -446,6 +446,56 @@
   })();
   }
 
+  let umpCryptoCache = null;
+
+  // 优先走 WebCrypto（crypto.subtle）硬件加速 AES-128-CTR + HMAC-SHA256，
+  // 省去 640 KiB JS 查找表分配；不支持时退回内置纯 JS 实现（并缓存表）。
+  async function createNativeCryptoContext(key) {
+    const subtle = typeof crypto !== "undefined" && crypto?.subtle;
+    if (!subtle || key.length <= 16) return null;
+    try {
+      const aesKey = await subtle.importKey("raw", key.subarray(0, 16), { name: "AES-CTR" }, false, ["encrypt", "decrypt"]);
+      const hmacKey = await subtle.importKey("raw", key.subarray(16), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+      return {
+        iv: null,
+        async decrypt(envelope) {
+          this.iv = envelope.iv;
+          const macInput = concatBytes([envelope.encryptedContent, envelope.iv]);
+          const valid = await subtle.verify("HMAC", hmacKey, envelope.hmac, macInput);
+          if (!valid) throw new Error("HMAC verification failed");
+          const plain = await subtle.decrypt({ name: "AES-CTR", counter: envelope.iv, length: 128 }, aesKey, envelope.encryptedContent);
+          return new Uint8Array(plain);
+        },
+        async encrypt(plain) {
+          const encrypted = new Uint8Array(await subtle.encrypt({ name: "AES-CTR", counter: this.iv, length: 128 }, aesKey, plain));
+          const macInput = concatBytes([encrypted, this.iv]);
+          const hmac = new Uint8Array(await subtle.sign("HMAC", hmacKey, macInput));
+          return { encryptedContent: encrypted, hmac };
+        },
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async function createUmpContexts(keys) {
+    if (typeof crypto !== "undefined" && crypto?.subtle) {
+      const native = [];
+      let allNative = true;
+      for (const key of keys) {
+        const ctx = await createNativeCryptoContext(key);
+        if (!ctx) {
+          allNative = false;
+          break;
+        }
+        native.push(ctx);
+      }
+      if (allNative && native.length) return native;
+    }
+    umpCryptoCache ??= createUmpCrypto();
+    return keys.map((key) => new umpCryptoCache.CryptoContext(key));
+  }
+
   async function decryptUmp(body, options, keys) {
     let contexts;
     const EncryptedPart = messageCodec("EncryptedResponsePart", EAGER_TYPES.ump);
@@ -455,6 +505,7 @@
     const players = [];
     let changed = false;
     let expectingEncrypted = false;
+    const collectPlayers = false !== options.autoHd || ("any" !== (options.videoCodec ?? "any"));
 
     async function processPart(partBytes) {
       const envelope = EncryptedPart.fromBinary(partBytes);
@@ -463,16 +514,13 @@
       }
       if ((envelope.compressionAlgorithm ?? 0) > 1) throw new Error("Unsupported UMP compression");
 
-      if (!contexts) {
-        const { CryptoContext } = createUmpCrypto();
-        contexts = keys.map((key) => new CryptoContext(key));
-      }
+      if (!contexts) contexts = await createUmpContexts(keys);
 
       let plaintext;
       let context;
       for (const candidate of contexts) {
         try {
-          plaintext = candidate.decrypt(envelope);
+          plaintext = await candidate.decrypt(envelope);
           context = candidate;
           break;
         } catch (e) {
@@ -487,7 +535,7 @@
       const decoded = isGzip ? await gzipStream(plaintext, true) : plaintext;
       const response = Onesie.fromBinary(decoded);
 
-      if (false !== options.autoHd) {
+      if (collectPlayers) {
         for (const item of response.contents) if (item.player) players.push(item.player);
       }
 
@@ -495,7 +543,10 @@
         let result = false;
         for (const item of node.contents) {
           if (item.player) result = rewritePlayer(item.player, opts) || result;
-          if (item.next) result = filterBrowseTree(item.next, opts) || result;
+          if (item.next) {
+            result = filterBrowseTree(item.next, opts) || result;
+            if ("function" == typeof dropNextExtras) result = dropNextExtras(item.next, opts) || result;
+          }
         }
         return result;
       })(response, options);
@@ -505,7 +556,7 @@
       if (bytesEqual(reencoded, decoded)) return partBytes;
 
       const recompressed = isGzip ? await gzipStream(reencoded, false) : reencoded;
-      const encrypted = context.encrypt(recompressed);
+      const encrypted = await context.encrypt(recompressed);
       setField(envelope, "encryptedContent", encrypted.encryptedContent);
       setField(envelope, "hmac", encrypted.hmac);
       return EncryptedPart.toBinary(envelope);
@@ -514,10 +565,18 @@
     for (; reader.hasNext; ) {
       const part = reader.readPart();
       if (10 === part.type) {
-        const marker = parseFields(part.data).find((field) => 1 === field.no && 0 === field.wire);
-        expectingEncrypted = !!marker && 25 === readVarintValue(marker.data);
-      } else if (11 === part.type && expectingEncrypted) {
-        part.data = await processPart(part.data);
+        const markerVal =
+          "function" == typeof firstVarintField
+            ? firstVarintField(part.data, 1)
+            : (function () {
+                const field = parseFields(part.data).find((item) => 1 === item.no && 0 === item.wire);
+                return field ? readVarintValue(field.data) : void 0;
+              })();
+        expectingEncrypted = 25 === markerVal;
+      } else {
+        if (11 === part.type && expectingEncrypted) {
+          part.data = await processPart(part.data);
+        }
         expectingEncrypted = false;
       }
 
@@ -525,9 +584,11 @@
         out.push(part.raw);
       } else {
         changed = true;
-        const writer = new UmpWriter(part.data.length + 10);
-        writer.writePart(part);
-        out.push(writer.finish());
+        // 只编码分片头（2~10 字节），正文零拷贝直接交给最终 concatBytes。
+        const header = new UmpWriter(10);
+        header.writeVarint(part.type);
+        header.writeVarint(part.data.length);
+        out.push(header.finish(), part.data);
       }
     }
 

@@ -203,6 +203,18 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   function wireEncodeVarint(value) {
+    if ("number" == typeof value && value >= 0 && value <= 0x7fffffff) {
+      let n = value | 0;
+      const len = n < 0x80 ? 1 : n < 0x4000 ? 2 : n < 0x200000 ? 3 : n < 0x10000000 ? 4 : 5;
+      const out = new Uint8Array(len);
+      let at = 0;
+      while (n >= 0x80) {
+        out[at++] = (n & 0x7f) | 0x80;
+        n >>>= 7;
+      }
+      out[at] = n;
+      return out;
+    }
     let rest = BigInt(value);
     const out = new Uint8Array(wireVarintLength(rest));
     let at = 0;
@@ -337,6 +349,39 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return false;
   }
 
+  // 流式遍历字段，不分配字段对象与子数组；回调返回 true 时提前停止。
+  function wireForEachField(bytes, onField) {
+    const state = { i: 0 };
+    while (state.i < bytes.length) {
+      const rawStart = state.i;
+      const tag = wireReadCount(bytes, state);
+      const no = tag >>> 3;
+      const wire = tag & 7;
+      if (!no) throw new Error("Invalid protobuf field");
+
+      let dataStart = state.i;
+      if (wire === 2) {
+        const length = wireReadCount(bytes, state);
+        if (length > bytes.length - state.i) throw new Error("Truncated protobuf field");
+        dataStart = state.i;
+        state.i += length;
+      } else if (wire === 1) {
+        state.i += 8;
+      } else if (wire === 5) {
+        state.i += 4;
+      } else if (wire === 0) {
+        wireSkipVarint(bytes, state);
+      } else if (wire === 3) {
+        state.i = wireSkipGroup(bytes, state.i, no);
+      } else {
+        throw new Error("Unsupported protobuf wire type " + wire);
+      }
+      if (state.i > bytes.length) throw new Error("Truncated protobuf field");
+      if (onField(no, wire, dataStart, state.i, rawStart, state.i)) return true;
+    }
+    return false;
+  }
+
   // 按 no / wire 编码一个字段；payload 对 wire 0 是 varint 字节，其余是字段值。
   function wireEncodeField(no, wire, payload) {
     const tag = wireEncodeVarint(BigInt(no) * 8n + BigInt(wire));
@@ -367,9 +412,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
   const textEncoder = new TextEncoder();
   const strictUtf8 = new TextDecoder("utf-8", { fatal: true });
+  const looseUtf8 = new TextDecoder("utf-8");
 
   // 用来在字节流里认东西的标记。
-  const PREMIUM_UPSELL_MARKER = textEncoder.encode("PAyouchat");
+  // PAyouchat 是 YouTube Ask AI（YouChat）面板的 targetId；SPunlimited 是 Premium 入口/推广标识。
+  const ASK_AI_MARKER = textEncoder.encode("PAyouchat");
   const AI_SUMMARY_MARKER = textEncoder.encode("ai_summary_");
   const PAGEAD_MARKER = textEncoder.encode("/pagead/");
   const MINI_GAME_MARKER = textEncoder.encode("mini_game_card.eml");
@@ -408,6 +455,8 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     "メンバー限定",
     "멤버 전용",
   ];
+  const MEMBERS_ONLY_LABEL_BYTES = MEMBERS_ONLY_LABELS.map((label) => textEncoder.encode(label));
+  const MAX_MEMBERS_LABEL_BYTES = 64;
 
   // 侧栏/首页菜单项：值是可读别名，id 是 guide 响应里的 browseId。
   // home_menu 用别名或 browseId 都可以，多个用英文逗号分隔。
@@ -497,46 +546,82 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return values;
   }
 
-  // YouTube 的 params 是 URL-safe base64，去掉填充后长度可能差一位。
+  const BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let base64DecodeTable;
+
+  function decodeBase64Fallback(clean) {
+    if (!base64DecodeTable) {
+      base64DecodeTable = new Int16Array(128).fill(-1);
+      for (let i = 0; i < BASE64_CHARS.length; i++) base64DecodeTable[BASE64_CHARS.charCodeAt(i)] = i;
+    }
+    const len = clean.length;
+    const outLen = Math.floor((len * 3) / 4);
+    const out = new Uint8Array(outLen);
+    let pos = 0;
+    for (let i = 0; i < len; i += 4) {
+      const c0 = clean.charCodeAt(i);
+      const c1 = i + 1 < len ? clean.charCodeAt(i + 1) : 65;
+      const c2 = i + 2 < len ? clean.charCodeAt(i + 2) : 65;
+      const c3 = i + 3 < len ? clean.charCodeAt(i + 3) : 65;
+      const a = c0 < 128 ? base64DecodeTable[c0] : -1;
+      const b = c1 < 128 ? base64DecodeTable[c1] : -1;
+      const c = c2 < 128 ? base64DecodeTable[c2] : -1;
+      const d = c3 < 128 ? base64DecodeTable[c3] : -1;
+      if (a < 0 || b < 0 || c < 0 || d < 0) throw new Error("Invalid base64");
+      const n = (a << 18) | (b << 12) | (c << 6) | d;
+      if (pos < outLen) out[pos++] = (n >> 16) & 255;
+      if (pos < outLen) out[pos++] = (n >> 8) & 255;
+      if (pos < outLen) out[pos++] = n & 255;
+    }
+    return out;
+  }
+
+  function bytesToBase64(bytes) {
+    if ("function" == typeof bytes.toBase64) return bytes.toBase64();
+    let out = "";
+    for (let i = 0; i < bytes.length; i += 3) {
+      const b0 = bytes[i];
+      const b1 = i + 1 < bytes.length ? bytes[i + 1] : 0;
+      const b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
+      out += BASE64_CHARS[b0 >> 2];
+      out += BASE64_CHARS[((b0 & 3) << 4) | (b1 >> 4)];
+      out += i + 1 < bytes.length ? BASE64_CHARS[((b1 & 15) << 2) | (b2 >> 6)] : "=";
+      out += i + 2 < bytes.length ? BASE64_CHARS[b2 & 63] : "=";
+    }
+    return out;
+  }
+
+  // YouTube 的 params 是 URL-safe base64，去掉填充后长度可能差一位；
+  // 兼容缺少 Uint8Array.fromBase64 的旧版 JSC（iOS < 18.2 的 Loon / Egern）。
   function base64ToBytes(text) {
     const normalized = text.replace(/[-_\s=]/g, (ch) => (ch === "-" ? "+" : ch === "_" ? "/" : ""));
     const needsPad = normalized.length % 4 === 1;
-    const bytes = Uint8Array.fromBase64(needsPad ? normalized + "A" : normalized);
+    const input = needsPad ? normalized + "A" : normalized;
+    const bytes = "function" == typeof Uint8Array.fromBase64 ? Uint8Array.fromBase64(input) : decodeBase64Fallback(input);
     return needsPad ? bytes.subarray(0, -1) : bytes;
   }
 
-  // 在字节流里找一段子串。先顺序扫，命中太稀疏时切成两段再找，
-  // 避免在超大响应上退化成 O(n*m)。
+  // 在字节流里找一段子串：全程走原生 TypedArray.indexOf（C++/SIMD），
+  // 先校验尾字节过滤掉绝大多数假命中，避免退化成纯 JS 逐字节循环。
   function containsBytes(haystack, needle = PAGEAD_MARKER) {
-    if (!needle.length) return true;
-    const lastStart = haystack.length - needle.length;
-    let probes = 0;
-    let lastProbeAt = 0;
-    for (let start = haystack.indexOf(needle[0]); start >= 0 && start <= lastStart; start = haystack.indexOf(needle[0], start + 1)) {
+    const nLen = needle.length;
+    if (!nLen) return true;
+    const lastStart = haystack.length - nLen;
+    if (lastStart < 0) return false;
+    const first = needle[0];
+    if (1 === nLen) return haystack.indexOf(first) >= 0;
+    const lastIdx = nLen - 1;
+    const last = needle[lastIdx];
+    for (let start = haystack.indexOf(first); start >= 0 && start <= lastStart; start = haystack.indexOf(first, start + 1)) {
+      if (haystack[start + lastIdx] !== last) continue;
       let hit = true;
-      for (let i = 1; i < needle.length; i++) {
+      for (let i = 1; i < lastIdx; i++) {
         if (haystack[start + i] !== needle[i]) {
           hit = false;
           break;
         }
       }
       if (hit) return true;
-      if (8 === ++probes) {
-        // 连续 8 次没中且都挤在 256 字节内，说明这段是噪声，直接往后跳。
-        if (start - lastProbeAt < 256) return containsBytesSlow(haystack, needle, start + 1);
-        lastProbeAt = start;
-        probes = 0;
-      }
-    }
-    return false;
-  }
-
-  function containsBytesSlow(haystack, needle, from) {
-    outer: for (let start = from; start <= haystack.length - needle.length; start++) {
-      for (let i = 0; i < needle.length; i++) {
-        if (haystack[start + i] !== needle[i]) continue outer;
-      }
-      return true;
     }
     return false;
   }
@@ -569,17 +654,32 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // 返回 [{ no, wire, data, raw }]，data 是字段值，raw 是含 tag 的整段字节。
   const parseFields = wireParseFields;
 
-  // 取第一个（或最后一个）指定字段的值。
+  // 取第一个（或最后一个）指定 wire-2 字段的值；走流式扫描避免构建完整字段数组。
   function fieldData(bytes, fieldNo, last = false) {
-    let found;
-    for (const field of parseFields(bytes)) {
-      if (field.no === fieldNo && 2 === field.wire) {
-        if (!last) return field.data;
-        if (found) return;
-        found = field.data;
+    let foundStart = -1;
+    let foundEnd = -1;
+    wireForEachField(bytes, (no, wire, dataStart, dataEnd) => {
+      if (no === fieldNo && 2 === wire) {
+        foundStart = dataStart;
+        foundEnd = dataEnd;
+        if (!last) return true;
       }
-    }
-    return found;
+      return false;
+    });
+    return foundStart >= 0 ? bytes.subarray(foundStart, foundEnd) : undefined;
+  }
+
+  // 取第一个指定 wire-0 字段的 varint 数值；找不到返回 undefined。
+  function firstVarintField(bytes, fieldNo) {
+    let result;
+    wireForEachField(bytes, (no, wire, dataStart, dataEnd) => {
+      if (no === fieldNo && 0 === wire) {
+        result = readVarintValue(bytes.subarray(dataStart, dataEnd));
+        return true;
+      }
+      return false;
+    });
+    return result;
   }
 
   // 按字段号逐层往下钻，任意一层缺失就返回 undefined。
@@ -630,52 +730,108 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   // 判断某条嵌套路径上的最后一个值是否等于 marker（prefixOnly 时只比前缀）。
-  function matchesPath(bytes, path, marker = PAGEAD_MARKER, prefixOnly = false) {
-    return path.length
-      ? parseFields(bytes).some((field) => field.no === path[0] && 2 === field.wire && matchesPath(field.data, path.slice(1), marker, prefixOnly))
-      : bytesEqual(prefixOnly ? bytes.subarray(0, marker.length) : bytes, marker);
+  // 默认匹配 ASK_AI_MARKER（PAyouchat），用于识别 Ask AI 的命令/面板路径。
+  function matchesPath(bytes, path, marker = ASK_AI_MARKER, prefixOnly = false, depth = 0) {
+    if (depth >= path.length) {
+      if (prefixOnly) return bytes.length >= marker.length && bytesEqual(bytes.subarray(0, marker.length), marker);
+      return bytesEqual(bytes, marker);
+    }
+    const targetNo = path[depth];
+    return wireForEachField(
+      bytes,
+      (no, wire, dataStart, dataEnd) => no === targetNo && 2 === wire && matchesPath(bytes.subarray(dataStart, dataEnd), path, marker, prefixOnly, depth + 1),
+    );
   }
 
   // 对某个字段的每个出现位置跑一次 rewriter，返回 undefined 表示整条删掉。
   function rewriteRepeatedField(bytes, fieldNo, rewriter) {
     let changed = false;
-    const parts = parseFields(bytes).flatMap((field) => {
-      if (field.no !== fieldNo || 2 !== field.wire) return [field.raw];
+    const fields = parseFields(bytes);
+    const parts = [];
+    for (const field of fields) {
+      if (field.no !== fieldNo || 2 !== field.wire) {
+        parts.push(field.raw);
+        continue;
+      }
       const next = rewriter(field.data);
-      return next && bytesEqual(next, field.data) ? [field.raw] : ((changed = true), next ? [encodeField([fieldNo, "", "bytes"], next)] : []);
-    });
+      if (next && bytesEqual(next, field.data)) {
+        parts.push(field.raw);
+      } else {
+        changed = true;
+        if (next) parts.push(encodeField([fieldNo, "", "bytes"], next));
+      }
+    }
     return changed ? concatBytes(parts) : bytes;
   }
 
   // 按路径下钻，对命中位置的字节跑 rewriter。
-  function rewritePath(bytes, path, rewriter) {
-    if (!path.length) return rewriter(bytes);
+  function rewritePath(bytes, path, rewriter, depth = 0) {
+    if (depth >= path.length) return rewriter(bytes);
+    const targetNo = path[depth];
     let changed = false;
-    const parts = parseFields(bytes).map((field) => {
-      if (field.no !== path[0] || 2 !== field.wire) return field.raw;
-      const next = rewritePath(field.data, path.slice(1), rewriter);
-      return bytesEqual(next, field.data) ? field.raw : ((changed = true), encodeField([field.no, "", "bytes"], next));
-    });
+    const fields = parseFields(bytes);
+    const parts = new Array(fields.length);
+    for (let i = 0; i < fields.length; i++) {
+      const field = fields[i];
+      if (field.no !== targetNo || 2 !== field.wire) {
+        parts[i] = field.raw;
+        continue;
+      }
+      const next = rewritePath(field.data, path, rewriter, depth + 1);
+      if (bytesEqual(next, field.data)) {
+        parts[i] = field.raw;
+      } else {
+        changed = true;
+        parts[i] = encodeField([field.no, "", "bytes"], next);
+      }
+    }
     return changed ? concatBytes(parts) : bytes;
   }
 
-  // 判断请求是不是 YouTube Music（iOS App 的 UA / client-name 都带 music）。
-  function isMusicRequest(request) {
-    if (/^https?:\/\/music\.youtube\.com\//i.test(String(request?.url ?? ""))) return true;
-    for (const [key, value] of Object.entries(request?.headers ?? {})) {
-      const name = key.toLowerCase();
-      const text = String(value ?? "");
-      if ("user-agent" === name && /music/i.test(text)) return true;
-      // WEB_REMIX（YouTube Music Web/iOS 的 InnerTube 客户端）的 client-name 是 67。
-      if ("x-youtube-client-name" === name && ("67" === text.trim() || /music|remix/i.test(text))) return true;
-      if ("x-youtube-client-version" === name && /music|remix/i.test(text)) return true;
+  const WEB_HOST_RE = /^https?:\/\/(?:www|m|music)\.youtube\.com(?:\/|$)/i;
+  const MUSIC_HOST_RE = /^https?:\/\/music\.youtube\.com(?:\/|$)/i;
+
+  let cachedReqInfoRef = null;
+  let cachedReqInfo = null;
+
+  function inspectRequest(request) {
+    if (request && request === cachedReqInfoRef) return cachedReqInfo;
+    const url = String(request?.url ?? "");
+    let isMusic = MUSIC_HOST_RE.test(url);
+    let isWeb = WEB_HOST_RE.test(url);
+    const headers = request?.headers;
+    if (headers && (!isMusic || !isWeb)) {
+      for (const key in headers) {
+        if (!Object.hasOwn(headers, key)) continue;
+        const name = key.toLowerCase();
+        const text = String(headers[key] ?? "");
+        if (!isMusic) {
+          if ("user-agent" === name && /music/i.test(text)) isMusic = true;
+          // WEB_REMIX（YouTube Music Web/iOS 的 InnerTube 客户端）的 client-name 是 67。
+          else if ("x-youtube-client-name" === name && ("67" === text.trim() || /music|remix/i.test(text))) isMusic = true;
+          else if ("x-youtube-client-version" === name && /music|remix/i.test(text)) isMusic = true;
+          else if (("origin" === name || "referer" === name) && MUSIC_HOST_RE.test(text)) isMusic = true;
+        }
+        if (!isWeb && ("origin" === name || "referer" === name) && WEB_HOST_RE.test(text)) isWeb = true;
+        if (isMusic && isWeb) break;
+      }
     }
-    return false;
+    const info = { isMusic, isWeb };
+    if (request && "object" == typeof request) {
+      cachedReqInfoRef = request;
+      cachedReqInfo = info;
+    }
+    return info;
   }
 
-  // 网页版 YouTube / YouTube Music。移动网页最终也会落到 www.youtube.com。
+  // 判断请求是不是 YouTube Music（iOS App 的 UA / client-name，以及网页版 URL / Origin / Referer）。
+  function isMusicRequest(request) {
+    return inspectRequest(request).isMusic;
+  }
+
+  // 网页版 YouTube / YouTube Music；含从网页发往 googlevideo.com 的播放请求（看 Origin / Referer）。
   function isWebRequest(request) {
-    return /^https?:\/\/(?:www|m|music)\.youtube\.com\//i.test(String(request?.url ?? ""));
+    return inspectRequest(request).isWeb;
   }
 
   function clientKeyFor(request) {
@@ -704,6 +860,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       entry.itags.length <= 256 &&
       entry.itags.every((itag) => Number.isInteger(itag) && itag > 0 && itag <= 4294967295) &&
       new Set(entry.itags).size === entry.itags.length &&
+      (void 0 === entry.codec || "any" === entry.codec || "no_av1" === entry.codec || "avc" === entry.codec) &&
       (void 0 === entry.premiumItags ||
         (Array.isArray(entry.premiumItags) &&
           entry.premiumItags.length <= entry.itags.length &&
@@ -716,6 +873,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return (
       void 0 !== left &&
       left.height === right.height &&
+      (left.codec ?? "any") === (right.codec ?? "any") &&
       left.itags.length === right.itags.length &&
       right.itags.every((itag) => left.itags.includes(itag)) &&
       (left.premiumItags?.length ?? 0) === (right.premiumItags?.length ?? 0) &&
@@ -892,13 +1050,14 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     if (!text) return undefined;
 
     const hide = text.startsWith("-") || text.startsWith("!");
-    const name = (hide ? text.slice(1) : text).trim().toLowerCase();
+    const rawName = (hide ? text.slice(1) : text).trim();
+    const name = rawName.toLowerCase();
     if (!name) return undefined;
 
     const item = MENU_ITEMS.find((entry) => entry.id.toLowerCase() === name || entry.keys.some((key) => key.toLowerCase() === name));
     if (item) return { hide, id: item.id };
-    // 也允许直接写 browseId；只接受像 ID 的字符串，避免把说明文字当成入口。
-    if (/^[a-z0-9_]+$/i.test(name)) return { hide, id: name };
+    // 也允许直接写 browseId；保留原始大小写以匹配区分大小写的 browseId（如 FEmusic_explore / VLWL）。
+    if (/^[a-z0-9_]+$/i.test(rawName)) return { hide, id: rawName };
     return undefined;
   }
 
@@ -999,12 +1158,15 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
     // 首页清理：off 全关，standard 只清 Playables，all 再加竖屏直播。
     // 创作者商店/商品卡属于付费推广，跟随 blockAds。
-    let cleanup = String(options.homeCleanup ?? "").toLowerCase();
-    if (!cleanup) {
+    let cleanup;
+    if (void 0 !== options.homeCleanup && null !== options.homeCleanup && "" !== String(options.homeCleanup).trim()) {
+      cleanup = asLevel(options.homeCleanup, "standard");
+    } else {
       const games = void 0 === options.blockGames ? true : asBool(options.blockGames, true);
       const vertical = void 0 !== options.blockVerticalLive && asBool(options.blockVerticalLive, false);
       cleanup = vertical ? "all" : games ? "standard" : "off";
     }
+    options.homeCleanup = cleanup;
     options.blockStore = blockAds;
     options.blockGames = "off" !== cleanup;
     options.blockVerticalLive = "all" === cleanup;
@@ -1024,13 +1186,25 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       if (extra.length) options.homeMenu = [options.homeMenu, ...extra.map((item) => `-${item}`)].filter(Boolean).join(",");
     }
 
-    options.hiddenGuideItems = resolveHiddenMenu(options.homeMenu, blockAds);
+    // 延迟计算 hiddenGuideItems：请求阶段与非 guide 响应不会读它，省去每次构建 Set 与查表。
+    const rawHomeMenu = options.homeMenu;
+    Object.defineProperty(options, "hiddenGuideItems", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        const list = resolveHiddenMenu(rawHomeMenu, blockAds);
+        Object.defineProperty(this, "hiddenGuideItems", { value: list, enumerable: true, writable: true, configurable: true });
+        return list;
+      },
+    });
 
-    const speed = String(options.maxSpeed ?? "4").toLowerCase();
-    options.maxSpeed = "off" === speed || false === options.maxSpeed ? false : Math.max(2, Math.min(4, parseInt(speed) || 4));
+    const speed = String(options.maxSpeed ?? "4").trim().toLowerCase();
+    options.maxSpeed =
+      "off" === speed || "false" === speed || "0" === speed || false === options.maxSpeed ? false : Math.max(2, Math.min(4, parseInt(speed, 10) || 4));
 
     const caption = String(options.captionLang ?? "zh-Hans").trim();
-    options.captionLang = /^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/i.test(caption) ? caption : "off";
+    options.captionLang =
+      "off" !== caption.toLowerCase() && /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,4}){0,2}$/i.test(caption) ? caption : "off";
 
     options.blockAi = asBool(options.blockAi, true);
     // 此开关默认关闭，参数缺失时不能按「非 false 即 true」处理。
@@ -1076,9 +1250,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     options.webCleanup = asBool(options.webCleanup, false);
     options.musicCleanup = asBool(options.musicCleanup, false);
 
-    const result = { ...defaults, ...options };
-    if (noDefaults) OPTIONS_CACHE = result;
-    return result;
+    if (noDefaults) {
+      OPTIONS_CACHE = options;
+      return options;
+    }
+    return { ...defaults, ...options };
   }
 
   //=====================================================================================
@@ -1457,29 +1633,34 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
     const obj = {};
     const fields = parseFields(bytes);
-    const repeatedCount = fields.length > 1 ? new Map() : null;
     const state = { bytes, fields, parent: parentState, parentName, eager };
-    const specsByNo = (SPEC_CACHE[typeName] ??= new Map(SCHEMA[typeName].map((spec) => [spec[0], spec])));
+    const specs = SCHEMA[typeName];
+    const specsByNo = (SPEC_CACHE[typeName] ??= new Map(specs.map((spec) => [spec[0], spec])));
+    if (!SPEC_NAME_CACHE[typeName]) SPEC_NAME_CACHE[typeName] = new Map(specs.map((spec) => [spec[1], spec]));
 
     Object.defineProperty(obj, WIRE_STATE, { value: state });
-    for (const [, name, , repeated] of SCHEMA[typeName]) if (repeated) obj[name] = [];
+    for (const [, name, , repeated] of specs) if (repeated) obj[name] = [];
 
-    // 先给每个字段挂上 spec，并统计同名字段出现次数。
-    if (repeatedCount) {
-      for (const field of fields) {
-        const spec = specsByNo.get(field.no);
-        if (spec && (field.wire === wireTypeOf(spec[2]) || isPackedNumeric(spec, field))) {
-          field.spec = spec;
-          if (!spec[3]) repeatedCount.set(spec[1], (repeatedCount.get(spec[1]) ?? 0) + 1);
+    // 绑定 spec 并记录重复出现的非 repeated 字段（标量按最后一次生效，子消息按 protobuf 规范合并）。
+    let seenSingular = null;
+    let duplicateSingular = null;
+    for (const field of fields) {
+      const spec = specsByNo.get(field.no);
+      if (spec && (field.wire === wireTypeOf(spec[2]) || isPackedNumeric(spec, field))) {
+        field.spec = spec;
+        if (!spec[3]) {
+          const name = spec[1];
+          if (seenSingular && seenSingular.has(name)) (duplicateSingular ??= new Set()).add(name);
+          else (seenSingular ??= new Set()).add(name);
         }
       }
     }
 
     let deferredNames;
+    let mergedHandled;
     for (const field of fields) {
-      const spec = repeatedCount ? field.spec : specsByNo.get(field.no);
-      if (!spec || (field.wire !== wireTypeOf(spec[2]) && !isPackedNumeric(spec, field))) continue;
-      field.spec = spec;
+      const spec = field.spec;
+      if (!spec) continue;
 
       const [, name, valueType, repeated] = spec;
       if (isPackedNumeric(spec, field)) {
@@ -1494,22 +1675,44 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         for (const value of values) obj[name].push("bool" === valueType ? 0 !== value : value);
         continue;
       }
-      if (!repeated && (repeatedCount?.get(name) ?? 0) > 1) {
-        delete field.spec;
+
+      // 重复出现的非 repeated 子消息：合并所有分片字节后统一解码。
+      if (!repeated && duplicateSingular?.has(name) && SCHEMA[valueType]) {
+        if (mergedHandled?.has(name)) continue;
+        (mergedHandled ??= new Set()).add(name);
+        const chunks = [];
+        for (const item of fields) if (item.spec?.[1] === name) chunks.push(item.data);
+        const mergedBytes = concatBytes(chunks);
+        if (!eager.has(valueType)) {
+          state.type = typeName;
+          state.deferred = true;
+          Object.defineProperty(obj, name, {
+            enumerable: true,
+            configurable: true,
+            get() {
+              const value = decodeMessage(valueType, mergedBytes, depth + 1, state, name, eager);
+              Object.defineProperty(obj, name, { value, enumerable: true, writable: true, configurable: true });
+              return value;
+            },
+          });
+        } else {
+          obj[name] = decodeMessage(valueType, mergedBytes, depth + 1, state, name, eager);
+        }
         continue;
       }
+
       if (SCHEMA[valueType] && !eager.has(valueType)) {
         // 同一名字段只挂一个 getter，第一次读时才真正展开。
         if (deferredNames?.has(name)) continue;
         (deferredNames ??= new Set()).add(name);
-        const group = fields.filter((item) => item.spec?.[1] === name);
+        const group = repeated ? fields.filter((item) => item.spec?.[1] === name) : null;
         state.type = typeName;
         state.deferred = true;
         Object.defineProperty(obj, name, {
           enumerable: true,
           configurable: true,
           get() {
-            const value = repeated ? group.map((item) => readFieldValue(item, depth, state, eager)) : readFieldValue(group[0], depth, state, eager);
+            const value = repeated ? group.map((item) => readFieldValue(item, depth, state, eager)) : readFieldValue(field, depth, state, eager);
             Object.defineProperty(obj, name, { value, enumerable: true, writable: true, configurable: true });
             return value;
           },
@@ -1535,7 +1738,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   function readFieldValue(field, depth, state, eager) {
     const [, name, valueType] = field.spec;
     if ("bytes" === valueType) return field.data;
-    if ("string" === valueType) return strictUtf8.decode(field.data);
+    if ("string" === valueType) return looseUtf8.decode(field.data);
     if ("bool" === valueType) return 0 !== readVarintValue(field.data);
     if ("uint" === valueType) return readVarintValue(field.data);
     return decodeMessage(valueType, field.data, depth + 1, state, name, eager);
@@ -1556,12 +1759,22 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       return repeated ? (obj[name] ?? []) : void 0 === obj[name] ? [] : [obj[name]];
     };
 
-    // 数组字段：先把改动过的元素按原始字节做一次索引，重写时按原顺序取。
+    // 数组字段：按原始字节/字符串值建立 FIFO 队列索引，避免重复项被 Map 去重或 string/Uint8Array 错配。
     // 数字数组单独处理（可能 packed），不放进这个索引。
     for (const spec of SCHEMA[typeName]) {
       const [, name, valueType, repeated] = spec;
       if (repeated && state?.changed?.has(name) && "uint" !== valueType && "bool" !== valueType) {
-        repeatedPool.set(name, new Map(valuesOf(spec).map((value) => [rawOf(value, valueType), value])));
+        const pool = new Map();
+        for (const value of valuesOf(spec)) {
+          const key = rawOf(value, valueType);
+          let queue = pool.get(key);
+          if (!queue) {
+            queue = [];
+            pool.set(key, queue);
+          }
+          queue.push(value);
+        }
+        repeatedPool.set(name, pool);
       }
     }
 
@@ -1571,26 +1784,34 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         continue;
       }
       const [, name, valueType, repeated] = field.spec;
-      written.add(name);
 
-      // repeated 数字字段可能是 packed 或 unpacked：整体按原形式重写一次，避免逐条对不上。
+      // repeated 数字字段可能是 packed 或 unpacked：整体按原形式重写一次；空数组不写空 tag。
       if (repeated && ("uint" === valueType || "bool" === valueType)) {
+        written.add(name);
         if (!numericWritten.has(name)) {
           const values = obj[name] ?? [];
-          if (2 === field.wire) parts.push(encodePackedField(field.spec, values));
-          else for (const value of values) parts.push(encodeField(field.spec, value));
+          if (values.length) {
+            if (2 === field.wire) parts.push(encodePackedField(field.spec, values));
+            else for (const value of values) parts.push(encodeField(field.spec, value));
+          }
           numericWritten.add(name);
         }
         continue;
       }
 
       if (repeated) {
+        written.add(name);
         const pool = repeatedPool.get(name);
-        if (!pool.has(field.data)) continue;
-        const value = pool.get(field.data);
-        pool.delete(field.data);
+        const lookupKey = "string" === valueType ? looseUtf8.decode(field.data) : field.data;
+        const queue = pool.get(lookupKey);
+        if (!queue?.length) continue;
+        const value = queue.shift();
+        if (!queue.length) pool.delete(lookupKey);
         parts.push(SCHEMA[valueType] && value[WIRE_STATE]?.changed ? encodeField(field.spec, value) : field.raw);
       } else {
+        // 原消息里出现多次的 singular 字段只写出一次，避免合并/覆盖后写出重复字段。
+        if (written.has(name)) continue;
+        written.add(name);
         const value = obj[name];
         if (void 0 === value) continue;
         const needsWrite = rawOf(value, valueType) !== field.data || (SCHEMA[valueType] && value[WIRE_STATE]?.changed);
@@ -1603,7 +1824,9 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       const [, name, , repeated] = spec;
       if (state && !state.changed.has(name)) continue;
       if (repeated && repeatedPool.has(name)) {
-        for (const value of repeatedPool.get(name).values()) parts.push(encodeField(spec, value));
+        for (const queue of repeatedPool.get(name).values()) {
+          for (const value of queue) parts.push(encodeField(spec, value));
+        }
       } else if (!written.has(name)) {
         for (const value of valuesOf(spec)) parts.push(encodeField(spec, value));
       }
@@ -1651,6 +1874,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   const SPEC_CACHE = Object.create(null);
+  const SPEC_NAME_CACHE = Object.create(null);
 
   function messageCodec(typeName, eager = EAGER_TYPES.youtubei) {
     return { fromBinary: (bytes) => decodeMessage(typeName, bytes, 0, undefined, undefined, eager), toBinary: (obj) => encodeMessage(typeName, obj) };
@@ -1672,12 +1896,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // §8 广告与推广位过滤
   //=====================================================================================
 
-
-  // 复用解码器；会员徽章文案最长二十多个字节，超过阈值的字段不可能是徽章本身。
-  const looseUtf8 = new TextDecoder("utf-8");
-  const MAX_MEMBERS_LABEL_BYTES = 64;
-
-
   // 播放倍速菜单：把上限抬到 maxSpeed，并按需删掉 Premium 推广。
   function rewriteSpeedMenu(node, maxSpeed, hidePremium) {
     const renderer = node.playerOverlays?.renderer;
@@ -1695,7 +1913,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
           if (!(currentRate > 0)) return bytes;
 
           let next = bytes;
-          const maxRate = false === maxSpeed ? 0 : Math.max(2, Math.min(4, parseInt(maxSpeed) || 4));
+          const maxRate = false === maxSpeed ? 0 : Math.max(2, Math.min(4, parseInt(maxSpeed, 10) || 4));
           if (maxRate > 0 && currentRate < maxRate) {
             const encodedRate = new Uint8Array(4);
             new DataView(encodedRate.buffer).setFloat32(0, maxRate, true);
@@ -1705,7 +1923,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
           if (false === hidePremium) return next;
           return rewritePath(next, [10, 1674], (chunk) => {
             const inner = parseFields(chunk);
-            const kept = inner.filter((field) => 3 !== field.no || 2 !== field.wire || !containsBytes(field.data, PREMIUM_UPSELL_MARKER));
+            const kept = inner.filter((field) => 3 !== field.no || 2 !== field.wire || !containsBytes(field.data, PREMIUM_TAB_MARKER));
             return kept.length === inner.length ? chunk : concatBytes(kept.map((field) => field.raw));
           });
         },
@@ -1718,85 +1936,107 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     }
   }
 
-  // 会员专属徽章：按文案在原始字节里逐层找。
-  function hasMembersOnlyBadge(node) {
-    try {
-      const bytes = node && node[WIRE_STATE] && node[WIRE_STATE].bytes;
-      if (!bytes || !bytes.length) return false;
-
-      function scan(buffer, depth) {
-        if (depth > 14) return false;
-        let offset = 0;
-        while (offset < buffer.length) {
-          let tag = 0;
-          let shift = 0;
-          let byte;
-          do {
-            if (offset >= buffer.length) return false;
-            byte = buffer[offset++];
-            tag += (byte & 127) * 2 ** shift;
-            shift += 7;
-            if (shift > 35) return false;
-          } while (byte & 128);
-
-          const fieldNo = Math.floor(tag / 8);
-          const wireType = tag % 8;
-          if (wireType === 0) {
-            do {
-              if (offset >= buffer.length) return false;
-              byte = buffer[offset++];
-            } while (byte & 128);
-          } else if (wireType === 1) {
-            offset += 8;
-          } else if (wireType === 5) {
-            offset += 4;
-          } else if (wireType === 2) {
-            let length = 0;
-            shift = 0;
-            do {
-              if (offset >= buffer.length) return false;
-              byte = buffer[offset++];
-              length += (byte & 127) * 2 ** shift;
-              shift += 7;
-              if (shift > 35) return false;
-            } while (byte & 128);
-            if (offset + length > buffer.length) return false;
-            const chunk = buffer.subarray(offset, offset + length);
-            if (length <= MAX_MEMBERS_LABEL_BYTES) {
-              try {
-                if (MEMBERS_ONLY_LABELS.includes(strictUtf8.decode(chunk))) return true;
-              } catch {}
-            }
-            if (scan(chunk, depth + 1)) return true;
-            offset += length;
-          } else {
-            return false;
-          }
-        }
-        return false;
-      }
-
-      return scan(bytes, 0);
-    } catch {
-      return false;
+  function hasAnyMarkerBytes(bytes, markers) {
+    if (!bytes || !bytes.length) return false;
+    for (let i = 0; i < markers.length; i++) {
+      const marker = markers[i];
+      if (bytes.length >= marker.length && containsBytes(bytes, marker)) return true;
     }
+    return false;
+  }
+
+  function isMembersLabelBytes(chunk) {
+    const len = chunk.length;
+    if (len > MAX_MEMBERS_LABEL_BYTES) return false;
+    for (let i = 0; i < MEMBERS_ONLY_LABEL_BYTES.length; i++) {
+      const target = MEMBERS_ONLY_LABEL_BYTES[i];
+      if (len === target.length && bytesEqual(chunk, target)) return true;
+    }
+    return false;
+  }
+
+  // 在原始 protobuf 字节里统计精确匹配会员徽章文案的字段数（达到 limit 即早停）。
+  // 先用原生 indexOf 做快筛，内部直接按字节比较，完全消除 TextDecoder 与异常抛出开销。
+  function countMembersOnlyBadges(bytes, limit = 1) {
+    if (!hasAnyMarkerBytes(bytes, MEMBERS_ONLY_LABEL_BYTES)) return 0;
+    let count = 0;
+    function scan(buffer, depth) {
+      if (depth > 14 || count >= limit) return;
+      let offset = 0;
+      while (offset < buffer.length && count < limit) {
+        let tag = 0;
+        let shift = 0;
+        let byte;
+        do {
+          if (offset >= buffer.length) return;
+          byte = buffer[offset++];
+          tag += (byte & 127) * 2 ** shift;
+          shift += 7;
+          if (shift > 35) return;
+        } while (byte & 128);
+
+        const wireType = tag % 8;
+        if (wireType === 0) {
+          do {
+            if (offset >= buffer.length) return;
+            byte = buffer[offset++];
+          } while (byte & 128);
+        } else if (wireType === 1) {
+          offset += 8;
+        } else if (wireType === 5) {
+          offset += 4;
+        } else if (wireType === 2) {
+          let length = 0;
+          shift = 0;
+          do {
+            if (offset >= buffer.length) return;
+            byte = buffer[offset++];
+            length += (byte & 127) * 2 ** shift;
+            shift += 7;
+            if (shift > 35) return;
+          } while (byte & 128);
+          if (offset + length > buffer.length) return;
+          const chunk = buffer.subarray(offset, offset + length);
+          if (isMembersLabelBytes(chunk)) {
+            count++;
+            if (count >= limit) return;
+          } else if (length >= 2) {
+            scan(chunk, depth + 1);
+          }
+          offset += length;
+        } else {
+          return;
+        }
+      }
+    }
+    try {
+      scan(bytes, 0);
+    } catch {
+      return count;
+    }
+    return count;
+  }
+
+  // 会员专属徽章：按精确字节文案在原始 protobuf 树里找。
+  function hasMembersOnlyBadge(node) {
+    const bytes = node && node[WIRE_STATE] && node[WIRE_STATE].bytes;
+    return !!bytes && bytes.length > 0 && countMembersOnlyBadges(bytes, 1) > 0;
   }
 
   // 一个卡片/货架里的视频是否全都是会员专属（混排货架不能整块删）。
+  // 同时识别 /vi/ 和 /vi_webp/ 缩略图，并用精确 protobuf 字段匹配计数避免被无障碍文案/标题重复计数。
   function isAllMembersOnly(node) {
     try {
       const bytes = node && node[WIRE_STATE] && node[WIRE_STATE].bytes;
       if (!bytes || !bytes.length) return false;
       const text = looseUtf8.decode(bytes);
-      const videoIds = text.match(/\/vi\/[A-Za-z0-9_-]{11}\//g);
-      if (!videoIds) return false;
-
+      const re = /\/vi(?:_webp)?\/([A-Za-z0-9_-]{11})\//g;
       const unique = new Set();
-      for (const match of videoIds) unique.add(match.slice(4, 15));
-      let badges = 0;
-      let index;
-      for (const label of MEMBERS_ONLY_LABELS) for (index = -1; (index = text.indexOf(label, index + 1)) >= 0; ) badges++;
-      return badges >= unique.size;
+      let match;
+      while ((match = re.exec(text))) unique.add(match[1]);
+      if (!unique.size) return false;
+      if (1 === unique.size) return true;
+      return countMembersOnlyBadges(bytes, unique.size) >= unique.size;
     } catch {
       return false;
     }
@@ -1939,36 +2179,38 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     }
   }
 
-  // 一条信息流节点是不是广告。
-  function isFeedAdNode(node, options) {
-    const layout = node.layoutRender?.eml?.split("|")[0];
-    const adByLayout = layout && ((false !== options.blockFeedAds && FEED_AD_LAYOUT.test(layout)) || (options.blockStore && SHOPPING_LAYOUT.test(layout)));
-
-    if (adByLayout) return true;
+  // 一条信息流节点是不是广告。mayHavePageAd 由列表项外层预检传入，避免每个子节点重复扫 /pagead/。
+  function isFeedAdNode(node, options, mayHavePageAd = true) {
+    if (false !== options.blockFeedAds || options.blockStore) {
+      const layout = node.layoutRender?.eml?.split("|")[0];
+      if (layout && ((false !== options.blockFeedAds && FEED_AD_LAYOUT.test(layout)) || (options.blockStore && SHOPPING_LAYOUT.test(layout)))) return true;
+    }
     if (options.blockStore && node.shoppingShelf) return true;
     if (false !== options.blockFeedAds && node.sponsoredVideo) return true;
     if (false !== options.blockFeedAds && node.sponsoredDisplay) return true;
     if (options.blockVerticalLive && node.videoLockup && isVerticalLiveLockup(node.videoLockup)) return true;
     if (false !== options.blockMembersOnly && node.videoLockup && hasMembersOnlyBadge(node.videoLockup)) return true;
 
-    for (const field of unknownFields(node)) {
+    const fields = unknownFields(node);
+    const checkPageAd = mayHavePageAd && false !== options.blockFeedAds;
+    for (let i = 0; i < fields.length; i++) {
+      const field = fields[i];
       if (2 !== field.wire) continue;
+      const no = field.no;
 
-      if (false !== options.blockFeedAds && field.data.length >= PAGEAD_MARKER.length && containsBytes(field.data)) return true;
-      if (false !== options.blockFeedAds && 325515470 === field.no && isPremiumTab(field.data)) return true;
-      if (options.blockStore && 400157044 === field.no) return true;
-      if (false !== options.blockFeedAds && 455507059 === field.no) return true;
-      if (options.blockVerticalLive && 519005951 === field.no && field.data.length >= VERTICAL_LIVE_ICON.length && containsBytes(field.data, VERTICAL_LIVE_ICON)) return true;
-      if (312131490 === field.no) {
+      if (false !== options.blockFeedAds && 455507059 === no) return true;
+      if (options.blockStore && 400157044 === no) return true;
+      if (false !== options.blockFeedAds && 325515470 === no && isPremiumTab(field.data)) return true;
+      if (options.blockVerticalLive && 519005951 === no && field.data.length >= VERTICAL_LIVE_ICON.length && containsBytes(field.data, VERTICAL_LIVE_ICON)) return true;
+      if (312131490 === no) {
         if (options.blockGames && field.data.length >= MINI_GAME_MARKER.length && containsBytes(field.data, MINI_GAME_MARKER)) return true;
         if (options.blockStore && field.data.length >= SHOPPING_LIST_MARKER.length && containsBytes(field.data, SHOPPING_LIST_MARKER)) return true;
       }
+      if (checkPageAd && field.data.length >= PAGEAD_MARKER.length && containsBytes(field.data)) return true;
     }
     return false;
   }
 
-  // 遍历树时每个节点都会走 stripAiControls；先用一次字段扫描判断有没有目标字段，
-  // 没有就跳过对应的 rewriteUnknownField，避免对每个节点白跑十几遍。
   function hasUnknownField(obj, fieldNo) {
     const fields = unknownFields(obj);
     for (let i = 0; i < fields.length; i += 1) {
@@ -1977,18 +2219,18 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return false;
   }
 
-  // 删掉 Ask / AI 摘要相关的控件。
+  // 删掉 Ask / AI 摘要相关的控件。单趟扫描节点未知字段号，避免重复遍历 unknownFields。
   function stripAiControls(node) {
     let changed = false;
     try {
       if (node.engagementPanels?.length) {
         const panels = node.engagementPanels.filter((panel) => {
           const renderer = panel.renderer;
-          return !renderer || !unknownFields(renderer).some((field) => 1 === field.no && 2 === field.wire && bytesEqual(field.data, PREMIUM_UPSELL_MARKER));
+          return !renderer || !unknownFields(renderer).some((field) => 1 === field.no && 2 === field.wire && bytesEqual(field.data, ASK_AI_MARKER));
         });
         changed = setField(node, "engagementPanels", panels) || changed;
         for (const panel of panels) {
-          if (!panel.renderer) continue;
+          if (!panel.renderer || !hasUnknownField(panel.renderer, 10)) continue;
           changed =
             rewriteUnknownField(panel.renderer, 10, (bytes) =>
               matchesPath(bytes, [260791572, 1, 153515154, 172660663, 1, 168777401, 5, 413471385, 1, 2553, 997, 3, 3, 170382688, 1, 169495254, 138681778, 1]) ? void 0 : bytes,
@@ -1999,21 +2241,34 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       if (node.playerOverlays?.renderer && hasUnknownField(node.playerOverlays.renderer, 37)) {
         changed = rewriteUnknownField(node.playerOverlays.renderer, 37, dropVideoAds) || changed;
       }
-      if (hasUnknownField(node, 216561405)) changed = rewriteUnknownField(node, 216561405, (bytes) => rewritePath(bytes, [1], dropVideoAds)) || changed;
-      if (hasUnknownField(node, 386137609)) changed = rewriteUnknownField(node, 386137609, dropPlayerAdButtons) || changed;
-      if (hasUnknownField(node, 408379376)) changed = rewriteUnknownField(node, 408379376, dropSpeedMenuPair) || changed;
+
+      const fields = unknownFields(node);
+      if (fields.length) {
+        let mask = 0;
+        for (let i = 0; i < fields.length; i++) {
+          const field = fields[i];
+          if (2 !== field.wire) continue;
+          if (216561405 === field.no) mask |= 1;
+          else if (386137609 === field.no) mask |= 2;
+          else if (408379376 === field.no) mask |= 4;
+          else if (6 === field.no) mask |= 8;
+        }
+        if (mask & 1) changed = rewriteUnknownField(node, 216561405, (bytes) => rewritePath(bytes, [1], dropVideoAds)) || changed;
+        if (mask & 2) changed = rewriteUnknownField(node, 386137609, dropPlayerAdButtons) || changed;
+        if (mask & 4) changed = rewriteUnknownField(node, 408379376, dropSpeedMenuPair) || changed;
+        if (mask & 8 && node.videoContent?.videoLockup) {
+          changed =
+            rewriteUnknownField(node, 6, (bytes) =>
+              rewritePath(bytes, [188490103], (inner) => rewriteRepeatedField(inner, 1, (item) => (matchesPath(item, [1], AI_SUMMARY_MARKER, true) ? void 0 : item))),
+            ) || changed;
+        }
+      }
 
       if (node.element?.data && hasUnknownField(node.element.data, 2185)) {
         changed = rewriteUnknownField(node.element.data, 2185, dropShortVideoButtons) || changed;
       }
       if (node.videoLockup && hasUnknownField(node.videoLockup, 18)) {
         changed = rewriteUnknownField(node.videoLockup, 18, dropAiSummary) || changed;
-      }
-      if (node.videoContent?.videoLockup && hasUnknownField(node, 6)) {
-        changed =
-          rewriteUnknownField(node, 6, (bytes) =>
-            rewritePath(bytes, [188490103], (inner) => rewriteRepeatedField(inner, 1, (item) => (matchesPath(item, [1], AI_SUMMARY_MARKER, true) ? void 0 : item))),
-          ) || changed;
       }
     } catch (e) {
       // 结构对不上就当没改，放原响应过去。
@@ -2058,13 +2313,24 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     };
 
     let changed = rewriteSpeedMenu(root, opts.maxSpeed, opts.hidePremium);
+    const checkLayout = false !== opts.blockFeedAds || !!opts.blockStore;
 
-    function visit(node, inList = false) {
+    function visit(node, inList = false, atListItem = false, mayHavePageAd = true) {
       if (!node || "object" != typeof node || ArrayBuffer.isView(node)) return 0;
-      if (inList && false !== opts.blockMembersOnly && hasMembersOnlyBadge(node) && isAllMembersOnly(node)) return 1;
 
-      // 列表项：Shorts 卡片直接整项删掉。
-      if (inList && false !== opts.blockShortsFeed && (node.reelShelfRenderer || hasMarker(node, SHORTS_MARKERS))) return 1;
+      // 整块字节扫描只在进入列表直接子项时做一次，避免沿子节点递归重复扫描同一份字节 6~8 遍。
+      if (atListItem) {
+        if (false !== opts.blockMembersOnly && hasMembersOnlyBadge(node) && isAllMembersOnly(node)) return 1;
+        if (false !== opts.blockShortsFeed && (node.reelShelfRenderer || hasMarker(node, SHORTS_MARKERS))) return 1;
+        if (false !== opts.blockFeedAds) {
+          const itemBytes = node[WIRE_STATE]?.bytes;
+          mayHavePageAd = !!itemBytes && itemBytes.length >= PAGEAD_MARKER.length && containsBytes(itemBytes, PAGEAD_MARKER);
+        } else {
+          mayHavePageAd = false;
+        }
+      } else if (inList && false !== opts.blockShortsFeed && node.reelShelfRenderer) {
+        return 1;
+      }
 
       // Shorts 货架命中内部标识时整块删掉。
       // 货架标题是本地化文案，这里不参与判断；标题下的卡片被删空后，
@@ -2079,32 +2345,44 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
       if (Array.isArray(node)) {
         let result = 0;
-        for (const item of node) result |= 1 & visit(item, inList);
+        for (const item of node) result |= 1 & visit(item, inList, false, mayHavePageAd);
         return result;
       }
 
-      let isAd = inList && (isFeedAdNode(node, opts) || (opts.blockAi && isAiBlock(node)));
+      let isAd = inList && (isFeedAdNode(node, opts, mayHavePageAd) || (opts.blockAi && isAiBlock(node)));
 
-      const layout = node.renderInfo?.layoutRender?.eml?.split("|")[0];
-      let isShortsShelf = !!layout && ((false !== opts.blockFeedAds && FEED_AD_LAYOUT.test(layout)) || (opts.blockStore && SHOPPING_LAYOUT.test(layout)));
+      let isShortsShelf = false;
+      if (checkLayout) {
+        const layout = node.renderInfo?.layoutRender?.eml?.split("|")[0];
+        isShortsShelf = !!layout && ((false !== opts.blockFeedAds && FEED_AD_LAYOUT.test(layout)) || (opts.blockStore && SHOPPING_LAYOUT.test(layout)));
+      }
       if (inList && (isAd || isShortsShelf)) return 1;
 
       if (opts.blockAi) changed = stripAiControls(node) || changed;
 
       const state = node[WIRE_STATE];
+      const nameSpecs = state?.deferred ? SPEC_NAME_CACHE[state.type] : null;
       for (const key in node) {
-        // 延迟解析的节点只在需要时才展开，跳过不可能命中广告的字段。
-        if (!inList && state?.deferred) {
-          const spec = SCHEMA[state.type].find(([, name]) => name === key);
-          if (
-            spec &&
-            !state.eager.has(spec[2]) &&
-            !CONTAINER_KEYS.has(key) &&
-            !LIST_KEYS.has(key) &&
-            "promotedContents" !== key &&
-            (!opts.blockStore || ("tabs" !== key && "attachments" !== key))
-          ) {
-            continue;
+        // 保持惰性解码：只在当前开关确实需要读该字段时才触发 getter。
+        if (nameSpecs) {
+          const spec = nameSpecs.get(key);
+          if (spec && !state.eager.has(spec[2])) {
+            if ("smartSkipButton" === key) continue;
+            if ("renderInfo" === key) continue;
+            if (!inList) {
+              if (
+                !CONTAINER_KEYS.has(key) &&
+                !LIST_KEYS.has(key) &&
+                "promotedContents" !== key &&
+                (!opts.blockStore || ("tabs" !== key && "attachments" !== key))
+              ) {
+                continue;
+              }
+            } else {
+              if ("attachments" === key && !opts.blockStore) continue;
+              if ("layout" === key && !checkLayout) continue;
+              if ("element" === key && !opts.blockStore && !opts.blockAi) continue;
+            }
           }
         }
 
@@ -2112,7 +2390,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         if (!value || "object" != typeof value || ArrayBuffer.isView(value)) continue;
 
         if (!Array.isArray(value)) {
-          const result = visit(value, inList);
+          const result = visit(value, inList, false, mayHavePageAd);
           if (inList && 1 & result) return 1;
           isAd = !!(1 & result) || isAd;
           if (2 & result && RENDERER_KEYS.has(key)) isShortsShelf = true;
@@ -2132,10 +2410,12 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
             (isTabs && isStoreTab(item)) ||
             (isAttachments && item.products?.length) ||
             (isPromoted && false !== opts.blockFeedAds && containsBytes(item));
-          const result = drop && !inList ? 0 : visit(item, inList || isContainer);
+          const result = drop && !inList ? 0 : visit(item, inList || isContainer, isContainer, mayHavePageAd);
 
-          if (inList && 1 & result) return 1;
-          isAd = !!(1 & result) || isAd;
+          // 嵌套容器（如轮播内的 richItemContents）只剔除命中的单项，避免把整条轮播误删；
+          // 若整条容器被删空，下面的 !kept.length 逻辑再向上删掉空壳。
+          if (inList && !isContainer && 1 & result) return 1;
+          if (!isContainer) isAd = !!(1 & result) || isAd;
           if (drop || (isContainer && 1 & result) || (isList && 2 & result)) kept ??= value.slice(0, i);
           else if (kept) kept.push(item);
         }
@@ -2143,7 +2423,10 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         if (kept) {
           setField(node, key, kept);
           changed = true;
-          if (!kept.length && (isContainer || isList)) isShortsShelf = true;
+          if (!kept.length && (isContainer || isList)) {
+            isShortsShelf = true;
+            if (inList) isAd = true;
+          }
         }
         if (opts.blockStore && "attachments" === key && !(kept ?? value).length && void 0 !== node.attachmentStateKey) {
           changed = deleteField(node, "attachmentStateKey") || changed;
@@ -2166,20 +2449,74 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return "asr" === String(track?.kind ?? "").toLowerCase() || String(track?.vssId ?? "").startsWith("a.");
   }
 
-  // 去掉自动生成字幕轨；选中索引是按轨道顺序算的，删完要收回有效范围。
+  // 去掉自动生成字幕轨；同步重映射 renderer 与各 audioTrack 中的字幕轨道下标，避免越界或错位。
   function stripAutoCaptionTracks(player) {
     const renderer = player.captions?.playerCaptionsTrackListRenderer;
     const tracks = renderer?.captionTracks;
     if (!Array.isArray(tracks) || !tracks.length) return false;
 
-    const kept = tracks.filter((track) => !isAutoCaptionTrack(track));
+    const kept = [];
+    const indexMap = new Array(tracks.length);
+    for (let i = 0; i < tracks.length; i++) {
+      if (isAutoCaptionTrack(tracks[i])) {
+        indexMap[i] = -1;
+      } else {
+        indexMap[i] = kept.length;
+        kept.push(tracks[i]);
+      }
+    }
     if (kept.length === tracks.length) return false;
 
     let changed = setField(renderer, "captionTracks", kept);
+    const remapIndex = (idx) => {
+      if (!Number.isFinite(idx) || idx < 0 || idx >= tracks.length) return -1;
+      return indexMap[idx];
+    };
+
     const selected = renderer.defaultCaptionTrackIndex;
-    if (kept.length && Number.isFinite(selected) && selected >= kept.length) {
-      changed = setField(renderer, "defaultCaptionTrackIndex", kept.length - 1) || changed;
+    if (void 0 !== selected) {
+      if (!kept.length) {
+        changed = deleteField(renderer, "defaultCaptionTrackIndex") || changed;
+      } else {
+        const mapped = remapIndex(selected);
+        const nextIdx = mapped >= 0 ? mapped : Math.min(Math.max(0, selected), kept.length - 1);
+        changed = setField(renderer, "defaultCaptionTrackIndex", nextIdx) || changed;
+      }
     }
+
+    for (const audio of renderer.audioTracks ?? []) {
+      if (Array.isArray(audio.captionTrackIndices) && audio.captionTrackIndices.length) {
+        const nextIndices = [];
+        for (const oldIdx of audio.captionTrackIndices) {
+          const mapped = remapIndex(oldIdx);
+          if (mapped >= 0) nextIndices.push(mapped);
+        }
+        changed = setField(audio, "captionTrackIndices", nextIndices) || changed;
+      }
+      if (void 0 !== audio.defaultCaptionTrackIndex) {
+        const mapped = remapIndex(audio.defaultCaptionTrackIndex);
+        if (!kept.length) {
+          changed = deleteField(audio, "defaultCaptionTrackIndex") || changed;
+          if (true === audio.hasDefaultTrack) changed = setField(audio, "hasDefaultTrack", false) || changed;
+        } else {
+          const nextIdx = mapped >= 0 ? mapped : Math.min(Math.max(0, audio.defaultCaptionTrackIndex), kept.length - 1);
+          changed = setField(audio, "defaultCaptionTrackIndex", nextIdx) || changed;
+        }
+      }
+      if (void 0 !== audio.forcedCaptionTrackIndex) {
+        const mapped = remapIndex(audio.forcedCaptionTrackIndex);
+        if (mapped < 0) {
+          changed = deleteField(audio, "forcedCaptionTrackIndex") || changed;
+          if (true === audio.hasForcedTrack) changed = setField(audio, "hasForcedTrack", false) || changed;
+        } else {
+          changed = setField(audio, "forcedCaptionTrackIndex", mapped) || changed;
+        }
+      }
+      if (!kept.length && void 0 !== audio.captionsInitialState && 0 !== audio.captionsInitialState) {
+        changed = setField(audio, "captionsInitialState", 0) || changed;
+      }
+    }
+
     return changed;
   }
 
@@ -2495,23 +2832,47 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     if (false !== options.blockMembersOnly) {
       if (jsonIsMembersOnly(node)) return true;
       // 列表项通常是 { videoRenderer: { badges } }，徽章在下一层。
-      for (const key of Object.keys(node)) {
-        if (jsonIsMembersOnly(node[key])) return true;
+      for (const key in node) {
+        if (Object.hasOwn(node, key) && jsonIsMembersOnly(node[key])) return true;
       }
     }
     return false !== options.blockFeedAds && true === node.adClientParams?.isAd;
   }
 
-  // 从上往下剥单键包装，命中广告 / Shorts / 会员视频就整项删掉。
+  // 从上往下剥卡片包装（兼容真实网页 richItemRenderer / richSectionRenderer 附带 trackingParams 等元数据键），
+  // 命中广告 / Shorts / 继续观看 / 直播 / 会员视频就整项删掉，避免留下空白占位。
   function jsonIsCardItem(node, options) {
     let current = node;
     for (let depth = 0; current && "object" == typeof current && !Array.isArray(current) && depth < 6; depth++) {
       if (jsonIsAdNode(current, options)) return true;
       const keys = Object.keys(current);
-      if (1 !== keys.length || !JSON_ITEM_WRAPPERS.has(keys[0])) return false;
-      current = current[keys[0]];
+      if (1 === keys.length && JSON_ITEM_WRAPPERS.has(keys[0])) {
+        current = current[keys[0]];
+        continue;
+      }
+      // richItemRenderer / richSectionRenderer 内部通常是 { content: {...}, trackingParams: "..." }。
+      if (!current.videoId) {
+        if (current.content && "object" == typeof current.content && !Array.isArray(current.content)) {
+          current = current.content;
+          continue;
+        }
+        if (current.item && "object" == typeof current.item && !Array.isArray(current.item)) {
+          current = current.item;
+          continue;
+        }
+      }
+      return false;
     }
     return false;
+  }
+
+  function jsonIsBlockedTopbarButton(entry) {
+    if (!entry || "object" != typeof entry) return false;
+    if (entry.notificationTopbarButtonRenderer) return true;
+    const btn = entry.topbarButtonRenderer ?? entry.topbarMenuButtonRenderer ?? entry.buttonRenderer;
+    if (!btn || "object" != typeof btn) return false;
+    const icon = btn.icon?.ytIcon?.iconType?.iconType ?? btn.icon?.iconType ?? btn.menuRequest?.signalServiceEndpoint?.signal ?? "";
+    return JSON_TOPBAR_BLOCK_ICONS.test(String(icon));
   }
 
   function jsonSmartSkip(button) {
@@ -2540,16 +2901,20 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     function visit(node) {
       if (!node || "object" != typeof node) return;
       if (Array.isArray(node)) {
-        for (let i = node.length - 1; i >= 0; i--) {
+        // 原地双指针压缩，避免多次 splice 的 O(n^2) 搬移开销。
+        let write = 0;
+        for (let i = 0; i < node.length; i++) {
           const entry = node[i];
-          const guideId = entry?.guideEntryRenderer?.navigationEndpoint?.browseEndpoint?.browseId;
-          if (jsonIsCardItem(entry, options) || (guideId && hiddenGuideItems?.has(guideId))) {
-            node.splice(i, 1);
+          const guideId = hiddenGuideItems && entry?.guideEntryRenderer?.navigationEndpoint?.browseEndpoint?.browseId;
+          if (jsonIsCardItem(entry, options) || (guideId && hiddenGuideItems.has(guideId))) {
             changed = true;
             continue;
           }
           visit(entry);
+          if (write !== i) node[write] = entry;
+          write++;
         }
+        if (write !== node.length) node.length = write;
         return;
       }
 
@@ -2589,7 +2954,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
           changed = true;
           continue;
         }
-        if (false !== options.blockInfoCards && JSON_INFO_CARD_FIELDS.has(key)) {
+        if (
+          false !== options.blockInfoCards &&
+          JSON_INFO_CARD_FIELDS.has(key) &&
+          (routeFilters.player || (value && "object" == typeof value && "cardCollectionRenderer" in value))
+        ) {
           delete node[key];
           changed = true;
           continue;
@@ -2616,14 +2985,19 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
           continue;
         }
         if (false !== options.jumpAhead && "smartSkipButton" === key) changed = jsonSmartSkip(value) || changed;
-        // 会员视频节点通常直接挂在 content / item 上，在父对象这一层删掉。
-        if (false !== options.blockMembersOnly && jsonIsMembersOnly(value)) {
+        // 会员视频节点通常直接挂在 content / item 上，在父对象这一层删掉；避开播放页标题栏和频道头部。
+        if (
+          false !== options.blockMembersOnly &&
+          "videoPrimaryInfoRenderer" !== key &&
+          !key.endsWith("HeaderRenderer") &&
+          jsonIsMembersOnly(value)
+        ) {
           delete node[key];
           changed = true;
           continue;
         }
         if (routeFilters.topbar && "topbarButtons" === key && Array.isArray(value)) {
-          const kept = value.filter((entry) => !JSON_TOPBAR_BLOCK_ICONS.test(String(entry?.topbarButtonRenderer?.icon?.ytIcon?.iconType?.iconType ?? "")));
+          const kept = value.filter((entry) => !jsonIsBlockedTopbarButton(entry));
           if (kept.length !== value.length) {
             node[key] = kept;
             changed = true;
@@ -2647,16 +3021,19 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     function visit(node) {
       if (!node || "object" != typeof node) return;
       if (Array.isArray(node)) {
-        for (let i = node.length - 1; i >= 0; i--) {
+        let write = 0;
+        for (let i = 0; i < node.length; i++) {
           const entry = node[i];
           const id = entry?.guideEntryRenderer?.navigationEndpoint?.browseEndpoint?.browseId;
           if (id && hidden.has(id)) {
-            node.splice(i, 1);
             changed = true;
             continue;
           }
           visit(entry);
+          if (write !== i) node[write] = entry;
+          write++;
         }
+        if (write !== node.length) node.length = write;
         return;
       }
       for (const key of Object.keys(node)) visit(node[key]);
@@ -2740,12 +3117,57 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     const tracks = renderer?.captionTracks;
     if (!Array.isArray(tracks) || !tracks.length) return false;
 
-    const kept = tracks.filter((track) => !jsonIsAutoCaptionTrack(track));
+    const kept = [];
+    const indexMap = new Array(tracks.length);
+    for (let i = 0; i < tracks.length; i++) {
+      if (jsonIsAutoCaptionTrack(tracks[i])) {
+        indexMap[i] = -1;
+      } else {
+        indexMap[i] = kept.length;
+        kept.push(tracks[i]);
+      }
+    }
     if (kept.length === tracks.length) return false;
 
     renderer.captionTracks = kept;
+    const remapIndex = (idx) => (Number.isInteger(idx) && idx >= 0 && idx < tracks.length ? indexMap[idx] : -1);
+
     const selected = renderer.defaultCaptionTrackIndex;
-    if (kept.length && Number.isInteger(selected) && selected >= kept.length) renderer.defaultCaptionTrackIndex = kept.length - 1;
+    if (void 0 !== selected) {
+      if (!kept.length) {
+        delete renderer.defaultCaptionTrackIndex;
+      } else {
+        const mapped = remapIndex(selected);
+        renderer.defaultCaptionTrackIndex = mapped >= 0 ? mapped : Math.min(Math.max(0, selected), kept.length - 1);
+      }
+    }
+
+    for (const audio of Array.isArray(renderer.audioTracks) ? renderer.audioTracks : []) {
+      if (!audio || "object" != typeof audio) continue;
+      if (Array.isArray(audio.captionTrackIndices)) {
+        audio.captionTrackIndices = audio.captionTrackIndices.map(remapIndex).filter((idx) => idx >= 0);
+      }
+      if (void 0 !== audio.defaultCaptionTrackIndex) {
+        if (!kept.length) {
+          delete audio.defaultCaptionTrackIndex;
+          if (true === audio.hasDefaultTrack) audio.hasDefaultTrack = false;
+        } else {
+          const mapped = remapIndex(audio.defaultCaptionTrackIndex);
+          audio.defaultCaptionTrackIndex = mapped >= 0 ? mapped : Math.min(Math.max(0, audio.defaultCaptionTrackIndex), kept.length - 1);
+        }
+      }
+      if (void 0 !== audio.forcedCaptionTrackIndex) {
+        const mapped = remapIndex(audio.forcedCaptionTrackIndex);
+        if (mapped < 0) {
+          delete audio.forcedCaptionTrackIndex;
+          if (true === audio.hasForcedTrack) audio.hasForcedTrack = false;
+        } else {
+          audio.forcedCaptionTrackIndex = mapped;
+        }
+      }
+      if (!kept.length && void 0 !== audio.captionsInitialState) audio.captionsInitialState = 0;
+    }
+
     return true;
   }
 
@@ -2841,8 +3263,8 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return true;
   }
 
-  function jsonRewritePlayer(player, options) {
-    let changed = jsonPruneTree(player, options);
+  function jsonRewritePlayerFields(player, options, isMusic) {
+    let changed = false;
 
     if (options.captionLang && "off" !== String(options.captionLang).toLowerCase()) {
       try {
@@ -2860,21 +3282,19 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       // ignore
     }
 
-    if (false !== options.autoHd && player.streamingData) {
-      changed = jsonApplyQuality(player.streamingData, options.maxHeight) || changed;
-    }
-
+    // 先按编码偏好过滤视频轨，再按 maxHeight 选最高档（避免 4K VP9/AV1 先把 1080p AVC 删光导致编码偏好失效）。
     if (player.streamingData) {
       try {
         if ("any" !== options.videoCodec) changed = jsonApplyCodec(player.streamingData, options.videoCodec) || changed;
-        if (options.musicCleanup && options.musicWeb) changed = jsonLockAudioQuality(player.streamingData) || changed;
+        if (false !== options.autoHd) changed = jsonApplyQuality(player.streamingData, options.maxHeight) || changed;
+        if (options.musicCleanup && isMusic) changed = jsonLockAudioQuality(player.streamingData) || changed;
       } catch (e) {
         // ignore
       }
     }
 
     const speedConfig = player.playerConfig?.granularVariableSpeedConfig;
-    const maxRate = false === options.maxSpeed ? 0 : Math.max(2, Math.min(4, parseInt(options.maxSpeed) || 4)) * 100;
+    const maxRate = false === options.maxSpeed ? 0 : Math.max(2, Math.min(4, parseInt(options.maxSpeed, 10) || 4)) * 100;
     if (
       maxRate > 0 &&
       speedConfig &&
@@ -2922,22 +3342,30 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return changed;
   }
 
-  function rewriteJsonRoute(route, data, options) {
-    if ("player" === route) return jsonRewritePlayer(data, options);
+  function rewriteJsonRoute(route, data, options, isMusic = false) {
+    if ("player" === route) {
+      const pruned = jsonPruneTree(data, options, { player: true });
+      return jsonRewritePlayerFields(data, options, isMusic) || pruned;
+    }
     if ("guide" === route) return jsonFilterGuide(data, options);
 
     if ("navigation/resolve_url" === route) {
-      let changed = jsonPruneTree(data, options);
+      let changed = jsonPruneTree(data, options, { player: true });
       const player = data?.endpoint?.watch?.embedded?.response?.player;
-      if (player) changed = jsonRewritePlayer(player, options) || changed;
+      if (player) changed = jsonRewritePlayerFields(player, options, isMusic) || changed;
       return changed;
     }
 
     if ("get_watch" === route) {
-      let changed = jsonPruneTree(data, options);
+      // 整棵树只遍历一趟，带齐 guide / related / topbar / player 过滤；随后仅补跑 player 专属字段改写。
+      let changed = jsonPruneTree(data, options, {
+        guide: true,
+        related: options.blockRelatedVideos,
+        topbar: options.webCleanup,
+        player: true,
+      });
       for (const item of data?.contents ?? []) {
-        if (item?.player) changed = jsonRewritePlayer(item.player, options) || changed;
-        if (item?.next) changed = jsonPruneTree(item.next, options) || changed;
+        if (item?.player) changed = jsonRewritePlayerFields(item.player, options, isMusic) || changed;
       }
       return changed;
     }
@@ -2960,7 +3388,8 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   function updateQualityCache(players, options) {
     if (!players.length) return;
 
-    const maxHeight = Math.max(144, Math.min(4320, parseInt(options.maxHeight) || 4320));
+    const maxHeight = Math.max(144, Math.min(4320, parseInt(options.maxHeight, 10) || 4320));
+    const codec = options.videoCodec ?? "any";
     const metadata = players.map((player) => unknownFields(player).find((field) => 4 === field.no && 2 === field.wire)?.data).filter(Boolean);
     if (!metadata.length) return;
 
@@ -2978,10 +3407,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
     for (const videoId of keys.slice(-MAX_QUALITY_ENTRIES)) {
       const entry = cache[videoId];
-      if (videoId.length > 256 || !isQualityEntry(entry) || entry.height > maxHeight) {
+      if (videoId.length > 256 || !isQualityEntry(entry) || entry.height > maxHeight || (entry.codec ?? "any") !== codec) {
         dirty = true;
       } else {
         next[videoId] = { height: entry.height, itags: entry.itags };
+        if ("any" !== codec) next[videoId].codec = codec;
         if (entry.premiumItags?.length) next[videoId].premiumItags = entry.premiumItags;
         if (Object.keys(entry).length !== Object.keys(next[videoId]).length) dirty = true;
       }
@@ -2989,33 +3419,44 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
     for (const bytes of metadata) {
       try {
-        const fields = parseFields(bytes);
-        const urlField = fields.find((field) => 15 === field.no && 2 === field.wire);
-        const match = urlField && /[?&]id=([^&]+)/.exec(strictUtf8.decode(urlField.data));
+        const urlBytes = fieldData(bytes, 15);
+        const match = urlBytes && /[?&]id=([^&]+)/.exec(looseUtf8.decode(urlBytes));
         if (!match) continue;
 
         const videoId = decodeURIComponent(match[1]);
         const entry = { height: 0, itags: [] };
+        if ("any" !== codec) entry.codec = codec;
         if (videoId.length > 256) continue;
 
         const seen = new Set();
         let truncated = false;
-        for (const field of fields) {
-          if (3 !== field.no || 2 !== field.wire) continue;
+        wireForEachField(bytes, (no, wire, dataStart, dataEnd) => {
+          if (3 !== no || 2 !== wire) return false;
+          const formatBytes = bytes.subarray(dataStart, dataEnd);
+          let itag = 0;
+          let width = 0;
+          let rawHeight = 0;
+          let mimeBytes;
+          let premiumBytes;
 
-          const format = parseFields(field.data);
-          const mime = format.find((item) => 5 === item.no && 2 === item.wire);
-          if (!mime) continue;
-          const mimeText = strictUtf8.decode(mime.data);
-          if (!mimeText.startsWith("video/") || !codecAllowed(mimeText, options.videoCodec)) continue;
+          wireForEachField(formatBytes, (fno, fwire, fStart, fEnd) => {
+            if (0 === fwire) {
+              if (1 === fno && !itag) itag = readVarintValue(formatBytes.subarray(fStart, fEnd));
+              else if (7 === fno && !width) width = readVarintValue(formatBytes.subarray(fStart, fEnd));
+              else if (8 === fno && !rawHeight) rawHeight = readVarintValue(formatBytes.subarray(fStart, fEnd));
+            } else if (2 === fwire) {
+              if (5 === fno && !mimeBytes) mimeBytes = formatBytes.subarray(fStart, fEnd);
+              else if (26 === fno && !premiumBytes) premiumBytes = formatBytes.subarray(fStart, fEnd);
+            }
+            return false;
+          });
 
-          const numberField = (fieldNo) => {
-            const item = format.find((entry) => entry.no === fieldNo && 0 === entry.wire);
-            return item ? readVarintValue(item.data) : 0;
-          };
-          const height = Math.min(numberField(7), numberField(8));
-          const itag = numberField(1);
-          if (!itag || !height || height > 2147483647 || height > maxHeight || height < entry.height) continue;
+          if (!mimeBytes) return false;
+          const mimeText = looseUtf8.decode(mimeBytes);
+          if (!mimeText.startsWith("video/") || !codecAllowed(mimeText, codec)) return false;
+
+          const height = Math.min(width, rawHeight);
+          if (!itag || !height || height > 2147483647 || height > maxHeight || height < entry.height) return false;
 
           if (height > entry.height) {
             entry.height = height;
@@ -3024,17 +3465,17 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
             seen.clear();
             truncated = false;
           }
-          if (truncated || seen.has(itag)) continue;
+          if (truncated || seen.has(itag)) return false;
           if (256 === seen.size) {
             truncated = true;
-            continue;
+            return false;
           }
 
           seen.add(itag);
           entry.itags.push(itag);
-          const premium = format.find((item) => 26 === item.no && 2 === item.wire);
-          if (premium && /\bPremium\b/i.test(strictUtf8.decode(premium.data))) (entry.premiumItags ??= []).push(itag);
-        }
+          if (premiumBytes && /\bPremium\b/i.test(looseUtf8.decode(premiumBytes))) (entry.premiumItags ??= []).push(itag);
+          return false;
+        });
 
         if (truncated || !isQualityEntry(entry) || sameQuality(next[videoId], entry)) continue;
         delete next[videoId];
@@ -3056,7 +3497,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         delete next[Object.keys(next)[0]];
         json = JSON.stringify(next);
       }
-      writeStore(next, QUALITY_KEY);
+      $persistentStore.write(json, QUALITY_KEY);
     } catch (e) {
       // 存不进去就算了，不影响本次播放。
     }
@@ -3510,6 +3951,56 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   })();
   }
 
+  let umpCryptoCache = null;
+
+  // 优先走 WebCrypto（crypto.subtle）硬件加速 AES-128-CTR + HMAC-SHA256，
+  // 省去 640 KiB JS 查找表分配；不支持时退回内置纯 JS 实现（并缓存表）。
+  async function createNativeCryptoContext(key) {
+    const subtle = typeof crypto !== "undefined" && crypto?.subtle;
+    if (!subtle || key.length <= 16) return null;
+    try {
+      const aesKey = await subtle.importKey("raw", key.subarray(0, 16), { name: "AES-CTR" }, false, ["encrypt", "decrypt"]);
+      const hmacKey = await subtle.importKey("raw", key.subarray(16), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+      return {
+        iv: null,
+        async decrypt(envelope) {
+          this.iv = envelope.iv;
+          const macInput = concatBytes([envelope.encryptedContent, envelope.iv]);
+          const valid = await subtle.verify("HMAC", hmacKey, envelope.hmac, macInput);
+          if (!valid) throw new Error("HMAC verification failed");
+          const plain = await subtle.decrypt({ name: "AES-CTR", counter: envelope.iv, length: 128 }, aesKey, envelope.encryptedContent);
+          return new Uint8Array(plain);
+        },
+        async encrypt(plain) {
+          const encrypted = new Uint8Array(await subtle.encrypt({ name: "AES-CTR", counter: this.iv, length: 128 }, aesKey, plain));
+          const macInput = concatBytes([encrypted, this.iv]);
+          const hmac = new Uint8Array(await subtle.sign("HMAC", hmacKey, macInput));
+          return { encryptedContent: encrypted, hmac };
+        },
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async function createUmpContexts(keys) {
+    if (typeof crypto !== "undefined" && crypto?.subtle) {
+      const native = [];
+      let allNative = true;
+      for (const key of keys) {
+        const ctx = await createNativeCryptoContext(key);
+        if (!ctx) {
+          allNative = false;
+          break;
+        }
+        native.push(ctx);
+      }
+      if (allNative && native.length) return native;
+    }
+    umpCryptoCache ??= createUmpCrypto();
+    return keys.map((key) => new umpCryptoCache.CryptoContext(key));
+  }
+
   async function decryptUmp(body, options, keys) {
     let contexts;
     const EncryptedPart = messageCodec("EncryptedResponsePart", EAGER_TYPES.ump);
@@ -3519,6 +4010,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     const players = [];
     let changed = false;
     let expectingEncrypted = false;
+    const collectPlayers = false !== options.autoHd || ("any" !== (options.videoCodec ?? "any"));
 
     async function processPart(partBytes) {
       const envelope = EncryptedPart.fromBinary(partBytes);
@@ -3527,16 +4019,13 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       }
       if ((envelope.compressionAlgorithm ?? 0) > 1) throw new Error("Unsupported UMP compression");
 
-      if (!contexts) {
-        const { CryptoContext } = createUmpCrypto();
-        contexts = keys.map((key) => new CryptoContext(key));
-      }
+      if (!contexts) contexts = await createUmpContexts(keys);
 
       let plaintext;
       let context;
       for (const candidate of contexts) {
         try {
-          plaintext = candidate.decrypt(envelope);
+          plaintext = await candidate.decrypt(envelope);
           context = candidate;
           break;
         } catch (e) {
@@ -3551,7 +4040,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       const decoded = isGzip ? await gzipStream(plaintext, true) : plaintext;
       const response = Onesie.fromBinary(decoded);
 
-      if (false !== options.autoHd) {
+      if (collectPlayers) {
         for (const item of response.contents) if (item.player) players.push(item.player);
       }
 
@@ -3559,7 +4048,10 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         let result = false;
         for (const item of node.contents) {
           if (item.player) result = rewritePlayer(item.player, opts) || result;
-          if (item.next) result = filterBrowseTree(item.next, opts) || result;
+          if (item.next) {
+            result = filterBrowseTree(item.next, opts) || result;
+            if ("function" == typeof dropNextExtras) result = dropNextExtras(item.next, opts) || result;
+          }
         }
         return result;
       })(response, options);
@@ -3569,7 +4061,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       if (bytesEqual(reencoded, decoded)) return partBytes;
 
       const recompressed = isGzip ? await gzipStream(reencoded, false) : reencoded;
-      const encrypted = context.encrypt(recompressed);
+      const encrypted = await context.encrypt(recompressed);
       setField(envelope, "encryptedContent", encrypted.encryptedContent);
       setField(envelope, "hmac", encrypted.hmac);
       return EncryptedPart.toBinary(envelope);
@@ -3578,10 +4070,18 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     for (; reader.hasNext; ) {
       const part = reader.readPart();
       if (10 === part.type) {
-        const marker = parseFields(part.data).find((field) => 1 === field.no && 0 === field.wire);
-        expectingEncrypted = !!marker && 25 === readVarintValue(marker.data);
-      } else if (11 === part.type && expectingEncrypted) {
-        part.data = await processPart(part.data);
+        const markerVal =
+          "function" == typeof firstVarintField
+            ? firstVarintField(part.data, 1)
+            : (function () {
+                const field = parseFields(part.data).find((item) => 1 === item.no && 0 === item.wire);
+                return field ? readVarintValue(field.data) : void 0;
+              })();
+        expectingEncrypted = 25 === markerVal;
+      } else {
+        if (11 === part.type && expectingEncrypted) {
+          part.data = await processPart(part.data);
+        }
         expectingEncrypted = false;
       }
 
@@ -3589,9 +4089,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         out.push(part.raw);
       } else {
         changed = true;
-        const writer = new UmpWriter(part.data.length + 10);
-        writer.writePart(part);
-        out.push(writer.finish());
+        // 只编码分片头（2~10 字节），正文零拷贝直接交给最终 concatBytes。
+        const header = new UmpWriter(10);
+        header.writeVarint(part.type);
+        header.writeVarint(part.data.length);
+        out.push(header.finish(), part.data);
       }
     }
 
@@ -3715,27 +4217,19 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return 123 === bytes[i] || 91 === bytes[i];
   }
 
-  function handleYouTubeiJsonResponse(route, raw) {
+  function handleYouTubeiJsonResponse(route, raw, options, isMusic) {
     try {
-      const text = "string" == typeof raw ? raw : new TextDecoder().decode(toBytes(raw));
+      const text = "string" == typeof raw ? raw : looseUtf8.decode(toBytes(raw));
       if (!text || text.length > MAX_RESPONSE_BYTES) {
         $done({});
         return;
       }
       const data = JSON.parse(text);
-      const options = readOptions();
-      if (isMusicRequest($request) && false === options.youtubeMusic) {
+      if (!rewriteJsonRoute(route, data, options, isMusic)) {
         $done({});
         return;
       }
-      // 网页版 Music 的音频锁与 App 走不同结构，这里把「是不是 Music」带给下游。
-      options.musicWeb = isMusicRequest($request);
-      if (!rewriteJsonRoute(route, data, options)) {
-        $done({});
-        return;
-      }
-      const out = JSON.stringify(data);
-      $done(out === text ? {} : { body: out });
+      $done({ body: JSON.stringify(data) });
     } catch (e) {
       $done({});
     }
@@ -3749,13 +4243,21 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         $done({});
         return;
       }
-      if (isWebRequest($request) && false === readOptions().web) {
+
+      // 先做开关检查再解码响应体，避免禁用网页版 / YouTube Music 时白白做整包 JSON.parse 或 protobuf 解码。
+      const options = readOptions();
+      if (isWebRequest($request) && false === options.web) {
+        $done({});
+        return;
+      }
+      const isMusic = isMusicRequest($request);
+      if (isMusic && false === options.youtubeMusic) {
         $done({});
         return;
       }
 
       if (/json/i.test(responseHeader("content-type")) || responseLooksJson($response.body)) {
-        handleYouTubeiJsonResponse(route, $response.body);
+        handleYouTubeiJsonResponse(route, $response.body, options, isMusic);
         return;
       }
 
@@ -3768,11 +4270,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       const [typeName, rewrite] = handler;
       const codec = messageCodec(typeName);
       const node = codec.fromBinary(body);
-      const options = readOptions();
-      if (isMusicRequest($request) && false === options.youtubeMusic) {
-        $done({});
-        return;
-      }
 
       // 画质上限或编码偏好任一开启都要刷新缓存：request 阶段按缓存 itag 改写。
       if (false !== options.autoHd || "any" !== options.videoCodec) {
@@ -3802,19 +4299,23 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         return;
       }
 
-      const contentType = Object.entries($response.headers ?? {}).find(([key]) => "content-type" === key.toLowerCase())?.[1];
+      const contentType = responseHeader("content-type");
       if (contentType && !/^application\/vnd\.yt-ump(?:\s*;|\s*$)/i.test(contentType)) {
         $done({});
         return;
       }
 
       const options = readOptions();
+      if (isWebRequest($request) && false === options.web) {
+        $done({});
+        return;
+      }
       if (isMusicRequest($request) && false === options.youtubeMusic) {
         $done({});
         return;
       }
       const stored = readStore()[clientKeyFor($request)];
-      // clientKey 本身就是 32 字节：前 16 字节做 AES-256 密钥，后 16 字节做 HMAC 密钥。
+      // clientKey 本身就是 32 字节：前 16 字节做 AES-128-CTR 密钥，后 16 字节做 HMAC-SHA256 密钥。
       // encryptKey 只用来校验 initplayback 请求体，不参与解密。
       const keys = (stored ? [stored, ...(Array.isArray(stored.previous) ? stored.previous.slice(0, 3) : [])] : [])
         .filter(
@@ -3832,7 +4333,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       if (!keys.length) throw new Error("YouTubeConfig requires a valid stored clientKey");
 
       const result = await decryptUmp(body, options, keys);
-      if (false !== options.autoHd) updateQualityCache(result.players, options);
+      if (false !== options.autoHd || "any" !== options.videoCodec) updateQualityCache(result.players, options);
       $done(result.body === body ? {} : { body: result.body });
     } catch (e) {
       // 运行时缺少 CompressionStream / DecompressionStream（部分 Shadowrocket 版本）时，

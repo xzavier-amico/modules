@@ -9,13 +9,14 @@
   function readRequestBody(request) {
     const body = request.body;
     if (ArrayBuffer.isView(body)) return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+    if (typeof ArrayBuffer !== "undefined" && body instanceof ArrayBuffer) return new Uint8Array(body);
     if (body?.length) throw new Error("YouTube requires binary-body-mode for request bodies");
     const contentLength = Object.entries(request.headers ?? {}).find(([key]) => "content-length" === key.toLowerCase())?.[1];
     if (Number(contentLength) > 0) throw new Error("YouTube request body unavailable; requires-body must be enabled");
   }
 
   // 把请求里的 itag 相关字段改成缓存里的目标值；quality 为空表示只要最高分辨率。
-  function applyQuality(bytes, quality) {
+  function applyQuality(bytes, quality, maxHeight) {
     const targets = new Map(
       quality
         ? [
@@ -27,7 +28,7 @@
             [30, 0],
           ]
         : [
-            [16, Math.max(144, Math.min(4320, parseInt(readOptions().maxHeight) || 4320))],
+            [16, Math.max(144, Math.min(4320, parseInt(maxHeight ?? readOptions().maxHeight, 10) || 4320))],
             [26, 1],
             [30, 0],
           ],
@@ -72,8 +73,7 @@
   }
 
   // initplayback 请求：校验请求里带的密钥是不是我们存的；不匹配就回空，让客户端重协商。
-  function handleInitPlaybackRequest(request, options) {
-    const body = readRequestBody(request);
+  function handleInitPlaybackRequest(request, options, body) {
     if (void 0 === body || 0 === body.length) return undefined;
 
     const key = clientKeyFor(request);
@@ -105,19 +105,21 @@
   }
 
   // 只有一条 chunk 的 initplayback 请求：把画质字段改成最高档。
-  function rewriteInitPlaybackBody(body) {
+  function rewriteInitPlaybackBody(body, options) {
     const fields = parseFields(body);
     const chunks = fields.filter((field) => 2 === field.no && 2 === field.wire);
     if (1 !== chunks.length) return body;
 
     const chunk = chunks[0];
-    const next = applyQuality(chunk.data, void 0);
+    const next = applyQuality(chunk.data, void 0, options?.maxHeight);
     if (next === chunk.data) return body;
     return concatBytes(fields.map((field) => (field === chunk ? concatBytes([encodeVarint(18), encodeVarint(next.length), next]) : field.raw)));
   }
 
   // videoplayback 请求：按缓存挑一组 itag，替换请求里的 17 号字段。
-  function rewriteVideoPlaybackBody(body, url) {
+  // 当 autoHd=false 但开启了 videoCodec 时，只改 17 号字段的编码格式列表，不强锁分辨率。
+  function rewriteVideoPlaybackBody(body, url, options) {
+    const opts = options ?? readOptions();
     const fields = parseFields(body);
 
     const quality = (function () {
@@ -131,34 +133,40 @@
 
         const cached = readStore(QUALITY_KEY, MAX_QUALITY_JSON)?.[decodeURIComponent(match[1])];
         if (!isQualityEntry(cached)) return;
+        if ((cached.codec ?? "any") !== (opts.videoCodec ?? "any")) return;
 
+        const itagSet = new Set(cached.itags);
+        const premiumSet = cached.premiumItags?.length ? new Set(cached.premiumItags) : null;
         const formats = [];
         const premiumFormats = [];
-        for (const format of parseFields(inner)) {
-          if (6 !== format.no || 2 !== format.wire) continue;
-          const itagField = parseFields(format.data).find((field) => 1 === field.no && 0 === field.wire);
-          if (!itagField) continue;
-          const itag = readVarintValue(itagField.data);
-          if (!cached.itags.includes(itag)) continue;
-          formats.push(format.data);
-          if (cached.premiumItags?.includes(itag)) premiumFormats.push(format.data);
-        }
-        return formats.length ? { height: cached.height, formats: premiumFormats.length && false !== readOptions().preferPremium ? premiumFormats : formats } : void 0;
+        wireForEachField(inner, (no, wire, dataStart, dataEnd) => {
+          if (6 !== no || 2 !== wire) return false;
+          const formatData = inner.subarray(dataStart, dataEnd);
+          const itag = firstVarintField(formatData, 1);
+          if (void 0 === itag || !itagSet.has(itag)) return false;
+          formats.push(formatData);
+          if (premiumSet?.has(itag)) premiumFormats.push(formatData);
+          return false;
+        });
+        return formats.length ? { height: cached.height, formats: premiumFormats.length && false !== opts.preferPremium ? premiumFormats : formats } : void 0;
       } catch {
         return;
       }
     })();
 
+    const lockHeight = false !== opts.autoHd;
     const existing = fields.filter((field) => 17 === field.no && 2 === field.wire);
     const replaceFormats = quality && (existing.length !== quality.formats.length || existing.some((field, i) => !bytesEqual(field.data, quality.formats[i])));
+
+    if (!lockHeight && !replaceFormats) return body;
 
     const parts = [];
     let sawChunk = false;
     let changed = !!replaceFormats;
 
     for (const field of fields) {
-      if (1 === field.no && 2 === field.wire) {
-        const next = applyQuality(field.data, quality);
+      if (lockHeight && 1 === field.no && 2 === field.wire) {
+        const next = applyQuality(field.data, quality, opts.maxHeight);
         if (next === field.data) {
           parts.push(field.raw);
         } else {
@@ -172,8 +180,8 @@
       }
     }
 
-    if (!sawChunk) {
-      const empty = applyQuality(new Uint8Array(), quality);
+    if (lockHeight && !sawChunk) {
+      const empty = applyQuality(new Uint8Array(), quality, opts.maxHeight);
       parts.push(encodeVarint(10), encodeVarint(empty.length), empty);
       changed = true;
     }
@@ -199,6 +207,15 @@
     const path = request.url.split("?")[0];
 
     try {
+      // 无请求体的 videoplayback（如常规 GET 媒体分片）最频繁，直接早退省去参数解析。
+      if (path.endsWith("/videoplayback") && !request.body) {
+        const contentLength = Object.entries(request.headers ?? {}).find(([key]) => "content-length" === key.toLowerCase())?.[1];
+        if (!(Number(contentLength) > 0)) {
+          $done(undefined);
+          return;
+        }
+      }
+
       // 参数解析也放进 try：任何异常都不能让 ad_break 漏过去。
       const options = readOptions();
       // 网页版开关关闭时，网页请求完全放行，不拦 ad_break、不剥热更新头。
@@ -221,23 +238,23 @@
           $done(undefined);
           return;
         }
-        let result = handleInitPlaybackRequest(request, options);
         const body = readRequestBody(request);
+        let result = handleInitPlaybackRequest(request, options, body);
         if (!result && body?.length && false !== options.autoHd) {
-          const rewritten = rewriteInitPlaybackBody(body);
+          const rewritten = rewriteInitPlaybackBody(body, options);
           if (rewritten !== body) result = { body: rewritten };
         }
         $done(result);
         return;
       }
       if (path.endsWith("/videoplayback")) {
-        if (musicDisabled) {
+        if (musicDisabled || (false === options.autoHd && "any" === options.videoCodec)) {
           $done(undefined);
           return;
         }
-        const body = false === options.autoHd ? undefined : readRequestBody(request);
+        const body = readRequestBody(request);
         if (body?.length) {
-          const rewritten = rewriteVideoPlaybackBody(body, request.url);
+          const rewritten = rewriteVideoPlaybackBody(body, request.url, options);
           $done(rewritten !== body ? { body: rewritten } : undefined);
           return;
         }

@@ -36,6 +36,29 @@ const REQUEST_TIMEOUT_MS = 4000;
 // so synthesized responses must always include them.
 // Official responses carry at most 5 preview lines for the lyrics card.
 const PREVIEW_LINES = 5;
+const PROVIDER_LABEL = {
+  NetEase: "网易",
+  "QQ Music": "QQ",
+  LRCLIB: "LRCLIB",
+  Musixmatch: "Musixmatch",
+};
+const THIRD_PARTY_CREDIT_RE = /^— 歌词来自第三方（.+） —$/;
+function thirdPartyCredit(provider) {
+  const label = PROVIDER_LABEL[provider] || String(provider || "第三方");
+  return "— 歌词来自第三方（" + label + "） —";
+}
+function appendCreditLine(lines, syncType, provider) {
+  if (!lines.length) return lines;
+  if (THIRD_PARTY_CREDIT_RE.test(lines[lines.length - 1].words)) return lines;
+  const lastMs = syncType === "LINE_SYNCED" ? (Number(lines[lines.length - 1].startTimeMs) || 0) + 1000 : 0;
+  return lines.concat([{ startTimeMs: String(lastMs), words: thirdPartyCredit(provider), syllables: [], endTimeMs: "0" }]);
+}
+function previewFromLines(lines) {
+  const clean = lines.length && THIRD_PARTY_CREDIT_RE.test(lines[lines.length - 1].words)
+    ? lines.slice(0, -1)
+    : lines;
+  return clean.slice(0, PREVIEW_LINES);
+}
 const COLOR_BG = 0xff121212;
 const COLOR_LINE = 0xb3ffffff;
 const COLOR_ACTIVE = 0xffffffff;
@@ -204,6 +227,20 @@ async function lookupNetease(title, artist, ctx) {
   return buildLyrics({ provider: "NetEase", providerId: String(picked.id), syncedLyrics: text });
 }
 
+const HTML_ENTITIES = { apos: "'", quot: '"', amp: "&", lt: "<", gt: ">", nbsp: " " };
+function decodeHtmlEntities(text) {
+  if (typeof text !== "string" || text.indexOf("&") < 0) return String(text || "");
+  return text.replace(/&(#x[0-9a-fA-F]+|#\d+|apos|quot|amp|lt|gt|nbsp);/g, (whole, body) => {
+    if (body.charAt(0) === "#") {
+      const code = body.charAt(1) === "x" || body.charAt(1) === "X"
+        ? parseInt(body.slice(2), 16)
+        : parseInt(body.slice(1), 10);
+      return Number.isFinite(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+    }
+    return HTML_ENTITIES[body] || whole;
+  });
+}
+
 async function lookupQq(title, artist, ctx) {
   const queryArtist = isDj(title) ? "" : artist;
   const query = encodeURIComponent(queryTitle(title) + (queryArtist ? " " + queryArtist : ""));
@@ -219,43 +256,60 @@ async function lookupQq(title, artist, ctx) {
 
   const lyric = await getJson(
     "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=" +
-      picked.songmid +
+      encodeURIComponent(String(picked.songmid)) +
       "&format=json&nobase64=1&g_tk=5381",
     ctx,
     headers,
   );
-  const text = lyric && lyric.lyric;
+  const text = lyric && lyric.lyric ? decodeHtmlEntities(lyric.lyric) : "";
   if (!text) return null;
   return buildLyrics({ provider: "QQ Music", providerId: String(picked.songmid), syncedLyrics: text });
 }
 
-// Musixmatch: exchange the public app id for an anonymous token, then ask the
-// macro endpoint for line-synced subtitles (same approach as EeveeSpotify).
+// Musixmatch: exchange the public app id for an anonymous token (cached 8 min),
+// then ask the macro endpoint for line-synced subtitles (same approach as EeveeSpotify).
+const MMX_TOKEN_TTL_MS = 8 * 60 * 1000;
+let cachedMmxToken = { token: "", at: 0 };
+
 async function lookupMusixmatch(title, artist, ctx) {
   const APP_ID = "mac-ios-v2.0";
-  const token = await getJson(
-    "https://apic.musixmatch.com/ws/1.1/token.get?app_id=" + APP_ID,
-    ctx,
-  );
-  const userToken = token && token.message && token.message.body && token.message.body.user_token;
-  if (!userToken) return null;
+  let userToken = cachedMmxToken.token && Date.now() - cachedMmxToken.at < MMX_TOKEN_TTL_MS ? cachedMmxToken.token : "";
+  if (!userToken) {
+    const token = await getJson(
+      "https://apic.musixmatch.com/ws/1.1/token.get?app_id=" + APP_ID,
+      ctx,
+      null,
+      false,
+    );
+    userToken = token && token.message && token.message.body && token.message.body.user_token;
+    if (!userToken) return null;
+    cachedMmxToken = { token: String(userToken), at: Date.now() };
+  }
 
   const target =
     "https://apic.musixmatch.com/ws/1.1/macro.subtitles.get?format=json&app_id=" +
     APP_ID +
     "&usertoken=" +
-    userToken +
-    "&q_track=" +
+    encodeURIComponent(userToken) +
+    "&subtitle_format=lrc&q_track=" +
     encodeURIComponent(queryTitle(title)) +
     (artist ? "&q_artist=" + encodeURIComponent(artist) : "") +
     "&user_language=zh";
   const data = await getJson(target, ctx);
+  const status = data && data.message && data.message.header && data.message.header.status_code;
+  if (data && Number(status) !== 200) {
+    cachedMmxToken = { token: "", at: 0 };
+    return null;
+  }
   const calls = data && data.message && data.message.body && data.message.body.macro_calls;
+  const matched = calls && calls["matcher.track.get"] && calls["matcher.track.get"].message;
+  const track = matched && matched.body && matched.body.track;
+  if (track && Number(track.instrumental) === 1) return null;
   const sub = calls && calls["track.subtitles.get"] && calls["track.subtitles.get"].message;
   const list = sub && sub.body && sub.body.subtitle_list;
   const first = Array.isArray(list) ? list[0] : null;
   const body = first && first.subtitle && first.subtitle.subtitle_body;
-  if (!body) return null;
+  if (!body || Number(first.subtitle.restricted) === 1) return null;
   return buildLyrics({
     provider: "Musixmatch",
     providerId: String(first.subtitle.subtitle_id || ""),
@@ -469,12 +523,13 @@ function buildLyrics(record) {
 function makeLyrics(syncType, lines, record) {
   const provider = record.provider || "LRCLIB";
   const id = record.providerId !== undefined ? record.providerId : record.id;
+  const language = detectLanguage(lines);
   return {
     syncType,
-    lines,
+    lines: appendCreditLine(lines, syncType, provider),
     provider,
     providerId: id === undefined || id === null ? "" : String(id),
-    language: detectLanguage(lines),
+    language,
   };
 }
 
@@ -495,6 +550,7 @@ export function resetLyricsCache() {
   inflight.clear();
   officialHits.clear();
   misses.clear();
+  cachedMmxToken = { token: "", at: 0 };
 }
 
 export function lyricsMiss(trackId) {
@@ -719,7 +775,7 @@ export function buildJsonPayload(lyrics, options = {}) {
   payload.fullscreenAction = "FULLSCREEN_LYRICS";
   // The desktop client maps lyrics.previewLines directly (for the lyrics card);
   // a missing field throws and the whole page falls back to "couldn't load".
-  payload.previewLines = payload.lines.slice(0, PREVIEW_LINES);
+  payload.previewLines = previewFromLines(payload.lines);
   return {
     lyrics: payload,
     colors: {
@@ -765,63 +821,71 @@ function pbWriteVarint(value) {
   return out;
 }
 
+function pbConcat(list) {
+  let size = 0;
+  for (let i = 0; i < list.length; i += 1) size += list[i].length;
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (let i = 0; i < list.length; i += 1) {
+    out.set(list[i], at);
+    at += list[i].length;
+  }
+  return out;
+}
+
 function pbUint(field, value) {
-  return pbWriteVarint(field * 8).concat(pbWriteVarint(value));
+  return pbConcat([pbWriteVarint(field * 8), pbWriteVarint(value)]);
 }
 
 function pbBytes(field, bytes) {
-  const head = pbWriteVarint(field * 8 + 2).concat(pbWriteVarint(bytes.length));
-  const tail = [];
-  for (let i = 0; i < bytes.length; i += 1) tail.push(bytes[i]);
-  return head.concat(tail);
-}
-
-function pbConcat(list) {
-  const out = [];
-  for (const part of list) out.push.apply(out, part);
-  return out;
+  return pbConcat([pbWriteVarint(field * 8 + 2), pbWriteVarint(bytes.length), bytes]);
 }
 
 function pbFields(bytes) {
   const out = [];
   let pos = 0;
   while (pos < bytes.length) {
+    const start = pos;
     const key = pbReadVarint(bytes, pos);
-    if (key.next < 0) break;
+    if (key.next < 0 || key.value < 8n || key.value > 0xffffffffn) throw new Error("protobuf key");
     const field = Number(key.value >> 3n);
     const wire = Number(key.value & 7n);
     if (wire === 0) {
       const value = pbReadVarint(bytes, key.next);
-      if (value.next < 0) break;
-      out.push({ field, wire: 0, value: value.value });
+      if (value.next < 0) throw new Error("protobuf varint");
       pos = value.next;
+      out.push({ field, wire: 0, value: value.value, raw: bytes.subarray(start, pos) });
     } else if (wire === 2) {
       const length = pbReadVarint(bytes, key.next);
-      if (length.next < 0 || length.value > BigInt(bytes.length - length.next)) break;
+      if (length.next < 0 || length.value > BigInt(bytes.length - length.next)) throw new Error("protobuf length");
       const size = Number(length.value);
+      pos = length.next + size;
       out.push({
         field,
         wire: 2,
-        bytes: bytes.subarray(length.next, length.next + size),
+        bytes: bytes.subarray(length.next, pos),
+        raw: bytes.subarray(start, pos),
       });
-      pos = length.next + size;
     } else if (wire === 5) {
-      out.push({ field, wire: 5, bytes: bytes.subarray(key.next, key.next + 4) });
+      if (key.next + 4 > bytes.length) throw new Error("protobuf fixed32");
       pos = key.next + 4;
+      out.push({ field, wire: 5, bytes: bytes.subarray(key.next, pos), raw: bytes.subarray(start, pos) });
     } else if (wire === 1) {
-      out.push({ field, wire: 1, bytes: bytes.subarray(key.next, key.next + 8) });
+      if (key.next + 8 > bytes.length) throw new Error("protobuf fixed64");
       pos = key.next + 8;
+      out.push({ field, wire: 1, bytes: bytes.subarray(key.next, pos), raw: bytes.subarray(start, pos) });
     } else {
-      break;
+      throw new Error("protobuf wire");
     }
   }
   return out;
 }
 
 function pbEncodeField(field) {
+  if (field.raw) return field.raw;
   if (field.wire === 0) return pbUint(field.field, field.value);
   if (field.wire === 2) return pbBytes(field.field, field.bytes);
-  return pbWriteVarint(field.field * 8 + field.wire).concat(Array.from(field.bytes));
+  return pbConcat([pbWriteVarint(field.field * 8 + field.wire), field.bytes]);
 }
 
 export function protoLineCount(bytes) {
@@ -860,14 +924,21 @@ export function normalizeRestrictionProto(bytes) {
       outTop.push(pbEncodeField(outer));
       continue;
     }
+    let innerFields;
+    try {
+      innerFields = pbFields(outer.bytes);
+    } catch (error) {
+      return null;
+    }
     const outInner = [];
     let found = false;
-    for (const inner of pbFields(outer.bytes)) {
+    for (const inner of innerFields) {
       if (inner.field === 14 && inner.wire === 0) {
         found = true;
         if (inner.value !== 1n) {
-          inner.value = 1n;
+          outInner.push(pbUint(14, 1));
           changed = true;
+          continue;
         }
       }
       outInner.push(pbEncodeField(inner));
@@ -879,22 +950,36 @@ export function normalizeRestrictionProto(bytes) {
     }
     outTop.push(pbBytes(1, pbConcat(outInner)));
   }
-  return changed ? new Uint8Array(pbConcat(outTop)) : null;
+  return changed ? pbConcat(outTop) : null;
+}
+
+function encodeLineProto(line) {
+  const content = TE.encode(String(line.words || ""));
+  return pbConcat([pbUint(1, Number(line.startTimeMs) || 0), pbBytes(2, content)]);
 }
 
 export function encodeLyricsProto(lyrics) {
-  const lineOut = [];
-  for (const line of lyrics.lines) {
-    const content = TE.encode(String(line.words || ""));
-    const body = pbUint(1, Number(line.startTimeMs) || 0).concat(pbBytes(2, content));
-    lineOut.push.apply(lineOut, pbBytes(2, body));
+  const parts = [pbUint(1, lyrics.syncType === "LINE_SYNCED" ? 1 : 0)];
+  for (let i = 0; i < lyrics.lines.length; i += 1) {
+    parts.push(pbBytes(2, encodeLineProto(lyrics.lines[i])));
   }
-  const data = pbUint(1, lyrics.syncType === "LINE_SYNCED" ? 1 : 0)
-    .concat(lineOut)
-    .concat(pbBytes(5, TE.encode(lyrics.provider || "LRCLIB")))
-    .concat(pbUint(14, 1));
-  const colors = pbUint(1, COLOR_BG)
-    .concat(pbUint(2, COLOR_LINE))
-    .concat(pbUint(3, COLOR_ACTIVE));
-  return new Uint8Array(pbBytes(1, data).concat(pbBytes(2, colors)));
+  const provider = lyrics.provider || "LRCLIB";
+  parts.push(pbBytes(3, TE.encode(provider)));
+  parts.push(pbBytes(4, TE.encode(String(lyrics.providerId || ""))));
+  parts.push(pbBytes(5, TE.encode(provider)));
+  const lang = String(lyrics.language || "");
+  if (/^(?:zh|ja|ko)(?:-|$)/i.test(lang)) parts.push(pbUint(8, 1));
+  if (lang) parts.push(pbBytes(10, TE.encode(lang)));
+  parts.push(pbUint(14, 1));
+  const preview = previewFromLines(lyrics.lines);
+  for (let i = 0; i < preview.length; i += 1) {
+    parts.push(pbBytes(17, encodeLineProto(preview[i])));
+  }
+  const data = pbConcat(parts);
+  const colors = pbConcat([
+    pbUint(1, COLOR_BG),
+    pbUint(2, COLOR_LINE),
+    pbUint(3, COLOR_ACTIVE),
+  ]);
+  return pbConcat([pbBytes(1, data), pbBytes(2, colors)]);
 }

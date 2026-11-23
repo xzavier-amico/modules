@@ -46,7 +46,8 @@ export default async function (ctx) {
     }
   };
 
-  const requestBody = await readBody(ctx.request);
+  // 响应阶段脚本不读请求体，跳过 ctx.request.arrayBuffer() 避免额外缓冲与内存占用。
+  const requestBody = ctx.response ? undefined : await readBody(ctx.request);
   const responseBody = await readBody(ctx.response);
 
   const request = ctx.request
@@ -201,6 +202,18 @@ export default async function (ctx) {
   }
 
   function wireEncodeVarint(value) {
+    if ("number" == typeof value && value >= 0 && value <= 0x7fffffff) {
+      let n = value | 0;
+      const len = n < 0x80 ? 1 : n < 0x4000 ? 2 : n < 0x200000 ? 3 : n < 0x10000000 ? 4 : 5;
+      const out = new Uint8Array(len);
+      let at = 0;
+      while (n >= 0x80) {
+        out[at++] = (n & 0x7f) | 0x80;
+        n >>>= 7;
+      }
+      out[at] = n;
+      return out;
+    }
     let rest = BigInt(value);
     const out = new Uint8Array(wireVarintLength(rest));
     let at = 0;
@@ -335,6 +348,39 @@ export default async function (ctx) {
     return false;
   }
 
+  // 流式遍历字段，不分配字段对象与子数组；回调返回 true 时提前停止。
+  function wireForEachField(bytes, onField) {
+    const state = { i: 0 };
+    while (state.i < bytes.length) {
+      const rawStart = state.i;
+      const tag = wireReadCount(bytes, state);
+      const no = tag >>> 3;
+      const wire = tag & 7;
+      if (!no) throw new Error("Invalid protobuf field");
+
+      let dataStart = state.i;
+      if (wire === 2) {
+        const length = wireReadCount(bytes, state);
+        if (length > bytes.length - state.i) throw new Error("Truncated protobuf field");
+        dataStart = state.i;
+        state.i += length;
+      } else if (wire === 1) {
+        state.i += 8;
+      } else if (wire === 5) {
+        state.i += 4;
+      } else if (wire === 0) {
+        wireSkipVarint(bytes, state);
+      } else if (wire === 3) {
+        state.i = wireSkipGroup(bytes, state.i, no);
+      } else {
+        throw new Error("Unsupported protobuf wire type " + wire);
+      }
+      if (state.i > bytes.length) throw new Error("Truncated protobuf field");
+      if (onField(no, wire, dataStart, state.i, rawStart, state.i)) return true;
+    }
+    return false;
+  }
+
   // 按 no / wire 编码一个字段；payload 对 wire 0 是 varint 字节，其余是字段值。
   function wireEncodeField(no, wire, payload) {
     const tag = wireEncodeVarint(BigInt(no) * 8n + BigInt(wire));
@@ -428,7 +474,7 @@ export default async function (ctx) {
   const TD = WIRE_UTF8;
   const readVarint = wireReadVarint;
 
-  // 小整数 varint（字段号 / 长度）：失败（截断 / 超长）返回 -1，不抛异常。
+  // 小整数 varint（字段号 / 长度）：失败（截断 / 超长 / 越界）返回 -1，不抛异常。
   // 元数据响应里大量字符串会被拿来试探「是不是子消息」，绝大多数会在这里失败；
   // 用异常处理失败既慢又会反复捕获调用栈。
   function readCount(bytes, state) {
@@ -448,9 +494,10 @@ export default async function (ctx) {
         shift += 7;
         continue;
       }
-      // 超过 4 字节：退回 BigInt 路径，与 wireReadCount 的行为一致。
+      // 超过 4 字节：退回 BigInt 路径，拒绝超出 32 位范围的非法 tag / 长度。
       try {
-        return Number(wireReadVarint(bytes, state, limit));
+        const big = wireReadVarint(bytes, state, limit);
+        return big <= 0xffffffffn ? Number(big) : -1;
       } catch (e) {
         return -1;
       }
@@ -473,15 +520,39 @@ export default async function (ctx) {
 
       let dataStart = state.i;
       let end;
+      let varintValue;
       if (wire === 2) {
         const length = readCount(b, state);
         if (length < 0 || length > total - state.i) return null;
         dataStart = state.i;
         end = dataStart + length;
       } else if (wire === 0) {
-        end = dataStart;
-        while (end < total && b[end++] & 0x80) { /* 只跳过 varint */ }
-        if (end === dataStart || b[end - 1] & 0x80) return null;
+        // 单趟解码 varint：1-4 字节小整数直接位运算，避免 subarray 与逐字节 BigInt 分配。
+        let at = dataStart;
+        let small = 0;
+        let shift = 0;
+        let resolved = false;
+        while (at < total && shift < 28) {
+          const byte = b[at++];
+          small |= (byte & 0x7f) << shift;
+          if (!(byte & 0x80)) {
+            const u = small >>> 0;
+            varintValue = u === 0 ? 0n : u === 1 ? 1n : BigInt(u);
+            end = at;
+            resolved = true;
+            break;
+          }
+          shift += 7;
+        }
+        if (!resolved) {
+          state.i = dataStart;
+          try {
+            varintValue = wireReadVarint(b, state, total);
+          } catch (e) {
+            return null;
+          }
+          end = state.i;
+        }
       } else if (wire === 1) {
         end = dataStart + 8;
       } else if (wire === 5) {
@@ -501,13 +572,7 @@ export default async function (ctx) {
 
       const raw = b.subarray(rawStart, end);
       if (wire === 0) {
-        let value;
-        try {
-          value = wireReadVarint(b.subarray(dataStart, end), { i: 0 });
-        } catch (e) {
-          return null;
-        }
-        fields.push({ no: no, w: 0, v: value, raw: raw });
+        fields.push({ no: no, w: 0, v: varintValue, raw: raw });
       } else if (wire === 3) {
         // group 原样保留：p 存的是含起止 tag 的整段，serialize 直接写回。
         fields.push({ no: no, w: 3, p: raw, raw: raw });
@@ -518,10 +583,15 @@ export default async function (ctx) {
     return fields;
   }
 
-  // varint 的 Number 版：字段号 / 长度 / 常见数值都远小于 2^53，不必为每个字段
-  // 分配 BigInt 和临时 Uint8Array。超过 2^53 的 64 位值仍走 BigInt 保证不丢位。
+  // varint 的 Number 版：字段号 / 长度 / 常见数值都远小于 2^31，用常数分支和位运算
+  // 避开浮点除法；超过 2^53 的 64 位值仍走 BigInt 保证不丢位。
   const MAX_SAFE_BIG = 9007199254740991n;
   function varintSize(n) {
+    if (n < 128) return 1;
+    if (n < 16384) return 2;
+    if (n < 2097152) return 3;
+    if (n < 268435456) return 4;
+    if (n <= 0xffffffff) return 5;
     let size = 1;
     while (n >= 128) {
       n = Math.floor(n / 128);
@@ -531,6 +601,14 @@ export default async function (ctx) {
   }
 
   function writeVarint(out, at, n) {
+    if (n <= 0x7fffffff) {
+      while (n >= 128) {
+        out[at++] = (n & 0x7f) | 0x80;
+        n >>>= 7;
+      }
+      out[at++] = n;
+      return at;
+    }
     while (n >= 128) {
       out[at++] = (n % 128) | 128;
       n = Math.floor(n / 128);
@@ -594,6 +672,14 @@ export default async function (ctx) {
 
   // raw[at..at+len) 是否恰好是 n 的最短 varint 编码（不分配）。
   function matchesVarint(raw, at, n, len) {
+    if (len === 1) return raw[at] === n;
+    if (n <= 0x7fffffff) {
+      for (let i = 0; i < len - 1; i += 1) {
+        if (raw[at + i] !== ((n & 0x7f) | 0x80)) return false;
+        n >>>= 7;
+      }
+      return raw[at + len - 1] === n;
+    }
     for (let i = 0; i < len; i += 1) {
       const byte = i < len - 1 ? (n % 128) | 128 : n;
       if (raw[at + i] !== byte) return false;
@@ -666,15 +752,24 @@ export default async function (ctx) {
   const HOME_AD_NAME = /\|(?:brand-ad|hpto|[a-z0-9-]*-ad)$/;
   const HOME_AD_FIELDS = new Set([20, 21]);
 
+  // 只读前两个字段（字段 1 名称、第 2 个字段号），不解析整块几百 KB 的 section。
   function describeHomeSection(section) {
-    const fields = parse(section);
-    if (!fields || !fields.length) return null;
-    const header = fields[0];
-    if (!header || header.no !== 1 || header.w !== 2) return null;
-    const name = text(header);
+    const state = { i: 0 };
+    const total = section.length;
+    if (!total) return null;
+    const tag1 = readCount(section, state);
+    if (tag1 < 0 || (tag1 >>> 3) !== 1 || (tag1 & 7) !== 2) return null;
+    const len1 = readCount(section, state);
+    if (len1 < 0 || len1 > total - state.i) return null;
+    const name = wireDecodeText(section.subarray(state.i, state.i + len1));
     if (name === null) return null;
+    state.i += len1;
     let contentField = -1;
-    if (fields.length > 1) contentField = fields[1].no;
+    if (state.i < total) {
+      const tag2 = readCount(section, state);
+      if (tag2 < 0 || !(tag2 >>> 3)) return null;
+      contentField = tag2 >>> 3;
+    }
     return { name: name, contentField: contentField };
   }
 
@@ -765,7 +860,8 @@ export default async function (ctx) {
           changed = true;
           continue;
         }
-        if (depth < BROWSE_AD_MAX_DEPTH) {
+        // 目标字段本身大于 BROWSE_AD_MIN_SIZE，长度不足的子消息不可能包含它，直接剪枝。
+        if (depth < BROWSE_AD_MAX_DEPTH && field.data.length > BROWSE_AD_MIN_SIZE) {
           const inner = renameDeepField(field.data, depth + 1);
           if (inner) {
             parts.push(wireEncodeField(field.no, 2, inner));
@@ -1148,30 +1244,42 @@ export default async function (ctx) {
 
   const lyricsCacheKey = (id) => lyricsSourceKey() + "|" + (hansLyrics ? "hans" : "source") + "|" + id;
 
-  function readLyricsCache(key, id) {
-    const map = readJsonMap(LYRICS_CACHE_KEY);
-    const valid = (value) => !!value && "object" == typeof value && !value.m &&
+  function validLyricsCacheEntry(value) {
+    return !!value && "object" == typeof value && !value.m &&
       Date.now() - Number(value.t || 0) < LYRICS_CACHE_HIT_TTL &&
       // 缓存存的是已经转换过的歌词；字形设置换过就不复用，避免显示成另一种字形。
-      // feed 预取没有携带词表，可能留下未转换的条目，命中时在下面再判一次。
-      (HELPER || (Number(value.z) || 0) === (hansLyrics ? 1 : 0));
+      // feed 预取未携带 t2s 词表，存的是未折叠原文（u === 1）：hans 与 source 都可复用，
+      // hans 命中时在下面按词表补一次折叠。
+      (HELPER || Number(value.u) === 1 || (Number(value.z) || 0) === (hansLyrics ? 1 : 0));
+  }
+
+  function findLyricsCacheEntry(key, id) {
+    const map = readJsonMap(LYRICS_CACHE_KEY);
     let entry = map && map[key];
     // 配置换过歌词源（auto ↔ lrclib）时旧缓存 key 会不同；按曲目 id 再找一次，
     // 避免同一首歌已经缓存过却因为前缀不同重新查源。
-    if (!valid(entry) && id) {
+    if (!validLyricsCacheEntry(entry) && id) {
       const suffix = "|" + id;
       for (const name of Object.keys(map || {})) {
         if (name.slice(-suffix.length) !== suffix) continue;
         const candidate = map[name];
-        if (valid(candidate)) {
+        if (validLyricsCacheEntry(candidate)) {
           entry = candidate;
           break;
         }
       }
     }
-    if (!valid(entry)) return null;
-    const lines = Array.isArray(entry.a) ? entry.a : [];
-    if (!lines.length) return null;
+    return validLyricsCacheEntry(entry) && Array.isArray(entry.a) && entry.a.length ? entry : null;
+  }
+
+  function hasLyricsCache(key, id) {
+    return !!findLyricsCacheEntry(key, id);
+  }
+
+  function readLyricsCache(key, id) {
+    const entry = findLyricsCacheEntry(key, id);
+    if (!entry) return null;
+    const lines = entry.a;
     const signed = (value) => (value > 0x7fffffff ? value - 0x100000000 : value);
     const provider = String(entry.p || "LRCLIB");
     const rebuilt = lines.map((pair) => ({
@@ -1187,21 +1295,24 @@ export default async function (ctx) {
         for (let i = 0; i < rebuilt.length; i += 1) rebuilt[i].words = SPOTIFY_HAN_VARIANTS.fold(rebuilt[i].words);
       }
     }
+    const syncType = entry.s === "UNSYNCED" ? "UNSYNCED" : "LINE_SYNCED";
+    const fullLines = appendCreditLine(rebuilt, syncType, provider);
+    const language = String(entry.l || "en");
     return {
       payload: {
         lyrics: {
-          syncType: entry.s === "UNSYNCED" ? "UNSYNCED" : "LINE_SYNCED",
-          lines: rebuilt,
+          syncType: syncType,
+          lines: fullLines,
           // 缓存里只存了行，重建时一样要补 previewLines：桌面端直接对它
           // .map()，缺字段会抛 TypeError，命中缓存的歌一律变成「无法加载」。
-          previewLines: rebuilt.slice(0, PREVIEW_LINES),
+          previewLines: previewFromLines(fullLines),
           provider: provider,
           providerLyricsId: entry.i === undefined || entry.i === null ? "" : String(entry.i),
           providerDisplayName: provider,
           syncLyricsUri: "",
-          isDenseTypeface: false,
+          isDenseTypeface: /^(?:zh|ja|ko)(?:-|$)/i.test(language),
           alternatives: [],
-          language: String(entry.l || "en"),
+          language: language,
           isRtlLanguage: false,
           fullscreenAction: "FULLSCREEN_LYRICS",
         },
@@ -1224,16 +1335,24 @@ export default async function (ctx) {
     const colors = payload.colors || {};
     const lines = [];
     const raw = Array.isArray(lyrics.lines) ? lyrics.lines : [];
-    for (let i = 0; i < raw.length && i < LYRICS_CACHE_MAX_LINES; i += 1) {
+    const lastRaw = raw.length ? raw[raw.length - 1] : null;
+    const hasTrailingCredit = !!(lastRaw && typeof lastRaw.words === "string" && THIRD_PARTY_CREDIT_RE.test(lastRaw.words));
+    const maxBody = hasTrailingCredit && raw.length > LYRICS_CACHE_MAX_LINES ? LYRICS_CACHE_MAX_LINES - 1 : LYRICS_CACHE_MAX_LINES;
+    for (let i = 0; i < raw.length && lines.length < maxBody; i += 1) {
       const line = raw[i];
       if (!line || typeof line.words !== "string" || !line.words.trim()) continue;
       lines.push([Number(line.startTimeMs) || 0, line.words.slice(0, 200)]);
     }
+    if (hasTrailingCredit && raw.length > LYRICS_CACHE_MAX_LINES) {
+      lines.push([Number(lastRaw.startTimeMs) || 0, lastRaw.words.slice(0, 200)]);
+    }
     if (!lines.length) return;
+    const unfolded = typeof SPOTIFY_HAN_VARIANTS === "undefined" ? 1 : 0;
     map[key] = {
       t: now,
       m: 0,
-      z: hansLyrics ? 1 : 0,
+      z: hansLyrics && !unfolded ? 1 : 0,
+      u: unfolded,
       s: lyrics.syncType === "UNSYNCED" ? "UNSYNCED" : "LINE_SYNCED",
       p: String(lyrics.provider || "LRCLIB"),
       i: lyrics.providerLyricsId === undefined || lyrics.providerLyricsId === null ? "" : String(lyrics.providerLyricsId),
@@ -1246,17 +1365,18 @@ export default async function (ctx) {
       // 清掉过期条目和 miss 记录。
       if (!entry || entry.m || !(now - Number(entry.t || 0) < LYRICS_CACHE_HIT_TTL)) delete map[id];
     }
-    const byAge = () => Object.keys(map).sort((a, b) => Number(map[b].t || 0) - Number(map[a].t || 0));
-    for (const id of byAge().slice(LYRICS_CACHE_MAX)) delete map[id];
+    // 按时间倒序（最新在前）：超过条数上限时淘汰尾部最旧条目。
+    const ordered = Object.keys(map).sort((a, b) => Number(map[b].t || 0) - Number(map[a].t || 0));
+    for (let i = LYRICS_CACHE_MAX; i < ordered.length; i += 1) delete map[ordered[i]];
+    const kept = ordered.slice(0, LYRICS_CACHE_MAX);
 
-    // 存储空间和解析成本都要控住：整包超过上限时继续按时间淘汰最旧的。
+    // 存储空间和解析成本都要控住：整包超过上限时从最旧（数组尾部）开始淘汰，保留刚写入的最新条目。
     const store = storeBackend();
     if (!store) return;
     try {
       let json = JSON.stringify(map);
-      for (const id of byAge()) {
-        if (json.length <= LYRICS_CACHE_MAX_BYTES || Object.keys(map).length <= 1) break;
-        delete map[id];
+      for (let i = kept.length - 1; i > 0 && json.length > LYRICS_CACHE_MAX_BYTES; i -= 1) {
+        delete map[kept[i]];
         json = JSON.stringify(map);
       }
       store.write(json, LYRICS_CACHE_KEY);
@@ -1269,6 +1389,29 @@ export default async function (ctx) {
   // 当前 / 已唱行白色。三项都是 alpha=0xFF 的不透明色，不能依赖 alpha 区分。
   // 官方 previewLines 给 5 行；超过歌词总行数时按实际行数截断。
   const PREVIEW_LINES = 5;
+  const PROVIDER_LABEL = {
+    NetEase: "网易",
+    "QQ Music": "QQ",
+    LRCLIB: "LRCLIB",
+    Musixmatch: "Musixmatch",
+  };
+  const THIRD_PARTY_CREDIT_RE = /^— 歌词来自第三方（.+） —$/;
+  function thirdPartyCredit(provider) {
+    const label = PROVIDER_LABEL[provider] || String(provider || "第三方");
+    return "— 歌词来自第三方（" + label + "） —";
+  }
+  function appendCreditLine(lines, syncType, provider) {
+    if (!lines.length) return lines;
+    if (THIRD_PARTY_CREDIT_RE.test(lines[lines.length - 1].words)) return lines;
+    const lastMs = syncType === "LINE_SYNCED" ? (Number(lines[lines.length - 1].startTimeMs) || 0) + 1000 : 0;
+    return lines.concat([{ startTimeMs: String(lastMs), words: thirdPartyCredit(provider), syllables: [], endTimeMs: "0" }]);
+  }
+  function previewFromLines(lines) {
+    const clean = lines.length && THIRD_PARTY_CREDIT_RE.test(lines[lines.length - 1].words)
+      ? lines.slice(0, -1)
+      : lines;
+    return clean.slice(0, PREVIEW_LINES);
+  }
 
   // 这些正则会在逐行解析里反复用到，提到外层只创建一次。
   const LRC_STAMP = /\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
@@ -1296,6 +1439,9 @@ export default async function (ctx) {
   const KANA_MARK = /[\u3040-\u30ff]/;
   const HANGUL_MARK = /[\uac00-\ud7af]/;
   const HAN_MARK = /[\u4e00-\u9fff]/;
+  const HTML_ENTITIES = { apos: "'", quot: '"', amp: "&", lt: "<", gt: ">", nbsp: " " };
+  const LRC_HAS_STAMP = /\[\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?\]/;
+  const INSTRUMENTAL_NOTICE = /^(?:纯音乐[，, ]*请欣赏|此歌曲为没有填词的纯音乐[，, ]*请您?欣赏)$/;
 
   // 响应体上限：官方歌词正常 < 300 KiB，第三方 JSON 也远小于 2 MiB。
   // 超过上限直接放行 / 当作没查到，避免异常响应把脚本内存打爆。
@@ -1303,8 +1449,10 @@ export default async function (ctx) {
   const MAX_HTTP_JSON_BYTES = 2 * 1024 * 1024;
 
   let settled = false;
+  let officialWon = false;
   let deadline;
   let plainTimer;
+  let metaPollTimer;
   let plainFallback = null;
   // plainFallback 里的时间轴是不是「按行均分」编出来的（伪同步）。
   let plainFallbackPseudo = false;
@@ -1320,17 +1468,22 @@ export default async function (ctx) {
   let nestedRuns = 0;
   // 预取轮：辅助模式下替「下一首」查歌词，绝对不能碰 $done（滚动页响应早就交回去了）。
   let prefetching = false;
-  const stopped = () => settled && !nestedRuns;
+  const stopped = () => officialWon || (settled && !nestedRuns);
+  const clearTimers = () => {
+    if (typeof clearTimeout !== "function") return;
+    if (deadline !== undefined) { clearTimeout(deadline); deadline = undefined; }
+    if (plainTimer !== undefined) { clearTimeout(plainTimer); plainTimer = undefined; }
+    if (metaPollTimer !== undefined) { clearTimeout(metaPollTimer); metaPollTimer = undefined; }
+  };
   const markMiss = () => {
-    if (!trackId || !netAnswered) return;
+    if (!trackId || !netAnswered || officialWon) return;
     writeMark(MISS_KEY, { id: trackId, at: Date.now() });
   };
 
   const finish = (value) => {
     if (settled || prefetching) return;
     settled = true;
-    if (deadline !== undefined && typeof clearTimeout === "function") clearTimeout(deadline);
-    if (plainTimer !== undefined && typeof clearTimeout === "function") clearTimeout(plainTimer);
+    clearTimers();
     writeMark(PENDING_KEY, null);
     // 请求阶段没有 $response：Loon / Egern / Shadowrocket 用 { response } 直接
     // 返回合成结果，跳过官方 color-lyrics 请求。
@@ -1348,12 +1501,13 @@ export default async function (ctx) {
 
     // 最近确认没有歌词的曲目不再补空卡；已经查到歌词、或有歌词请求在路上时
     // 以实际进度为准，避免旧的 miss 标记把这次可能成功的歌词挡掉。
+    // 先查极小的 MISS_KEY：绝大多数曲目没有 miss 标记，直接返回 true，
+    // 避免每次打开 Now Playing 都反序列化 400KB 的歌词缓存。
     globalThis.__spotifyLyricsCard = (id) => {
       if (!id || !flag(opt.enable_lyrics, true)) return false;
-      if (readLyricsCache(lyricsCacheKey(id), id)) return true;
+      if (!activeMark(MISS_KEY, id, MISS_TTL_MS)) return true;
       if (activeMark(PENDING_KEY, id, PENDING_TTL_MS)) return true;
-      if (activeMark(MISS_KEY, id, MISS_TTL_MS)) return false;
-      return true;
+      return hasLyricsCache(lyricsCacheKey(id), id);
     };
 
     // ---- 预取下一首歌词 ---------------------------------------------------
@@ -1487,6 +1641,28 @@ export default async function (ctx) {
       let officialDone = false;
       let officialMiss = null;
       let providersDone = false;
+      const cleanOfficialHeaders = (source, body) => {
+        const headers = {};
+        if (source && "object" == typeof source) {
+          for (const key in source) {
+            const lower = String(key).toLowerCase();
+            if (lower === "content-length" || lower === "content-encoding" || lower === "transfer-encoding") continue;
+            headers[key] = source[key];
+          }
+        }
+        const length = typeof body === "string" ? encoder.encode(body).length : toBytes(body).length;
+        headers["Content-Length"] = String(length);
+        return headers;
+      };
+      const winOfficial = (value) => {
+        if (settled) return;
+        officialWon = true;
+        settled = true;
+        clearTimers();
+        writeMark(PENDING_KEY, null);
+        writeMark(MISS_KEY, null);
+        $done({ response: { status: value.status, headers: cleanOfficialHeaders(value.headers, value.body), body: value.body } });
+      };
       const finishOfficial = (error, response, data) => {
         if (settled) return;
         const code = Number(response && (response.status || response.statusCode));
@@ -1494,11 +1670,20 @@ export default async function (ctx) {
           officialDone = true;
           return maybeFinishRace();
         }
+        // 登录失效、限流或服务端错误不伪装成歌词，原样透传清理后的官方响应。
+        if (code && code !== 200 && code !== 404) {
+          return winOfficial({ status: code, headers: response.headers || {}, body: data });
+        }
         const bytes = typeof data === "string" ? encoder.encode(data) : toBytes(data);
         if (bytes.length > MAX_LYRICS_BYTES) {
-          officialDone = true;
-          officialMiss = { status: code || 502, headers: response.headers || {}, body: data };
-          return maybeFinishRace();
+          return winOfficial({ status: code || 200, headers: response.headers || {}, body: data });
+        }
+        if (code === 200 && !bytes.length) {
+          const declared = Number(headerValue(response.headers, "content-length"));
+          if (Number.isFinite(declared) && declared > 0) {
+            officialWon = true;
+            return finish({});
+          }
         }
         let first = 0;
         while (first < bytes.length && (bytes[first] === 32 || bytes[first] === 9 || bytes[first] === 10 || bytes[first] === 13)) first += 1;
@@ -1513,41 +1698,29 @@ export default async function (ctx) {
             const inspected = inspectProto(bytes);
             if (inspected && inspected.count > 0) {
               const rewritten = rewriteOfficialProto(inspected);
-              return winOfficial({ status: 200, headers: response.headers || {}, body: rewritten || data });
+              return winOfficial({ status: 200, headers: response.headers || {}, body: rewritten || bytes });
             }
           }
         }
         officialDone = true;
-        officialMiss = { status: code || 404, headers: response.headers || {}, body: data };
+        officialMiss = { status: code || 404, headers: cleanOfficialHeaders(response.headers, data), body: data };
         maybeFinishRace();
-      };
-      const winOfficial = (value) => {
-        if (settled) return;
-        settled = true;
-        if (deadline !== undefined && typeof clearTimeout === "function") clearTimeout(deadline);
-        if (plainTimer !== undefined && typeof clearTimeout === "function") clearTimeout(plainTimer);
-        writeMark(PENDING_KEY, null);
-        writeMark(MISS_KEY, null);
-        const headers = {};
-        const source = value.headers || {};
-        for (const key in source) {
-          const lower = String(key).toLowerCase();
-          if (lower === "content-length" || lower === "content-encoding" || lower === "transfer-encoding") continue;
-          headers[key] = source[key];
-        }
-        headers["Content-Length"] = String(typeof value.body === "string" ? encoder.encode(value.body).length : toBytes(value.body).length);
-        $done({ response: { status: value.status, headers: headers, body: value.body } });
       };
       const maybeFinishRace = () => {
         if (settled || !officialDone || (!providersDone && !plainFallback)) return;
-        if (plainFallback) writeLyricsCache(cacheKey, plainFallback);
-        if (plainFallback) emit(plainFallback);
-        else finish(officialMiss ? { status: officialMiss.status, headers: officialMiss.headers, body: officialMiss.body } : {});
+        if (plainFallback) {
+          writeLyricsCache(cacheKey, plainFallback);
+          writeMark(MISS_KEY, null);
+          emit(plainFallback);
+        } else {
+          finish(officialMiss || {});
+        }
       };
       const raceDeadline = () => {
         if (settled) return;
         if (plainFallback) {
           writeLyricsCache(cacheKey, plainFallback);
+          writeMark(MISS_KEY, null);
           emit(plainFallback);
         } else if (officialDone && officialMiss) {
           finish(officialMiss);
@@ -1567,11 +1740,14 @@ export default async function (ctx) {
       resolveLyrics((payload) => {
         providersDone = true;
         if (settled) {
-          if (payload) writeLyricsCache(cacheKey, payload);
+          // 官方歌词已胜出时绝不把晚到的第三方歌词写进缓存，避免下次播放覆盖官方歌词。
+          if (!officialWon && payload) writeLyricsCache(cacheKey, payload);
           return;
         }
-        if (payload && payload.lyrics.syncType === "LINE_SYNCED") {
+        const isPseudo = !!(payload && payload === plainFallback && plainFallbackPseudo);
+        if (payload && payload.lyrics.syncType === "LINE_SYNCED" && !isPseudo) {
           writeLyricsCache(cacheKey, payload);
+          writeMark(MISS_KEY, null);
           emit(payload);
           return;
         }
@@ -1710,8 +1886,15 @@ export default async function (ctx) {
       };
     };
     const colorOf = () => (embed && embed.color) || null;
+    const stopMetaPoll = () => {
+      if (metaPollTimer !== undefined && typeof clearTimeout === "function") {
+        clearTimeout(metaPollTimer);
+        metaPollTimer = undefined;
+      }
+    };
     const start = () => {
       if (started) return;
+      stopMetaPoll();
       const info = merged();
       if (!info.title) {
         started = true;
@@ -1771,7 +1954,8 @@ export default async function (ctx) {
     if (storeBackend() && typeof setTimeout === "function") {
       let waited = 0;
       const poll = () => {
-        setTimeout(() => {
+        metaPollTimer = setTimeout(() => {
+          metaPollTimer = undefined;
           if (started || settled) return;
           const hit = cachedTrackMeta(trackId);
           if (hit) {
@@ -1805,7 +1989,7 @@ export default async function (ctx) {
   // 结果是写进缓存（下次打开 / 卡片直接命中），不占主链路的时间预算。
   function runWithIsrc(order, title, artist, done, duration, colorOf) {
     runSource(order, title, artist, (payload) => {
-      if (payload || !isrcLookup) {
+      if (payload || !isrcLookup || officialWon) {
         done(payload);
         return;
       }
@@ -1874,10 +2058,12 @@ export default async function (ctx) {
         // 伪同步要按歌曲时长均分时间轴，时长只能从这一层传下去。
         if (record && duration && !record.trackDurationMs) record.trackDurationMs = Number(duration) * 1000;
         if (stopped()) {
-          // deadline 超时放行：歌词晚到时写缓存，下次请求阶段直接命中。
-          if (record && colorOf) record.albumColor = colorOf();
-          const latePayload = buildPayload(record);
-          if (latePayload) writeLyricsCache(cacheKey, latePayload);
+          // deadline 超时放行：歌词晚到时写缓存（官方已胜出时绝不覆盖）。
+          if (!officialWon) {
+            if (record && colorOf) record.albumColor = colorOf();
+            const latePayload = buildPayload(record);
+            if (latePayload) writeLyricsCache(cacheKey, latePayload);
+          }
           remaining -= 1;
           checkAllDone();
           return;
@@ -1886,26 +2072,35 @@ export default async function (ctx) {
         if (record && colorOf) record.albumColor = colorOf();
         // record.pseudo 表示这份 payload 的时间轴是按行均分编出来的：它不能让
         // 这一轮提前收工，得等真正的同步歌词；只有实在没有同步歌词时才用它兜底。
-        const pseudo = !!(record && record.pseudo);
         const payload = buildPayload(record);
+        const pseudo = !!(record && record.pseudo);
         if (payload && (order.length === 1 || (payload.lyrics.syncType === "LINE_SYNCED" && !pseudo))) {
           finished = true;
+          if (plainTimer !== undefined && typeof clearTimeout === "function") {
+            clearTimeout(plainTimer);
+            plainTimer = undefined;
+          }
+          if (pseudo) {
+            plainFallback = payload;
+            plainFallbackPseudo = true;
+          }
           done(payload);
           return;
         }
-        if (payload && (!plainFallback || (plainFallbackPseudo && !pseudo))) {
+        if (payload && (!plainFallback || (!plainFallbackPseudo && pseudo))) {
           plainFallback = payload;
           plainFallbackPseudo = pseudo;
           // 有纯文本但同步歌词还在路上时，先把纯文本发出去，后续结果不再覆盖。
-          // deadline 超时放行后仍然写缓存，供下次请求命中。
-          if (typeof setTimeout === "function") plainTimer = setTimeout(() => {
-            if (!plainFallback) return;
-            writeLyricsCache(cacheKey, plainFallback);
-            if (!settled) {
+          // 仅在主链路未结束且非预取模式下调度，避免重复创建定时器或覆盖真同步缓存。
+          if (!prefetching && !settled && plainTimer === undefined && typeof setTimeout === "function") {
+            plainTimer = setTimeout(() => {
+              plainTimer = undefined;
+              if (finished || settled || prefetching || officialWon || !plainFallback) return;
+              writeLyricsCache(cacheKey, plainFallback);
               if (onPlainFallback) onPlainFallback();
               else emit(plainFallback);
-            }
-          }, PLAIN_FALLBACK_MS);
+            }, PLAIN_FALLBACK_MS);
+          }
         }
         remaining -= 1;
         checkAllDone();
@@ -1989,34 +2184,60 @@ export default async function (ctx) {
     }
     let pending = specs.length;
 
-    const settle = () => {
+    const settle = (added) => {
       pending -= 1;
       if (done) return;
-      const hit = syncedPick();
-      if (hit) {
-        done = true;
-        cb(withProvider(hit, "LRCLIB"));
-        return;
+      if (added) {
+        const hit = syncedPick();
+        if (hit) {
+          done = true;
+          cb(withProvider(hit, "LRCLIB"));
+          return;
+        }
       }
       if (pending) return;
       done = true;
       // 严格规则一条都没命中时，再用「同名 + 时长」放宽一轮：歌手写法对不上
       // （feat. / 制作人署名 / 翻译名）的曲目在这一轮会被救回来。
-      const picked = pickRecord(all(), title, duration, artist)
-        || pickRecord(all(), title, duration, artist, matchesSongLoose);
+      const combined = all();
+      const picked = pickRecord(combined, title, duration, artist)
+        || pickRecord(combined, title, duration, artist, matchesSongLoose);
       cb(picked ? withProvider(picked, "LRCLIB") : null);
     };
 
     for (const spec of specs) {
       httpGetJson(spec.url, (data) => {
+        let added = false;
         if (spec.path === "get") {
-          if (data && "object" === typeof data) records.push(data);
-        } else if (Array.isArray(data)) {
+          if (data && "object" === typeof data) { records.push(data); added = true; }
+        } else if (Array.isArray(data) && data.length) {
           lists.push(data);
+          added = true;
         }
-        settle();
+        settle(added);
       });
     }
+  }
+
+  function decodeHtmlEntities(text) {
+    if (typeof text !== "string" || text.indexOf("&") < 0) return String(text || "");
+    return text.replace(/&(#x[0-9a-fA-F]+|#\d+|apos|quot|amp|lt|gt|nbsp);/g, (whole, body) => {
+      if (body.charAt(0) === "#") {
+        const code = body.charAt(1) === "x" || body.charAt(1) === "X"
+          ? parseInt(body.slice(2), 16)
+          : parseInt(body.slice(1), 10);
+        return Number.isFinite(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+      }
+      return HTML_ENTITIES[body] || whole;
+    });
+  }
+
+  function makeLyricRecord(provider, providerId, text) {
+    if (!text) return null;
+    if (LRC_HAS_STAMP.test(text)) return { provider: provider, providerId: providerId, syncedLyrics: text };
+    const trimmed = String(text).trim();
+    if (!trimmed || INSTRUMENTAL_NOTICE.test(trimmed)) return null;
+    return { provider: provider, providerId: providerId, plainLyrics: trimmed };
   }
 
   // 网易云：搜索接口不需要 token，中文曲库覆盖最好。
@@ -2045,7 +2266,7 @@ export default async function (ctx) {
         waiting[id] = [next];
         httpGetJson("https://music.163.com/api/song/lyric?id=" + id + "&lv=-1&kv=-1&tv=-1", (lyric) => {
           const text = lyric && lyric.lrc && lyric.lrc.lyric;
-          const record = text ? { provider: "NetEase", providerId: id, syncedLyrics: text } : null;
+          const record = makeLyricRecord("NetEase", id, text);
           lyrics[id] = record;
           const callbacks = waiting[id] || [];
           delete waiting[id];
@@ -2120,10 +2341,10 @@ export default async function (ctx) {
         (item) => (item.singer || []).reduce((names, a) => names.concat(artistNames(a)), []), (item) => Number(item.interval));
       tryCandidates(candidates, (picked, next) => {
         httpGetJson(
-          "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=" + picked.songmid + "&format=json&nobase64=1&g_tk=5381",
+          "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=" + encodeURIComponent(String(picked.songmid)) + "&format=json&nobase64=1&g_tk=5381",
           (lyric) => {
-            const text = lyric && lyric.lyric;
-            next(text ? { provider: "QQ Music", providerId: String(picked.songmid), syncedLyrics: text } : null);
+            const text = lyric && lyric.lyric ? decodeHtmlEntities(lyric.lyric) : "";
+            next(makeLyricRecord("QQ Music", String(picked.songmid), text));
           },
           headers,
         );
@@ -2563,7 +2784,7 @@ export default async function (ctx) {
       const counted = target.indexOf("open.spotify.com") < 0 && target.indexOf("/token.get") < 0;
       const onReply = (error, response, data) => {
         if (done || stopped()) return;
-        const statusCode = Number(response && response.status);
+        const statusCode = Number(response && (response.status || response.statusCode));
         if (error || !response) {
           reply(null);
           return;
@@ -2575,7 +2796,7 @@ export default async function (ctx) {
           reply(null);
           return;
         }
-        if (statusCode >= 400 || !data) {
+        if (!Number.isFinite(statusCode) || statusCode >= 400 || !data) {
           reply(null);
           return;
         }
@@ -2712,7 +2933,8 @@ export default async function (ctx) {
     if (dense) parts.push(pbUint(8, 1));
     if (lang) parts.push(pbBytes(10, encoder.encode(lang)));
     parts.push(pbUint(14, 1));
-    for (let i = 0; i < lines.length && i < PREVIEW_LINES; i += 1) parts.push(pbBytes(17, encodeLine(lines[i])));
+    const preview = previewFromLines(lines);
+    for (let i = 0; i < preview.length; i += 1) parts.push(pbBytes(17, encodeLine(preview[i])));
 
     const lyrics = pbConcat(parts);
     // colors 必须给：客户端拿它刷歌词页的背景和文字，字段缺失时是 0，alpha 也是 0，
@@ -2774,7 +2996,7 @@ export default async function (ctx) {
         const part = line[i];
         if (part.wire !== 2) continue;
         const text = toText(part.bytes);
-        if (CJK_MARK.test(text)) out += text;
+        if (CJK_MARK.test(text) || KANA_MARK.test(text)) out += text;
       }
       return out;
     } catch (e) {
@@ -2783,8 +3005,8 @@ export default async function (ctx) {
     return "";
   }
 
-  // 采样时优先收集含汉字的行：前奏 / 英文段很长时，前 40 行可能全是英文，
-  // 只看开头会把后面真正的中文歌词漏掉。
+  // 采样时收集整首歌的汉字与假名行（最多 200 行）：既跳过长英文前奏，也避免
+  // 歌曲后半段才出现的「妳」等繁体字被前 40 行截断漏判，且保留日文纯假名行。
   function protoSample(inner) {
     const sample = [];
     const fallback = [];
@@ -2794,10 +3016,10 @@ export default async function (ctx) {
       if (!((field.field === 2 || field.field === 17) && field.wire === 2)) continue;
       const text = protoLineText(field);
       if (!text) continue;
-      if (CJK_MARK.test(text)) {
-        hasHan = true;
-        if (sample.length < 40) sample.push(text);
-        if (sample.length >= 40) break;
+      if (CJK_MARK.test(text) || KANA_MARK.test(text)) {
+        if (CJK_MARK.test(text)) hasHan = true;
+        if (sample.length < 200) sample.push(text);
+        if (sample.length >= 200) break;
       } else if (fallback.length < 40) {
         fallback.push(text);
       }
@@ -2822,7 +3044,8 @@ export default async function (ctx) {
       const part = line[i];
       if (part.wire === 2) {
         const text = toText(part.bytes);
-        if (CJK_MARK.test(text)) {
+        // 跳过含二进制控制字节的嵌套子消息（如 syllables），避免把 tag/长度当文本改坏。
+        if (CJK_MARK.test(text) && !/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) {
           const folded = SPOTIFY_HAN_VARIANTS.fold(text);
           if (folded !== text) {
             // toText 是非 fatal 解码；非法 UTF-8 重编码后会变样，这种行不碰。
@@ -2904,10 +3127,10 @@ export default async function (ctx) {
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i];
       if (!line || typeof line.words !== "string" || !line.words) continue;
-      if (CJK_MARK.test(line.words)) {
-        hasHan = true;
-        if (sample.length < 40) sample.push(line.words);
-        if (sample.length >= 40) break;
+      if (CJK_MARK.test(line.words) || KANA_MARK.test(line.words)) {
+        if (CJK_MARK.test(line.words)) hasHan = true;
+        if (sample.length < 200) sample.push(line.words);
+        if (sample.length >= 200) break;
       } else if (fallback.length < 40) {
         fallback.push(line.words);
       }
@@ -2974,22 +3197,22 @@ export default async function (ctx) {
       if (fold) {
         if (foldJsonLines(lyrics.lines)) changed = true;
         if (foldJsonLines(lyrics.previewLines)) changed = true;
-        // alternatives 是另一份译文；只有它自己的语言也是繁体时才一起转。
-        const alternatives = Array.isArray(lyrics.alternatives) ? lyrics.alternatives : [];
-        for (let i = 0; i < alternatives.length; i += 1) {
-          const alt = alternatives[i];
-          if (!alt || "object" != typeof alt) continue;
-          const altKind = hanLanguage(alt.language);
-          const altSample = jsonSample(alt.lines);
-          if (!shouldFoldHan(altKind, altSample.text)) continue;
-          if (foldJsonLines(alt.lines)) changed = true;
-          if (altSample.hasHan && (altKind === "hant" || altKind === "zh")) {
-            alt.language = "zh-Hans";
-            changed = true;
-          }
-        }
         if (sample.hasHan && (kind === "hant" || kind === "zh")) {
           lyrics.language = "zh-Hans";
+          changed = true;
+        }
+      }
+      // alternatives 是另一份译文；无论主歌词是不是繁体，只要译文自身是繁体就一起转。
+      const alternatives = Array.isArray(lyrics.alternatives) ? lyrics.alternatives : [];
+      for (let i = 0; i < alternatives.length; i += 1) {
+        const alt = alternatives[i];
+        if (!alt || "object" != typeof alt) continue;
+        const altKind = hanLanguage(alt.language);
+        const altSample = jsonSample(alt.lines);
+        if (!shouldFoldHan(altKind, altSample.text)) continue;
+        if (foldJsonLines(alt.lines)) changed = true;
+        if (altSample.hasHan && (altKind === "hant" || altKind === "zh")) {
+          alt.language = "zh-Hans";
           changed = true;
         }
       }
@@ -3175,30 +3398,30 @@ export default async function (ctx) {
   function makePayload(syncType, rawLines, record) {
     const lines = normalizeLines(rawLines);
     if (!lines.length) return null;
-    // 补全歌词默认转简体：先对整段做一次判定，只有繁体才逐行折叠。
+    // 补全歌词默认转简体：复用 jsonSample 跳过长英文前奏，只对繁体逐行折叠。
     // 网易云 / QQ 的简体歌词、英文与日文歌词都不会走到逐字转换。
     if (hansLyrics && typeof SPOTIFY_HAN_VARIANTS !== "undefined") {
-      const sample = [];
-      for (let i = 0; i < lines.length && i < 40; i += 1) sample.push(lines[i].words);
-      if (SPOTIFY_HAN_VARIANTS.isTraditional(sample)) {
+      if (SPOTIFY_HAN_VARIANTS.isTraditional(jsonSample(lines).text)) {
         for (let i = 0; i < lines.length; i += 1) lines[i].words = SPOTIFY_HAN_VARIANTS.fold(lines[i].words);
       }
     }
     const provider = record.provider || "LRCLIB";
     const id = record.providerId !== undefined ? record.providerId : record.id;
     const language = detectLanguage(lines);
+    const preview = lines.slice(0, PREVIEW_LINES);
+    const fullLines = appendCreditLine(lines, syncType, provider);
     // 值是 32 位有符号整数。
     const signed = (v) => (v > 0x7fffffff ? v - 0x100000000 : v);
     const palette = albumColors(record);
     return {
       lyrics: {
         syncType: syncType,
-        lines: lines,
+        lines: fullLines,
         provider: provider,
         providerLyricsId: id === undefined || id === null ? "" : String(id),
         providerDisplayName: provider,
         syncLyricsUri: "",
-        isDenseTypeface: false,
+        isDenseTypeface: /^(?:zh|ja|ko)(?:-|$)/i.test(language),
         alternatives: [],
         language: language,
         isRtlLanguage: false,
@@ -3206,7 +3429,7 @@ export default async function (ctx) {
         // 桌面端（CEF / xpui）直接读 previewLines 做歌词卡预览，缺这个字段会抛
         // TypeError（undefined.map），整页歌词退化成「无法加载」。官方 JSON
         // 一直带它，这里按同样的前 N 行补齐；iOS 走 protobuf，不受影响。
-        previewLines: lines.slice(0, PREVIEW_LINES),
+        previewLines: preview,
       },
       colors: {
         background: signed(palette.background),
@@ -3362,14 +3585,17 @@ export default async function (ctx) {
   }
 
   function detectLanguage(lines) {
-    const sample = lines
-      .slice(0, 20)
-      .map((line) => line.words)
-      .join("");
-    if (KANA_MARK.test(sample)) return "ja";
-    if (HANGUL_MARK.test(sample)) return "ko";
-    if (HAN_MARK.test(sample)) return "zh";
-    return "en";
+    let hasHan = false;
+    let scanned = 0;
+    for (let i = 0; i < lines.length && scanned < 60; i += 1) {
+      const words = lines[i] && lines[i].words;
+      if (!words) continue;
+      scanned += 1;
+      if (KANA_MARK.test(words)) return "ja";
+      if (HANGUL_MARK.test(words)) return "ko";
+      if (HAN_MARK.test(words)) hasHan = true;
+    }
+    return hasHan ? "zh" : "en";
   }
 })();
 
@@ -3384,19 +3610,19 @@ export default async function (ctx) {
   // 官方没有歌词的曲目，服务端不下发这一格。这里按真实形状补一格，section id
   // 复用真实歌词 section 的值；只补当前曲目的列表，已有歌词 section 时不重复补。
   const LYRICS_SECTION_ID = "spotify:section:0JQ5DB6s3cssW5Bo6cGq21";
-  const LYRICS_SECTION_ID_BYTES = new TextEncoder().encode(LYRICS_SECTION_ID);
+  const LYRICS_SECTION_ID_BYTES = TE.encode(LYRICS_SECTION_ID);
 
   function scrollTrackId(url) {
     const match = /\/scrollsita\/v\d+\/scroll\/(?:spotify%3Atrack%3A|spotify:track:)([A-Za-z0-9]{22})/i.exec(url);
     return match ? match[1] : "";
   }
 
-  // 在 Uint8Array 里搜索 needle；命中返回 true。hasLyricsCard 和 patchScroll 共用。
+  // 在 Uint8Array 里用原生 indexOf 搜索 needle；比逐字节 JS 循环在 12MB 响应上快一个数量级。
   function containsBytes(buffer, needle) {
     if (!buffer || !buffer.length || buffer.length < needle.length) return false;
+    const firstByte = needle[0];
     const last = buffer.length - needle.length;
-    for (let i = 0; i <= last; i += 1) {
-      if (buffer[i] !== needle[0]) continue;
+    for (let i = buffer.indexOf(firstByte); i >= 0 && i <= last; i = buffer.indexOf(firstByte, i + 1)) {
       let j = 1;
       while (j < needle.length && buffer[i + j] === needle[j]) j += 1;
       if (j === needle.length) return true;
@@ -3500,7 +3726,7 @@ export default async function (ctx) {
     // 这时插一个 section 进去会把整包结构写坏 —— 客户端解析失败后整页空白，
     // 比「没有歌词卡」严重得多，所以只删广告、不插卡。
     let recognized = 0;
-    const trackRef = trackId ? new TextEncoder().encode("spotify:track:" + trackId) : null;
+    const trackRef = trackId ? TE.encode("spotify:track:" + trackId) : null;
     for (const section of sections) {
       if (section.no !== 1 || section.wire !== 2) {
         kept.push(section.raw);
@@ -3522,8 +3748,8 @@ export default async function (ctx) {
         return null;
       }
       if (ad || hasTrack || hasSectionId) recognized += 1;
-      // 官方歌词 section 的真实字节：和 lyricsSection() 的合成结果对比用。
-      if (hasTrack && hasSectionId) hasLyrics = true;
+      // 只有非广告的歌词 section 才算已有歌词卡，避免赞助卡误抑制补卡。
+      if (!ad && hasTrack && hasSectionId) hasLyrics = true;
       // 当前曲目的 section 里通常带 track_title / artist_name，抄进元数据缓存。
       if (trackRef && hasTrack && containsBytes(section.data, trackRef)) {
         rememberScrollMeta(section.data, trackId);
@@ -3539,8 +3765,9 @@ export default async function (ctx) {
     // 结构写坏，客户端解析失败后整页空白，比不补卡严重得多。
     // 判定条件放宽到「认出了任意一列卡片」或者「body 里确实有当前曲目的引用」，
     // 后者能兜住客户端换 section 结构、但列表确实属于这首歌的情况。
-    const addCard = wantCard && !!trackId && !hasLyrics
+    const canAdd = !!trackId && !hasLyrics
       && (recognized > 0 || (trackRef && containsBytes(buffer, trackRef)));
+    const addCard = canAdd && (typeof wantCard === "function" ? !!wantCard() : !!wantCard);
     if (!removed && !addCard) return null;
     if (addCard) kept.unshift(wireEncodeField(1, 2, lyricsSection(trackId)));
 
@@ -3701,15 +3928,11 @@ export default async function (ctx) {
   // 补卡不等歌词：Now Playing 打开时客户端先渲染列表，之后才合并 scrollsita 的
   // 响应；晚到的响应只更新模型、不重绘列表，卡片要收起再展开才出现。
   // 所以立刻补卡，内容由随后的 color-lyrics 响应填充。
+  // 传入惰性判定函数，只在响应本身确实缺歌词 section 时才读本地存储。
   if (isScroll && wantCard) {
     const card = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsCard : null;
-    const hasCard = typeof hasLyricsCard === "function" && safePatch(() => hasLyricsCard(body));
-    const allowed = !!trackId && !hasCard && (typeof card === "function" ? card(trackId) : true);
-    if (!allowed) {
-      finish(safePatch(() => patchScroll(body, trackId, wantAds, false)));
-      return;
-    }
-    finish(safePatch(() => patchScroll(body, trackId, wantAds, true)));
+    const allowCard = () => !!trackId && (typeof card === "function" ? card(trackId) : true);
+    finish(safePatch(() => patchScroll(body, trackId, wantAds, allowCard)));
     return;
   }
 

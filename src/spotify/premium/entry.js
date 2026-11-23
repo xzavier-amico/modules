@@ -10,7 +10,8 @@
     return;
   }
 
-  if (Number(res.status) >= 300) {
+  const status = Number(res.status || res.statusCode);
+  if (status >= 300) {
     $done({});
     return;
   }
@@ -114,7 +115,7 @@
       }
     }
     headers["Content-Length"] = String(out.length);
-    $done({ status: Number(res.status) || 200, headers: headers, body: out });
+    $done({ status: status || 200, headers: headers, body: out });
   };
 
   finish();

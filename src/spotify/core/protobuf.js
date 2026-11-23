@@ -8,7 +8,7 @@
   const TD = WIRE_UTF8;
   const readVarint = wireReadVarint;
 
-  // 小整数 varint（字段号 / 长度）：失败（截断 / 超长）返回 -1，不抛异常。
+  // 小整数 varint（字段号 / 长度）：失败（截断 / 超长 / 越界）返回 -1，不抛异常。
   // 元数据响应里大量字符串会被拿来试探「是不是子消息」，绝大多数会在这里失败；
   // 用异常处理失败既慢又会反复捕获调用栈。
   function readCount(bytes, state) {
@@ -28,9 +28,10 @@
         shift += 7;
         continue;
       }
-      // 超过 4 字节：退回 BigInt 路径，与 wireReadCount 的行为一致。
+      // 超过 4 字节：退回 BigInt 路径，拒绝超出 32 位范围的非法 tag / 长度。
       try {
-        return Number(wireReadVarint(bytes, state, limit));
+        const big = wireReadVarint(bytes, state, limit);
+        return big <= 0xffffffffn ? Number(big) : -1;
       } catch (e) {
         return -1;
       }
@@ -53,15 +54,39 @@
 
       let dataStart = state.i;
       let end;
+      let varintValue;
       if (wire === 2) {
         const length = readCount(b, state);
         if (length < 0 || length > total - state.i) return null;
         dataStart = state.i;
         end = dataStart + length;
       } else if (wire === 0) {
-        end = dataStart;
-        while (end < total && b[end++] & 0x80) { /* 只跳过 varint */ }
-        if (end === dataStart || b[end - 1] & 0x80) return null;
+        // 单趟解码 varint：1-4 字节小整数直接位运算，避免 subarray 与逐字节 BigInt 分配。
+        let at = dataStart;
+        let small = 0;
+        let shift = 0;
+        let resolved = false;
+        while (at < total && shift < 28) {
+          const byte = b[at++];
+          small |= (byte & 0x7f) << shift;
+          if (!(byte & 0x80)) {
+            const u = small >>> 0;
+            varintValue = u === 0 ? 0n : u === 1 ? 1n : BigInt(u);
+            end = at;
+            resolved = true;
+            break;
+          }
+          shift += 7;
+        }
+        if (!resolved) {
+          state.i = dataStart;
+          try {
+            varintValue = wireReadVarint(b, state, total);
+          } catch (e) {
+            return null;
+          }
+          end = state.i;
+        }
       } else if (wire === 1) {
         end = dataStart + 8;
       } else if (wire === 5) {
@@ -81,13 +106,7 @@
 
       const raw = b.subarray(rawStart, end);
       if (wire === 0) {
-        let value;
-        try {
-          value = wireReadVarint(b.subarray(dataStart, end), { i: 0 });
-        } catch (e) {
-          return null;
-        }
-        fields.push({ no: no, w: 0, v: value, raw: raw });
+        fields.push({ no: no, w: 0, v: varintValue, raw: raw });
       } else if (wire === 3) {
         // group 原样保留：p 存的是含起止 tag 的整段，serialize 直接写回。
         fields.push({ no: no, w: 3, p: raw, raw: raw });
@@ -98,10 +117,15 @@
     return fields;
   }
 
-  // varint 的 Number 版：字段号 / 长度 / 常见数值都远小于 2^53，不必为每个字段
-  // 分配 BigInt 和临时 Uint8Array。超过 2^53 的 64 位值仍走 BigInt 保证不丢位。
+  // varint 的 Number 版：字段号 / 长度 / 常见数值都远小于 2^31，用常数分支和位运算
+  // 避开浮点除法；超过 2^53 的 64 位值仍走 BigInt 保证不丢位。
   const MAX_SAFE_BIG = 9007199254740991n;
   function varintSize(n) {
+    if (n < 128) return 1;
+    if (n < 16384) return 2;
+    if (n < 2097152) return 3;
+    if (n < 268435456) return 4;
+    if (n <= 0xffffffff) return 5;
     let size = 1;
     while (n >= 128) {
       n = Math.floor(n / 128);
@@ -111,6 +135,14 @@
   }
 
   function writeVarint(out, at, n) {
+    if (n <= 0x7fffffff) {
+      while (n >= 128) {
+        out[at++] = (n & 0x7f) | 0x80;
+        n >>>= 7;
+      }
+      out[at++] = n;
+      return at;
+    }
     while (n >= 128) {
       out[at++] = (n % 128) | 128;
       n = Math.floor(n / 128);
@@ -174,6 +206,14 @@
 
   // raw[at..at+len) 是否恰好是 n 的最短 varint 编码（不分配）。
   function matchesVarint(raw, at, n, len) {
+    if (len === 1) return raw[at] === n;
+    if (n <= 0x7fffffff) {
+      for (let i = 0; i < len - 1; i += 1) {
+        if (raw[at + i] !== ((n & 0x7f) | 0x80)) return false;
+        n >>>= 7;
+      }
+      return raw[at + len - 1] === n;
+    }
     for (let i = 0; i < len; i += 1) {
       const byte = i < len - 1 ? (n % 128) | 128 : n;
       if (raw[at + i] !== byte) return false;

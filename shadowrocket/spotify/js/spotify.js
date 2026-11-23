@@ -203,6 +203,18 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   function wireEncodeVarint(value) {
+    if ("number" == typeof value && value >= 0 && value <= 0x7fffffff) {
+      let n = value | 0;
+      const len = n < 0x80 ? 1 : n < 0x4000 ? 2 : n < 0x200000 ? 3 : n < 0x10000000 ? 4 : 5;
+      const out = new Uint8Array(len);
+      let at = 0;
+      while (n >= 0x80) {
+        out[at++] = (n & 0x7f) | 0x80;
+        n >>>= 7;
+      }
+      out[at] = n;
+      return out;
+    }
     let rest = BigInt(value);
     const out = new Uint8Array(wireVarintLength(rest));
     let at = 0;
@@ -337,6 +349,39 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return false;
   }
 
+  // 流式遍历字段，不分配字段对象与子数组；回调返回 true 时提前停止。
+  function wireForEachField(bytes, onField) {
+    const state = { i: 0 };
+    while (state.i < bytes.length) {
+      const rawStart = state.i;
+      const tag = wireReadCount(bytes, state);
+      const no = tag >>> 3;
+      const wire = tag & 7;
+      if (!no) throw new Error("Invalid protobuf field");
+
+      let dataStart = state.i;
+      if (wire === 2) {
+        const length = wireReadCount(bytes, state);
+        if (length > bytes.length - state.i) throw new Error("Truncated protobuf field");
+        dataStart = state.i;
+        state.i += length;
+      } else if (wire === 1) {
+        state.i += 8;
+      } else if (wire === 5) {
+        state.i += 4;
+      } else if (wire === 0) {
+        wireSkipVarint(bytes, state);
+      } else if (wire === 3) {
+        state.i = wireSkipGroup(bytes, state.i, no);
+      } else {
+        throw new Error("Unsupported protobuf wire type " + wire);
+      }
+      if (state.i > bytes.length) throw new Error("Truncated protobuf field");
+      if (onField(no, wire, dataStart, state.i, rawStart, state.i)) return true;
+    }
+    return false;
+  }
+
   // 按 no / wire 编码一个字段；payload 对 wire 0 是 varint 字节，其余是字段值。
   function wireEncodeField(no, wire, payload) {
     const tag = wireEncodeVarint(BigInt(no) * 8n + BigInt(wire));
@@ -430,7 +475,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   const TD = WIRE_UTF8;
   const readVarint = wireReadVarint;
 
-  // 小整数 varint（字段号 / 长度）：失败（截断 / 超长）返回 -1，不抛异常。
+  // 小整数 varint（字段号 / 长度）：失败（截断 / 超长 / 越界）返回 -1，不抛异常。
   // 元数据响应里大量字符串会被拿来试探「是不是子消息」，绝大多数会在这里失败；
   // 用异常处理失败既慢又会反复捕获调用栈。
   function readCount(bytes, state) {
@@ -450,9 +495,10 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         shift += 7;
         continue;
       }
-      // 超过 4 字节：退回 BigInt 路径，与 wireReadCount 的行为一致。
+      // 超过 4 字节：退回 BigInt 路径，拒绝超出 32 位范围的非法 tag / 长度。
       try {
-        return Number(wireReadVarint(bytes, state, limit));
+        const big = wireReadVarint(bytes, state, limit);
+        return big <= 0xffffffffn ? Number(big) : -1;
       } catch (e) {
         return -1;
       }
@@ -475,15 +521,39 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
       let dataStart = state.i;
       let end;
+      let varintValue;
       if (wire === 2) {
         const length = readCount(b, state);
         if (length < 0 || length > total - state.i) return null;
         dataStart = state.i;
         end = dataStart + length;
       } else if (wire === 0) {
-        end = dataStart;
-        while (end < total && b[end++] & 0x80) { /* 只跳过 varint */ }
-        if (end === dataStart || b[end - 1] & 0x80) return null;
+        // 单趟解码 varint：1-4 字节小整数直接位运算，避免 subarray 与逐字节 BigInt 分配。
+        let at = dataStart;
+        let small = 0;
+        let shift = 0;
+        let resolved = false;
+        while (at < total && shift < 28) {
+          const byte = b[at++];
+          small |= (byte & 0x7f) << shift;
+          if (!(byte & 0x80)) {
+            const u = small >>> 0;
+            varintValue = u === 0 ? 0n : u === 1 ? 1n : BigInt(u);
+            end = at;
+            resolved = true;
+            break;
+          }
+          shift += 7;
+        }
+        if (!resolved) {
+          state.i = dataStart;
+          try {
+            varintValue = wireReadVarint(b, state, total);
+          } catch (e) {
+            return null;
+          }
+          end = state.i;
+        }
       } else if (wire === 1) {
         end = dataStart + 8;
       } else if (wire === 5) {
@@ -503,13 +573,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
       const raw = b.subarray(rawStart, end);
       if (wire === 0) {
-        let value;
-        try {
-          value = wireReadVarint(b.subarray(dataStart, end), { i: 0 });
-        } catch (e) {
-          return null;
-        }
-        fields.push({ no: no, w: 0, v: value, raw: raw });
+        fields.push({ no: no, w: 0, v: varintValue, raw: raw });
       } else if (wire === 3) {
         // group 原样保留：p 存的是含起止 tag 的整段，serialize 直接写回。
         fields.push({ no: no, w: 3, p: raw, raw: raw });
@@ -520,10 +584,15 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return fields;
   }
 
-  // varint 的 Number 版：字段号 / 长度 / 常见数值都远小于 2^53，不必为每个字段
-  // 分配 BigInt 和临时 Uint8Array。超过 2^53 的 64 位值仍走 BigInt 保证不丢位。
+  // varint 的 Number 版：字段号 / 长度 / 常见数值都远小于 2^31，用常数分支和位运算
+  // 避开浮点除法；超过 2^53 的 64 位值仍走 BigInt 保证不丢位。
   const MAX_SAFE_BIG = 9007199254740991n;
   function varintSize(n) {
+    if (n < 128) return 1;
+    if (n < 16384) return 2;
+    if (n < 2097152) return 3;
+    if (n < 268435456) return 4;
+    if (n <= 0xffffffff) return 5;
     let size = 1;
     while (n >= 128) {
       n = Math.floor(n / 128);
@@ -533,6 +602,14 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   function writeVarint(out, at, n) {
+    if (n <= 0x7fffffff) {
+      while (n >= 128) {
+        out[at++] = (n & 0x7f) | 0x80;
+        n >>>= 7;
+      }
+      out[at++] = n;
+      return at;
+    }
     while (n >= 128) {
       out[at++] = (n % 128) | 128;
       n = Math.floor(n / 128);
@@ -596,6 +673,14 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
   // raw[at..at+len) 是否恰好是 n 的最短 varint 编码（不分配）。
   function matchesVarint(raw, at, n, len) {
+    if (len === 1) return raw[at] === n;
+    if (n <= 0x7fffffff) {
+      for (let i = 0; i < len - 1; i += 1) {
+        if (raw[at + i] !== ((n & 0x7f) | 0x80)) return false;
+        n >>>= 7;
+      }
+      return raw[at + len - 1] === n;
+    }
     for (let i = 0; i < len; i += 1) {
       const byte = i < len - 1 ? (n % 128) | 128 : n;
       if (raw[at + i] !== byte) return false;
@@ -1046,15 +1131,19 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
   function patchAttributes(buffer, fields = parse(buffer)) {
     if (!fields || !allCanonical(fields)) return null;
-    // 先记下账号地区，headers 脚本据此选择时区。
-    rememberRegion(fields);
     const out = [];
     const seen = Object.create(null);
+    let regionSaved = false;
     for (const f of fields) {
       let key = null;
+      let inner = null;
       if (f.no === 1 && f.w === 2) {
-        const inner = parse(f.p);
+        inner = parse(f.p);
         if (inner) key = text(first(inner, 1));
+      }
+      // 顺手记下账号地区，避免再单独遍历一遍属性表；headers 脚本据此选择时区。
+      if (!regionSaved && key && inner && rememberRegionEntry(key, inner)) {
+        regionSaved = true;
       }
       if (!key || (!has(key) && !stripped(key))) {
         out.push(f);
@@ -1158,11 +1247,9 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return kept;
   }
 
-  function patchConfiguration(buffer, fields = parse(buffer), assigned = null) {
-    if (!fields || !allCanonical(fields)) return null;
-    const out = [];
-    const present = Object.create(null);
-    // 本次响应的规则索引，只分配引用；保留原始规则顺序（包括通配规则）。
+  let cachedRuleIndex = null;
+  function getRuleIndex() {
+    if (cachedRuleIndex) return cachedRuleIndex;
     const byName = new Map();
     const wildcard = [];
     for (let i = 0; i < RULES.length; i++) {
@@ -1174,11 +1261,22 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         byName.get(rule[1]).push(i);
       }
     }
+    cachedRuleIndex = { byName, wildcard };
+    return cachedRuleIndex;
+  }
+
+  function patchConfiguration(buffer, fields = parse(buffer), assigned = null) {
+    if (!fields || !allCanonical(fields)) return null;
+    const out = [];
+    const present = Object.create(null);
+    const scopes = Object.create(null);
+    const { byName, wildcard } = getRuleIndex();
+    const isDesktop = typeof desktop !== "undefined" && desktop;
     for (const f of fields) {
       let value = null;
       const described = assigned && assigned.get(f);
       if (f.no === 3 && f.w === 2) value = described ? described.value : parse(f.p);
-      if (!value || !same(serialize(value), f.p)) {
+      if (!value || !allCanonical(value)) {
         out.push(f);
         continue;
       }
@@ -1215,12 +1313,15 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       }
       if (removed) continue;
       present[scope + "\u0000" + name] = true;
+      if (scope) scopes[scope] = true;
       if (touched) f.p = serialize(value);
       out.push(f);
     }
     for (const rule of RULES) {
       if (rule[2] !== 2 || !rule[0] || !rule[1]) continue;
-      if (rule[5] === "ad" && !adsOn) continue;
+      if ((rule[5] === "ad" && !adsOn) || (rule[5] === "cap" && !playOn)) continue;
+      // 移动端 protobuf 不塞入桌面端专属 desktop-ui 开关，避免冗余噪声。
+      if (!isDesktop && rule[0] === "desktop-ui" && !scopes[rule[0]]) continue;
       if (present[rule[0] + "\u0000" + rule[1]]) continue;
       const identifier = serialize([fieldString(1, rule[0]), fieldString(2, rule[1])]);
       out.push(fieldBytes(3, serialize([fieldBytes(1, identifier), fieldBytes(3, boolValue(rule[3]))])));
@@ -1310,17 +1411,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   function patchConfigurationJson(data) {
     const target = jsonAssignedList(data);
     if (!target) return null;
-    const byName = new Map();
-    const wildcard = [];
-    for (let i = 0; i < RULES.length; i++) {
-      const rule = RULES[i];
-      if ((rule[5] === "ad" && !adsOn) || (rule[5] === "cap" && !playOn)) continue;
-      if (!rule[1]) wildcard.push(i);
-      else {
-        if (!byName.has(rule[1])) byName.set(rule[1], []);
-        byName.get(rule[1]).push(i);
-      }
-    }
+    const { byName, wildcard } = getRuleIndex();
     const present = Object.create(null);
     const scopes = Object.create(null);
     const kept = [];
@@ -1370,7 +1461,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     }
     for (const rule of RULES) {
       if (rule[2] !== 2 || !rule[0] || !rule[1]) continue;
-      if (rule[5] === "ad" && !adsOn) continue;
+      if ((rule[5] === "ad" && !adsOn) || (rule[5] === "cap" && !playOn)) continue;
       // JSON 这条只补「响应里本来就有的 scope」，避免把 iOS 那批 scope 的开关
       // 塞进桌面端响应里（客户端不认，纯噪声）。
       if (!scopes[rule[0]]) continue;
@@ -1461,7 +1552,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     if (fields.length === 1 && fields[0].no === 1 && fields[0].w === 2) {
       const inner = parse(fields[0].p);
       const description = inner && describeConfiguration(inner);
-      if (description && same(serialize(inner), fields[0].p)) {
+      if (description && allCanonical(inner)) {
         wrapper = fields;
         target = fields[0].p;
         targetFields = inner;
@@ -1485,15 +1576,24 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     if (!fields || !allCanonical(fields)) return null;
     const resolve = first(fields, 1);
     let attributes = first(fields, 3);
+    let attrFields = null;
     // 字段 3 也可能是 ResolveConfiguration 的 AssignedValue，需先确认结构。
-    if (attributes && (attributes.w !== 2 ||
-        (attributes.p.length && !looksLikeAttributes(attributes.p)))) return null;
+    if (attributes) {
+      if (attributes.w !== 2) return null;
+      if (attributes.p.length) {
+        attrFields = parse(attributes.p);
+        if (!looksLikeAttributes(attributes.p, attrFields)) return null;
+      } else {
+        attrFields = [];
+      }
+    }
     // 没有 resolve 也没有 attributes 时，不按 UCS 处理。
     if (!attributes) {
       const inner = resolve && resolve.w === 2 ? parse(resolve.p) : null;
       const configuration = inner ? first(inner, 1) : null;
       if (!configuration || configuration.w !== 2) return null;
       attributes = fieldBytes(3, new Uint8Array(0));
+      attrFields = [];
       fields.push(attributes);
     }
     if (resolve && resolve.w === 2) {
@@ -1501,7 +1601,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       if (edited) resolve.p = edited;
     }
     if (attributes.w === 2) {
-      const edited = patchAttributes(attributes.p);
+      const edited = patchAttributes(attributes.p, attrFields);
       if (edited) attributes.p = edited;
     }
     return serialize(fields);
@@ -1691,28 +1791,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     "track_title", "track_uri", "duration", "image_url", "is_explicit", "track_player"
   ];
 
-  function trackMetadataField(fields) {
-    const uri = text(first(fields, 1));
-    if (!uri || !/^spotify:track:[A-Za-z0-9]{22}$/.test(uri)) return 0;
-    // ContextTrack 的字段 3 可能是 GID 或 metadata；要求已有 metadata map，
-    // 避免把 GID 当成 map 解析，也不在无法识别的消息上新建字段。
-    const third = fields.filter((f) => f.no === 3);
-    for (const no of [4, 3]) {
-      if (no === 3 && third.some((f) => f.w !== 2 || !asEntry(parse(f.p)))) continue;
-      const entries = fields.filter((f) => f.no === no);
-      if (!entries.length) continue;
-      let known = false;
-      let valid = true;
-      for (const f of entries) {
-        const entry = f.w === 2 ? asEntry(parse(f.p)) : null;
-        if (!entry) { valid = false; break; }
-        if (entry.key === MARK || KNOWN.indexOf(entry.key) >= 0) known = true;
-      }
-      if (valid && known) return no;
-    }
-    return 0;
-  }
-
+  const TRACK_URI_RE = /^spotify:track:[A-Za-z0-9]{22}$/;
   const MARK = "has_lyrics";
   // 大响应里只对可能包含曲目 URI 的子消息做解析；图片 / Credits / Canvas 等
   // 扩展数据没有这个标记，直接跳过，避免 12MB 级响应整树 parse。
@@ -1732,38 +1811,142 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return false;
   }
 
-  function patchFields(fields, depth, source) {
-    // 仅在可逐字节重建时重写；否则原样放行，避免客户端读到不同的值。
-    if (source && !allCanonical(fields)) return false;
+  // 合并 has_lyrics 改写、曲目元数据收集与播放队列扫描到单趟遍历：
+  // 此前 connect-state / context-resolve 要整树递归 3-4 遍，每条 metadata entry
+  // 也要重复 parse 3 遍；单趟遍历 + 非曲目大块剪枝可大幅降低耗时和堆内存峰值。
+  function walkMeta(fields, depth, canEdit, ctx) {
     let changed = false;
-    const metadataField = trackMetadataField(fields);
-    let present = false;
+
+    // 队列扫描（仅 connect-state）：在已解析的字段上顺手识别 PlayerState
+    // （track = 7，prev_tracks = 19，next_tracks = 20），不再单独整树递归。
+    if (ctx.wantQueue && depth <= 8 && !ctx.queue.current) {
+      const current = first(fields, 7);
+      if (current && current.w === 2) {
+        let hasOrder = false;
+        for (const f of fields) {
+          if ((f.no === 20 || f.no === 19) && f.w === 2) { hasOrder = true; break; }
+        }
+        if (hasOrder) {
+          const head = parse(current.p);
+          const id = head ? queueTrackId(head) : "";
+          if (id) {
+            ctx.queue.current = id;
+            const ids = [];
+            for (const f of fields) {
+              if (f.no !== 20 || f.w !== 2) continue;
+              const sub = parse(f.p);
+              const nextId = sub ? queueTrackId(sub) : "";
+              if (nextId && ids.indexOf(nextId) < 0) ids.push(nextId);
+              if (ids.length >= QUEUE_MAX) break;
+            }
+            ctx.queue.next = ids;
+          }
+        }
+      }
+    }
+
+    // 识别 ContextTrack（field 1 = spotify:track:...），对 field 3/4 的 metadata entry
+    // 只 parse 一次，同时完成 metadataField 判定、元数据收集与 has_lyrics 改写。
+    const f1 = first(fields, 1);
+    let uri = "";
+    if (f1 && f1.w === 2 && f1.p.length === 36) {
+      const value = text(f1);
+      if (value && TRACK_URI_RE.test(value)) uri = value;
+    }
+
+    let metadataField = 0;
+    if (uri) {
+      let meta3Count = 0;
+      let meta3Valid = true;
+      let meta3Known = false;
+      let meta4Count = 0;
+      let meta4Valid = true;
+      let meta4Known = false;
+      const entries3 = [];
+      const entries4 = [];
+      for (const f of fields) {
+        if (f.no === 3) {
+          meta3Count += 1;
+          if (f.w !== 2) { meta3Valid = false; continue; }
+          const sub = parse(f.p);
+          const entry = asEntry(sub);
+          if (!entry) { meta3Valid = false; continue; }
+          if (entry.key === MARK || KNOWN.indexOf(entry.key) >= 0) meta3Known = true;
+          entries3.push({ f: f, sub: sub, entry: entry });
+        } else if (f.no === 4) {
+          meta4Count += 1;
+          if (f.w !== 2) { meta4Valid = false; continue; }
+          const sub = parse(f.p);
+          const entry = asEntry(sub);
+          if (!entry) { meta4Valid = false; continue; }
+          if (entry.key === MARK || KNOWN.indexOf(entry.key) >= 0) meta4Known = true;
+          entries4.push({ f: f, sub: sub, entry: entry });
+        }
+      }
+      if (meta4Count && meta4Valid && meta4Known) metadataField = 4;
+      else if (meta3Count && meta3Valid && meta3Known) metadataField = 3;
+
+      if (metadataField) {
+        const entries = metadataField === 4 ? entries4 : entries3;
+        const collectHere = ctx.wantMeta && depth <= 8;
+        const meta = collectHere ? Object.create(null) : null;
+        let present = false;
+        for (const item of entries) {
+          if (collectHere && !(item.entry.key in meta) && item.entry.value && item.entry.value.length <= 128) {
+            meta[item.entry.key] = item.entry.value;
+          }
+          if (canEdit && item.entry.key === MARK) {
+            present = true;
+            if (item.entry.value !== "true") {
+              // 保留 map entry 上的未知字段。
+              const value = first(item.sub, 2);
+              value.p = TE.encode("true");
+              item.f.p = serialize(item.sub);
+              changed = true;
+            }
+          }
+        }
+        if (collectHere) {
+          const title = pickMeta(meta, TITLE_KEYS);
+          if (title) ctx.found[uri.slice(14)] = [title, pickMeta(meta, ARTIST_KEYS), Number(meta.duration) || 0];
+        }
+        if (canEdit && !present) {
+          fields.push({ no: metadataField, w: 2, p: encodeEntry(MARK, "true") });
+          changed = true;
+        }
+      }
+    }
+
+    const collectLoose = ctx.wantMeta && !metadataField && depth <= 8;
+    let looseUri = uri;
+    const looseMeta = collectLoose ? Object.create(null) : null;
 
     for (const f of fields) {
       if (f.w !== 2) continue;
+      // ContextTrack 的 URI / GID / metadata entry 已在上面处理完且均为叶子节点。
+      if (metadataField && (f.no === 1 || f.no === 3 || f.no === metadataField)) continue;
 
-      // metadata map entry 本身不含曲目 URI，但需要改 has_lyrics 的值；
-      // 其它大块扩展数据如果没有 spotify:track:，就不可能含 Track / ContextTrack。
-      const metadataEntry = !!(metadataField && (f.no === 3 || f.no === metadataField));
-      if (!metadataEntry && f.p.length > 512 && !containsTrackUri(f.p)) continue;
+      if (collectLoose && !looseUri && f.p.length === 36) {
+        const value = text(f);
+        if (value && TRACK_URI_RE.test(value)) looseUri = value;
+      }
+
+      // 非曲目扩展数据（图片 / Credits / Canvas / 设备信息等）不含 spotify:track:，
+      // 长度 > 256 也不可能是曲目 metadata entry（key<=64, value<=128），直接跳过。
+      if (f.p.length > 256 && !containsTrackUri(f.p)) continue;
 
       const sub = parse(f.p);
       if (!sub) continue;
 
-      const entry = asEntry(sub);
-      if (metadataField && f.no === metadataField && entry && entry.key === MARK) {
-        present = true;
-        if (entry.value !== "true") {
-          // 保留 map entry 上的未知字段。
-          const value = first(sub, 2);
-          value.p = TE.encode("true");
-          f.p = serialize(sub);
-          changed = true;
+      if (collectLoose) {
+        const entry = asEntry(sub);
+        if (entry) {
+          if (!(entry.key in looseMeta) && entry.value && entry.value.length <= 128) looseMeta[entry.key] = entry.value;
+          continue;
         }
-        continue;
       }
 
-      if (isTrackArray(sub)) {
+      if (canEdit && isTrackArray(sub)) {
         if (allCanonical(sub) && patchTrackArray(sub)) {
           f.p = serialize(sub);
           changed = true;
@@ -1771,22 +1954,25 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         continue;
       }
 
-      // ID 与 metadata 值是叶子节点，不再向下递归。
-      if (metadataField && (f.no === 3 || f.no === metadataField)) continue;
-      if (depth < 16 && patchFields(sub, depth + 1, f.p)) {
-        f.p = serialize(sub);
-        changed = true;
+      const maxDepth = canEdit ? 16 : 8;
+      if (depth < maxDepth) {
+        const subCanEdit = canEdit && allCanonical(sub);
+        if (subCanEdit || (ctx.wantMeta && depth < 8)) {
+          if (walkMeta(sub, depth + 1, subCanEdit, ctx)) {
+            f.p = serialize(sub);
+            changed = true;
+          }
+        }
       }
     }
 
-    // 上下文里缺这个 entry 时补一条。metadataField 命中时按它的字段号补；
+    if (collectLoose && looseUri) {
+      const title = pickMeta(looseMeta, TITLE_KEYS);
+      if (title) ctx.found[looseUri.slice(14)] = [title, pickMeta(looseMeta, ARTIST_KEYS), Number(looseMeta.duration) || 0];
+    }
+
     // 服务端 bundle 会额外注入 isContextTrack，处理只带 uri + uid 的当前曲目。
-    if (metadataField) {
-      if (!present) {
-        fields.push({ no: metadataField, w: 2, p: encodeEntry(MARK, "true") });
-        changed = true;
-      }
-    } else if (typeof isContextTrack === "function" && isContextTrack(fields)) {
+    if (canEdit && !metadataField && typeof isContextTrack === "function" && isContextTrack(fields)) {
       let has = false;
       for (const f of fields) {
         if (f.no !== 3 || f.w !== 2) continue;
@@ -1885,28 +2071,65 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // 记下来供 headers 脚本按地区选时区；只在变化时写一次。
   const REGION_KEY = "spotify.account.region";
   const REGION_ATTR_KEYS = ["country", "current-country", "preferred-country", "account-country", "billing-country"];
-  function rememberRegion(fields) {
+  function rememberRegionEntry(key, entry) {
+    if (!key || REGION_ATTR_KEYS.indexOf(key.toLowerCase()) < 0) return false;
     const store = cacheStore();
-    if (!store) return;
+    if (!store) return true;
+    const value = first(entry, 2);
+    const valueFields = value && value.w === 2 ? parse(value.p) : null;
+    const region = valueFields ? text(first(valueFields, 4)) : null;
+    if (!region || !/^[A-Za-z]{2}$/.test(region)) return false;
+    const next = region.toUpperCase();
+    try {
+      if (store.read(REGION_KEY) === next) return true;
+      store.write(next, REGION_KEY);
+    } catch (e) {
+      // 存储写失败不影响响应改写。
+    }
+    return true;
+  }
+
+  function rememberRegion(fields) {
+    if (!cacheStore()) return;
     for (const f of fields) {
       if (f.no !== 1 || f.w !== 2) continue;
       const entry = parse(f.p);
       if (!entry) continue;
       const key = text(first(entry, 1));
-      if (!key || REGION_ATTR_KEYS.indexOf(key.toLowerCase()) < 0) continue;
-      const value = first(entry, 2);
-      const valueFields = value && value.w === 2 ? parse(value.p) : null;
-      const region = valueFields ? text(first(valueFields, 4)) : null;
-      if (!region || !/^[A-Za-z]{2}$/.test(region)) continue;
-      const next = region.toUpperCase();
-      try {
-        if (store.read(REGION_KEY) === next) return;
-        store.write(next, REGION_KEY);
-      } catch (e) {
-        // 存储写失败不影响响应改写。
-      }
-      return;
+      if (rememberRegionEntry(key, entry)) return;
     }
+  }
+
+  // Spotify /metadata/4/track/{gid} 的路径是 32 位十六进制 GID（16 字节 128-bit 整数），
+  // 而 color-lyrics/v2/track/{id} 用的是同一数值的 22 位 Base62 编码。
+  // 直接截取前 22 位 hex 当缓存 key 永远对不上 color-lyrics 的曲目 ID。
+  const BASE62 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  function bigIntToBase62(value) {
+    let n = value;
+    let out = "";
+    for (let i = 0; i < 22; i += 1) {
+      out = BASE62.charAt(Number(n % 62n)) + out;
+      n /= 62n;
+    }
+    return out;
+  }
+  function gidHexToBase62(hex) {
+    if (typeof hex !== "string" || !/^[0-9a-fA-F]{32}$/.test(hex)) return "";
+    return bigIntToBase62(BigInt("0x" + hex));
+  }
+  function gidBytesToBase62(bytes) {
+    if (!bytes || bytes.length !== 16) return "";
+    let value = 0n;
+    for (let i = 0; i < 16; i += 1) value = (value << 8n) | BigInt(bytes[i]);
+    return bigIntToBase62(value);
+  }
+  function trackIdFromUrl(target) {
+    const match = /\/metadata\/4\/track\/([A-Za-z0-9]+)(?:[/?#]|$)/.exec(target);
+    if (!match) return "";
+    const raw = match[1];
+    if (raw.length === 22) return raw;
+    if (raw.length === 32) return gidHexToBase62(raw);
+    return "";
   }
 
   function pickMeta(meta, keys) {
@@ -1914,38 +2137,12 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return "";
   }
 
-  // connect-state 的 TrackRef 与 context-resolve 的 ContextTrack 都是
-  // 「同一条消息里既有 spotify:track:<id> 又有 metadata map」，按这个形状收集。
-  // 只认这两种结构，不猜 Track 的二进制字段号。
-  function collectTracks(fields, out, depth) {
-    if (depth > 8) return;
-    let uri = "";
-    const meta = Object.create(null);
-    const nested = [];
-    for (const f of fields) {
-      if (f.w !== 2) continue;
-      // spotify:track: 加 22 位 id 固定 36 字节，先按长度过滤再解码。
-      if (!uri && f.p.length === 36) {
-        const value = text(f);
-        if (value && /^spotify:track:[A-Za-z0-9]{22}$/.test(value)) uri = value;
-      }
-      const sub = parse(f.p);
-      if (!sub) continue;
-      const entry = asEntry(sub);
-      if (entry) {
-        if (!(entry.key in meta) && entry.value && entry.value.length <= 128) meta[entry.key] = entry.value;
-        continue;
-      }
-      nested.push(sub);
-    }
-    const title = uri && pickMeta(meta, TITLE_KEYS);
-    if (title) out[uri.slice(14)] = [title, pickMeta(meta, ARTIST_KEYS), Number(meta.duration) || 0];
-    for (const sub of nested) collectTracks(sub, out, depth + 1);
-  }
-
   // /metadata/4/track/<id> 的顶层就是 metadata.proto 的 Track：
-  // name = 2，artist = 4 { name = 2 }，duration = 7（毫秒）。
+  // gid = 1（16 字节），name = 2，artist = 4 { name = 2 }，duration = 7（毫秒）。
   function collectTrackEntity(fields, id, out) {
+    const gid = first(fields, 1);
+    const resolvedId = id || (gid && gid.w === 2 ? gidBytesToBase62(gid.p) : "");
+    if (!resolvedId) return;
     const name = text(first(fields, 2));
     if (!name || name.length > 200 || /[\u0000-\u001f]/.test(name)) return;
     const artists = [];
@@ -1956,12 +2153,12 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       if (artistName && artistName.length <= 120) artists.push(artistName);
     }
     const duration = first(fields, 7);
-    out[id] = [name, artists.join(", "), duration && duration.w === 0 ? Number(duration.v) : 0];
+    out[resolvedId] = [name, artists.join(", "), duration && duration.w === 0 ? Number(duration.v) : 0];
   }
 
   function rememberTracks(found) {
     const store = cacheStore();
-    const ids = Object.keys(found);
+    const ids = found ? Object.keys(found) : [];
     if (!store || !ids.length) return;
     let map = null;
     try {
@@ -1981,7 +2178,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       changed = true;
     }
     if (!changed) return;
-    // 只留最近 24 首，避免存储随播放列表无限增长。
     const ordered = Object.keys(map).sort((a, b) => Number(map[b][3] || 0) - Number(map[a][3] || 0));
     for (const id of ordered.slice(TRACK_CACHE_MAX)) delete map[id];
     try {
@@ -1989,26 +2185,6 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     } catch (e) {
       // 存储写失败不影响响应改写。
     }
-  }
-
-  function cacheTrackMeta(target, fields) {
-    if (!cacheStore()) return;
-    const trackUrl = /\/metadata\/4\/track\/([A-Za-z0-9]{22})/.exec(target);
-    if (trackUrl) {
-      const found = Object.create(null);
-      collectTrackEntity(fields, trackUrl[1], found);
-      rememberTracks(found);
-      return;
-    }
-    // extended-metadata 体积大且不含 track_title；当前曲目在
-    // connect-state / context-resolve 里都有，跳过可以省掉一次全量遍历。
-    if (target.indexOf("/extended-metadata/") >= 0) return;
-    const found = Object.create(null);
-    collectTracks(fields, found, 0);
-    rememberTracks(found);
-    // 队列只从 connect-state 拿：它按 PlayerState 的字段号给出 track / next_tracks。
-    // 歌词脚本与 feed 脚本据此预取下一首的歌词（见 spotify.queue 的说明）。
-    if (target.indexOf("/connect-state/") >= 0) rememberQueue(fields);
   }
 
   // ---- 播放队列（预取下一首歌词用）---------------------------------------
@@ -2029,44 +2205,14 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     for (const f of entry) {
       if (f.no !== 1 || f.w !== 2 || f.p.length !== 36) continue;
       const value = text(f);
-      if (value && /^spotify:track:[A-Za-z0-9]{22}$/.test(value)) return value.slice(14);
+      if (value && TRACK_URI_RE.test(value)) return value.slice(14);
     }
     return "";
   }
 
-  function scanPlayerState(fields, out, depth) {
-    if (depth > 8 || out.current) return;
-    const current = first(fields, 7);
-    const next = fields.filter((f) => f.no === 20 && f.w === 2);
-    const prev = fields.filter((f) => f.no === 19 && f.w === 2);
-    if (current && current.w === 2 && (next.length || prev.length)) {
-      const head = parse(current.p);
-      const id = head ? queueTrackId(head) : "";
-      if (id) {
-        out.current = id;
-        const ids = [];
-        for (const f of next) {
-          const sub = parse(f.p);
-          const nextId = sub ? queueTrackId(sub) : "";
-          if (nextId && ids.indexOf(nextId) < 0) ids.push(nextId);
-        }
-        out.next = ids.slice(0, QUEUE_MAX);
-        return;
-      }
-    }
-    for (const f of fields) {
-      if (f.w !== 2) continue;
-      const sub = parse(f.p);
-      if (sub) scanPlayerState(sub, out, depth + 1);
-    }
-  }
-
-  function rememberQueue(fields) {
+  function persistQueue(queue) {
     const store = cacheStore();
-    if (!store) return;
-    const queue = { current: "", next: [] };
-    scanPlayerState(fields, queue, 0);
-    if (!queue.current) return;
+    if (!store || !queue || !queue.current) return;
     const next = queue.next.slice(0, QUEUE_MAX);
     try {
       const raw = store.read(QUEUE_KEY);
@@ -2101,14 +2247,14 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     }
     // 顺手把曲名 / 歌手 / 时长写进缓存，歌词脚本查源时零请求。
     const store = cacheStore();
-    const id = /\/metadata\/4\/track\/([A-Za-z0-9]{22})/.exec(target);
-    if (store && id && typeof data.name === "string") {
-      const artist = Array.isArray(data.artist) ? data.artist.map((item) => item && item.name).filter(Boolean)[0] : null;
-      if (artist) {
-        const found = Object.create(null);
-        found[id[1]] = [data.name, artist, Number(data.duration) || 0];
-        rememberTracks(found);
-      }
+    const id = trackIdFromUrl(target) || gidHexToBase62(data.gid);
+    if (store && id && typeof data.name === "string" && data.name) {
+      const artist = Array.isArray(data.artist)
+        ? data.artist.map((item) => item && item.name).filter(Boolean).join(", ")
+        : "";
+      const found = Object.create(null);
+      found[id] = [data.name, artist, Number(data.duration) || 0];
+      rememberTracks(found);
     }
     return changed ? JSON.stringify(data) : null;
   }
@@ -2121,15 +2267,29 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     }
     const fields = parse(buffer);
     if (!fields) return null;
-    // 元数据缓存只读字段，不要求整包可逐字节重建：先把曲名 / 歌手 / 时长
-    // 抄下来，非规范响应也能让歌词脚本拿到准确元数据。改写 has_lyrics 仍然
-    // 只在可逐字节重建时进行，避免把不认识的响应写坏。
-    cacheTrackMeta(target, fields);
+    const canonical = allCanonical(fields);
     if (/\/metadata\/4\/track\//.test(target)) {
-      if (!allCanonical(fields)) return null;
+      if (cacheStore()) {
+        const found = Object.create(null);
+        collectTrackEntity(fields, trackIdFromUrl(target), found);
+        rememberTracks(found);
+      }
+      if (!canonical) return null;
       return patchTrack(fields) ? serialize(fields) : null;
     }
-    return patchFields(fields, 0, buffer) ? serialize(fields) : null;
+    const wantMeta = !!cacheStore() && target.indexOf("/extended-metadata/") < 0;
+    if (!canonical && !wantMeta) return null;
+    const wantQueue = wantMeta && target.indexOf("/connect-state/") >= 0;
+    const ctx = {
+      wantMeta: wantMeta,
+      found: wantMeta ? Object.create(null) : null,
+      wantQueue: wantQueue,
+      queue: wantQueue ? { current: "", next: [] } : null,
+    };
+    const changed = walkMeta(fields, 0, canonical, ctx);
+    if (wantMeta) rememberTracks(ctx.found);
+    if (wantQueue && ctx.queue.current) persistQueue(ctx.queue);
+    return changed ? serialize(fields) : null;
   }
 
   // 入口：bootstrap / UCS / 元数据 / 远程配置 / 账号属性。
@@ -2144,7 +2304,8 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return;
   }
 
-  if (Number(res.status) >= 300) {
+  const status = Number(res.status || res.statusCode);
+  if (status >= 300) {
     $done({});
     return;
   }
@@ -2248,7 +2409,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       }
     }
     headers["Content-Length"] = String(out.length);
-    $done({ status: Number(res.status) || 200, headers: headers, body: out });
+    $done({ status: status || 200, headers: headers, body: out });
   };
 
   finish();

@@ -9,17 +9,32 @@
   // 返回 [{ no, wire, data, raw }]，data 是字段值，raw 是含 tag 的整段字节。
   const parseFields = wireParseFields;
 
-  // 取第一个（或最后一个）指定字段的值。
+  // 取第一个（或最后一个）指定 wire-2 字段的值；走流式扫描避免构建完整字段数组。
   function fieldData(bytes, fieldNo, last = false) {
-    let found;
-    for (const field of parseFields(bytes)) {
-      if (field.no === fieldNo && 2 === field.wire) {
-        if (!last) return field.data;
-        if (found) return;
-        found = field.data;
+    let foundStart = -1;
+    let foundEnd = -1;
+    wireForEachField(bytes, (no, wire, dataStart, dataEnd) => {
+      if (no === fieldNo && 2 === wire) {
+        foundStart = dataStart;
+        foundEnd = dataEnd;
+        if (!last) return true;
       }
-    }
-    return found;
+      return false;
+    });
+    return foundStart >= 0 ? bytes.subarray(foundStart, foundEnd) : undefined;
+  }
+
+  // 取第一个指定 wire-0 字段的 varint 数值；找不到返回 undefined。
+  function firstVarintField(bytes, fieldNo) {
+    let result;
+    wireForEachField(bytes, (no, wire, dataStart, dataEnd) => {
+      if (no === fieldNo && 0 === wire) {
+        result = readVarintValue(bytes.subarray(dataStart, dataEnd));
+        return true;
+      }
+      return false;
+    });
+    return result;
   }
 
   // 按字段号逐层往下钻，任意一层缺失就返回 undefined。
@@ -70,31 +85,60 @@
   }
 
   // 判断某条嵌套路径上的最后一个值是否等于 marker（prefixOnly 时只比前缀）。
-  function matchesPath(bytes, path, marker = PAGEAD_MARKER, prefixOnly = false) {
-    return path.length
-      ? parseFields(bytes).some((field) => field.no === path[0] && 2 === field.wire && matchesPath(field.data, path.slice(1), marker, prefixOnly))
-      : bytesEqual(prefixOnly ? bytes.subarray(0, marker.length) : bytes, marker);
+  // 默认匹配 ASK_AI_MARKER（PAyouchat），用于识别 Ask AI 的命令/面板路径。
+  function matchesPath(bytes, path, marker = ASK_AI_MARKER, prefixOnly = false, depth = 0) {
+    if (depth >= path.length) {
+      if (prefixOnly) return bytes.length >= marker.length && bytesEqual(bytes.subarray(0, marker.length), marker);
+      return bytesEqual(bytes, marker);
+    }
+    const targetNo = path[depth];
+    return wireForEachField(
+      bytes,
+      (no, wire, dataStart, dataEnd) => no === targetNo && 2 === wire && matchesPath(bytes.subarray(dataStart, dataEnd), path, marker, prefixOnly, depth + 1),
+    );
   }
 
   // 对某个字段的每个出现位置跑一次 rewriter，返回 undefined 表示整条删掉。
   function rewriteRepeatedField(bytes, fieldNo, rewriter) {
     let changed = false;
-    const parts = parseFields(bytes).flatMap((field) => {
-      if (field.no !== fieldNo || 2 !== field.wire) return [field.raw];
+    const fields = parseFields(bytes);
+    const parts = [];
+    for (const field of fields) {
+      if (field.no !== fieldNo || 2 !== field.wire) {
+        parts.push(field.raw);
+        continue;
+      }
       const next = rewriter(field.data);
-      return next && bytesEqual(next, field.data) ? [field.raw] : ((changed = true), next ? [encodeField([fieldNo, "", "bytes"], next)] : []);
-    });
+      if (next && bytesEqual(next, field.data)) {
+        parts.push(field.raw);
+      } else {
+        changed = true;
+        if (next) parts.push(encodeField([fieldNo, "", "bytes"], next));
+      }
+    }
     return changed ? concatBytes(parts) : bytes;
   }
 
   // 按路径下钻，对命中位置的字节跑 rewriter。
-  function rewritePath(bytes, path, rewriter) {
-    if (!path.length) return rewriter(bytes);
+  function rewritePath(bytes, path, rewriter, depth = 0) {
+    if (depth >= path.length) return rewriter(bytes);
+    const targetNo = path[depth];
     let changed = false;
-    const parts = parseFields(bytes).map((field) => {
-      if (field.no !== path[0] || 2 !== field.wire) return field.raw;
-      const next = rewritePath(field.data, path.slice(1), rewriter);
-      return bytesEqual(next, field.data) ? field.raw : ((changed = true), encodeField([field.no, "", "bytes"], next));
-    });
+    const fields = parseFields(bytes);
+    const parts = new Array(fields.length);
+    for (let i = 0; i < fields.length; i++) {
+      const field = fields[i];
+      if (field.no !== targetNo || 2 !== field.wire) {
+        parts[i] = field.raw;
+        continue;
+      }
+      const next = rewritePath(field.data, path, rewriter, depth + 1);
+      if (bytesEqual(next, field.data)) {
+        parts[i] = field.raw;
+      } else {
+        changed = true;
+        parts[i] = encodeField([field.no, "", "bytes"], next);
+      }
+    }
     return changed ? concatBytes(parts) : bytes;
   }

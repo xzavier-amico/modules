@@ -114,15 +114,19 @@
 
   function patchAttributes(buffer, fields = parse(buffer)) {
     if (!fields || !allCanonical(fields)) return null;
-    // 先记下账号地区，headers 脚本据此选择时区。
-    rememberRegion(fields);
     const out = [];
     const seen = Object.create(null);
+    let regionSaved = false;
     for (const f of fields) {
       let key = null;
+      let inner = null;
       if (f.no === 1 && f.w === 2) {
-        const inner = parse(f.p);
+        inner = parse(f.p);
         if (inner) key = text(first(inner, 1));
+      }
+      // 顺手记下账号地区，避免再单独遍历一遍属性表；headers 脚本据此选择时区。
+      if (!regionSaved && key && inner && rememberRegionEntry(key, inner)) {
+        regionSaved = true;
       }
       if (!key || (!has(key) && !stripped(key))) {
         out.push(f);

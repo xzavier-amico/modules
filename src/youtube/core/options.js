@@ -167,13 +167,14 @@
     if (!text) return undefined;
 
     const hide = text.startsWith("-") || text.startsWith("!");
-    const name = (hide ? text.slice(1) : text).trim().toLowerCase();
+    const rawName = (hide ? text.slice(1) : text).trim();
+    const name = rawName.toLowerCase();
     if (!name) return undefined;
 
     const item = MENU_ITEMS.find((entry) => entry.id.toLowerCase() === name || entry.keys.some((key) => key.toLowerCase() === name));
     if (item) return { hide, id: item.id };
-    // 也允许直接写 browseId；只接受像 ID 的字符串，避免把说明文字当成入口。
-    if (/^[a-z0-9_]+$/i.test(name)) return { hide, id: name };
+    // 也允许直接写 browseId；保留原始大小写以匹配区分大小写的 browseId（如 FEmusic_explore / VLWL）。
+    if (/^[a-z0-9_]+$/i.test(rawName)) return { hide, id: rawName };
     return undefined;
   }
 
@@ -274,12 +275,15 @@
 
     // 首页清理：off 全关，standard 只清 Playables，all 再加竖屏直播。
     // 创作者商店/商品卡属于付费推广，跟随 blockAds。
-    let cleanup = String(options.homeCleanup ?? "").toLowerCase();
-    if (!cleanup) {
+    let cleanup;
+    if (void 0 !== options.homeCleanup && null !== options.homeCleanup && "" !== String(options.homeCleanup).trim()) {
+      cleanup = asLevel(options.homeCleanup, "standard");
+    } else {
       const games = void 0 === options.blockGames ? true : asBool(options.blockGames, true);
       const vertical = void 0 !== options.blockVerticalLive && asBool(options.blockVerticalLive, false);
       cleanup = vertical ? "all" : games ? "standard" : "off";
     }
+    options.homeCleanup = cleanup;
     options.blockStore = blockAds;
     options.blockGames = "off" !== cleanup;
     options.blockVerticalLive = "all" === cleanup;
@@ -299,13 +303,25 @@
       if (extra.length) options.homeMenu = [options.homeMenu, ...extra.map((item) => `-${item}`)].filter(Boolean).join(",");
     }
 
-    options.hiddenGuideItems = resolveHiddenMenu(options.homeMenu, blockAds);
+    // 延迟计算 hiddenGuideItems：请求阶段与非 guide 响应不会读它，省去每次构建 Set 与查表。
+    const rawHomeMenu = options.homeMenu;
+    Object.defineProperty(options, "hiddenGuideItems", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        const list = resolveHiddenMenu(rawHomeMenu, blockAds);
+        Object.defineProperty(this, "hiddenGuideItems", { value: list, enumerable: true, writable: true, configurable: true });
+        return list;
+      },
+    });
 
-    const speed = String(options.maxSpeed ?? "4").toLowerCase();
-    options.maxSpeed = "off" === speed || false === options.maxSpeed ? false : Math.max(2, Math.min(4, parseInt(speed) || 4));
+    const speed = String(options.maxSpeed ?? "4").trim().toLowerCase();
+    options.maxSpeed =
+      "off" === speed || "false" === speed || "0" === speed || false === options.maxSpeed ? false : Math.max(2, Math.min(4, parseInt(speed, 10) || 4));
 
     const caption = String(options.captionLang ?? "zh-Hans").trim();
-    options.captionLang = /^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/i.test(caption) ? caption : "off";
+    options.captionLang =
+      "off" !== caption.toLowerCase() && /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,4}){0,2}$/i.test(caption) ? caption : "off";
 
     options.blockAi = asBool(options.blockAi, true);
     // 此开关默认关闭，参数缺失时不能按「非 false 即 true」处理。
@@ -351,7 +367,9 @@
     options.webCleanup = asBool(options.webCleanup, false);
     options.musicCleanup = asBool(options.musicCleanup, false);
 
-    const result = { ...defaults, ...options };
-    if (noDefaults) OPTIONS_CACHE = result;
-    return result;
+    if (noDefaults) {
+      OPTIONS_CACHE = options;
+      return options;
+    }
+    return { ...defaults, ...options };
   }

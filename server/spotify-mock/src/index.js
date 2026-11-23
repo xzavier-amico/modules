@@ -252,25 +252,25 @@ function sanitizeResponseHeaders(input, patched) {
   return headers;
 }
 
-function patchResponse(patcher, desktopPatcher, route, targetPath, bytes, contentType, scrollCard) {
+function patchResponse(patcher, route, targetPath, bytes, contentType, scrollCard) {
   if (!bytes.length) return null;
   // A JSON error / HTML login page must never be walked as a protobuf tree.
-  // The desktop client serves remote config and account attributes as JSON
-  // (1.3.9+), so those two routes are allowed through with a JSON body; the
-  // patcher sniffs the first byte and only rewrites what it recognises.
-  const jsonRoute = route.kind === "configuration" || route.kind === "attributes";
+  // The desktop client serves remote config, account attributes, and track
+  // metadata as JSON, so those routes are allowed through with a JSON body;
+  // the patcher sniffs the first byte and only rewrites what it recognises.
+  const jsonRoute = route.kind === "configuration" || route.kind === "attributes" || route.kind === "metadata";
   if (contentType && !BINARY_TYPE.test(contentType) && !(jsonRoute && JSON_TYPE.test(contentType))) return null;
 
   try {
     if (route.kind === "bootstrap") {
       const patched = patcher.patchBootstrap(bytes);
       if (patched) return patched;
-      return desktopPatcher.patchBootstrapDesktop(bytes);
+      return patcher.patchBootstrapDesktop(bytes);
     }
     if (route.kind === "customize") {
       const patched = patcher.patchCustomize(bytes);
       if (patched) return patched;
-      return desktopPatcher.patchCustomizeDesktop(bytes);
+      return patcher.patchCustomizeDesktop(bytes);
     }
     if (route.kind === "metadata") {
       return patcher.patchMeta(bytes, targetPath);
@@ -425,7 +425,6 @@ async function handle(request, env = {}) {
 
   const patcher = getPatcher(env, request);
   const options = patchOptions(env, request);
-  const desktopPatcher = options.desktop ? patcher : getPatcher(env, request, true);
   const headers = sanitizeRequestHeaders(request.headers, true);
   let body;
   if (method !== "GET" && method !== "HEAD") {
@@ -517,7 +516,7 @@ async function handle(request, env = {}) {
         scrollCard = { trackId, wantCard: true };
       }
     }
-    const result = patchResponse(patcher, desktopPatcher, route, targetPath, original, contentType, scrollCard);
+    const result = patchResponse(patcher, route, targetPath, original, contentType, scrollCard);
     if (result && result.length) {
       bytes = result;
       patched = true;

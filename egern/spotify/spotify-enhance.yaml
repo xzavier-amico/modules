@@ -37,9 +37,9 @@ env_schema:
     options: ["true", "false"]
   unlock_playback:
     name: "解锁播放限制"
-    description: "移除试听时长上限、队列上限与强制随机等免费版限制"
-    default_value: "true"
-    options: ["true", "false"]
+    description: "auto 移动端开启、桌面端关闭；强制 true / false 覆盖。桌面端写播放授权容易跳歌"
+    default_value: "auto"
+    options: ["auto", "true", "false"]
   enable_lyrics:
     name: "补全歌词"
     description: "官方没有歌词时用第三方歌词补上"
@@ -152,7 +152,7 @@ scriptings:
   - http_request:
       name: "spotify.meta.req"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/extended-metadata\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-40"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-41"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -162,7 +162,7 @@ scriptings:
   - http_response:
       name: "spotify.enhance"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:bootstrap|user-customization-service)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-40"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-41"
       body_required: true
       binary_body: true
       max_size: 41943040
@@ -172,7 +172,7 @@ scriptings:
   - http_response:
       name: "spotify.meta"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:extended-metadata|context-resolve|connect-state|metadata\\/4\\/track)\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-40"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-41"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -182,7 +182,7 @@ scriptings:
   - http_response:
       name: "spotify.config"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:remote-config-resolver|nebula)\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-40"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-41"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -194,7 +194,7 @@ scriptings:
   - http_response:
       name: "spotify.feed"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:casita\\/v\\d+\\/home|browsita\\/v\\d+\\/browse|scrollsita\\/v\\d+\\/scroll)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.feed.js?v=20261123-3"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.feed.js?v=20261123-4"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -204,7 +204,7 @@ scriptings:
   - http_request:
       name: "spotify.lyrics.req"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261119-2"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261123-3"
       binary_body: true
       max_size: 2097152
       timeout: 10
@@ -217,7 +217,7 @@ scriptings:
   - http_response:
       name: "spotify.lyrics"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261119-2"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261123-3"
       body_required: true
       binary_body: true
       max_size: 2097152

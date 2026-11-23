@@ -20,6 +20,7 @@
       entry.itags.length <= 256 &&
       entry.itags.every((itag) => Number.isInteger(itag) && itag > 0 && itag <= 4294967295) &&
       new Set(entry.itags).size === entry.itags.length &&
+      (void 0 === entry.codec || "any" === entry.codec || "no_av1" === entry.codec || "avc" === entry.codec) &&
       (void 0 === entry.premiumItags ||
         (Array.isArray(entry.premiumItags) &&
           entry.premiumItags.length <= entry.itags.length &&
@@ -32,6 +33,7 @@
     return (
       void 0 !== left &&
       left.height === right.height &&
+      (left.codec ?? "any") === (right.codec ?? "any") &&
       left.itags.length === right.itags.length &&
       right.itags.every((itag) => left.itags.includes(itag)) &&
       (left.premiumItags?.length ?? 0) === (right.premiumItags?.length ?? 0) &&

@@ -4,15 +4,24 @@
     if (!fields || !allCanonical(fields)) return null;
     const resolve = first(fields, 1);
     let attributes = first(fields, 3);
+    let attrFields = null;
     // 字段 3 也可能是 ResolveConfiguration 的 AssignedValue，需先确认结构。
-    if (attributes && (attributes.w !== 2 ||
-        (attributes.p.length && !looksLikeAttributes(attributes.p)))) return null;
+    if (attributes) {
+      if (attributes.w !== 2) return null;
+      if (attributes.p.length) {
+        attrFields = parse(attributes.p);
+        if (!looksLikeAttributes(attributes.p, attrFields)) return null;
+      } else {
+        attrFields = [];
+      }
+    }
     // 没有 resolve 也没有 attributes 时，不按 UCS 处理。
     if (!attributes) {
       const inner = resolve && resolve.w === 2 ? parse(resolve.p) : null;
       const configuration = inner ? first(inner, 1) : null;
       if (!configuration || configuration.w !== 2) return null;
       attributes = fieldBytes(3, new Uint8Array(0));
+      attrFields = [];
       fields.push(attributes);
     }
     if (resolve && resolve.w === 2) {
@@ -20,7 +29,7 @@
       if (edited) resolve.p = edited;
     }
     if (attributes.w === 2) {
-      const edited = patchAttributes(attributes.p);
+      const edited = patchAttributes(attributes.p, attrFields);
       if (edited) attributes.p = edited;
     }
     return serialize(fields);

@@ -612,9 +612,123 @@ check("Spotify han variant table folds traditional text with phrase exceptions",
   assert.equal(han.fold("乾隆"), "乾隆");
   assert.equal(han.fold("乾坤大挪移"), "乾坤大挪移");
   assert.equal(han.fold("宮商角徵羽"), "宫商角徵羽");
+  assert.equal(han.fold("我好想妳"), "我好想你");
+  assert.equal(han.fold("保衞"), "保卫");
   assert.equal(han.isTraditional("我們的愛"), true);
+  assert.equal(han.isTraditional("我好想妳"), true, "妳 alone must trigger traditional detection");
+  assert.equal(han.isTraditional("在心裏"), true, "裏 alone must trigger traditional detection");
   assert.equal(han.isTraditional("我们的爱"), false);
+  assert.equal(han.toHans("我好想妳"), "我好想你");
   assert.equal(han.toHans("僕らの愛を"), "僕らの愛を");
+});
+
+check("Spotify third-party lyrics append a clear provider credit line and decode QQ entities", () => {
+  const id = "creditcheck";
+  const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json";
+  const map = { "spotify.track.meta.v2": JSON.stringify({ [id]: ["Song", "Artist", 200000, Date.now()] }) };
+  const store = {
+    read: (key) => (key in map ? map[key] : null),
+    write: (value, key) => { map[key] = value; return true; },
+  };
+  const out = run("loon/spotify/js/spotify_lyrics.js", "", url, ["qq", true], {
+    $response: { status: 404, body: "" },
+    $persistentStore: store,
+    $httpClient: {
+      get: (request, callback) => {
+        if (request.url.includes("search_for_qq_cp")) {
+          callback(null, { status: 200 }, JSON.stringify({
+            data: { song: { list: [{ songmid: "mid1", songname: "Song", singer: [{ name: "Artist" }], interval: 200 }] } },
+          }));
+        } else {
+          callback(null, { status: 200 }, JSON.stringify({
+            lyric: "[00:01.00]I&apos;m想妳&#10;[00:03.00]Rock &amp; Roll",
+          }));
+        }
+      },
+    },
+  });
+  const payload = JSON.parse(out.body);
+  assert.deepEqual(payload.lyrics.lines.map((l) => l.words), [
+    "I'm想你",
+    "Rock & Roll",
+    "— 歌词来自第三方（QQ） —",
+  ]);
+  assert.deepEqual(payload.lyrics.previewLines.map((l) => l.words), ["I'm想你", "Rock & Roll"]);
+
+  // 缓存再次命中时不能重复追加第二条来源标记。
+  const cachedOut = run("loon/spotify/js/spotify_lyrics.js", "", url, ["qq", true], {
+    $response: undefined,
+    $persistentStore: store,
+    $httpClient: { get: () => assert.fail("cache hit must not query providers") },
+  });
+  const cachedPayload = JSON.parse(cachedOut.response.body);
+  assert.deepEqual(cachedPayload.lyrics.lines.map((l) => l.words), [
+    "I'm想你",
+    "Rock & Roll",
+    "— 歌词来自第三方（QQ） —",
+  ]);
+});
+
+check("Loon official race winner is never overwritten in cache by late third-party callback", () => {
+  const id = "0VjIjW4GlUZAMYd2vXMi3b";
+  const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json";
+  const map = {
+    "spotify.track.meta.v2": JSON.stringify({ [id]: ["Song", "Artist", 200000, Date.now()] }),
+  };
+  let officialCb = null;
+  const lateLrclib = [];
+  const official = JSON.stringify({ lyrics: { lines: [{ startTimeMs: "0", words: "official line" }], language: "en" } });
+  const calls = [];
+  const context = vm.createContext({
+    TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, console,
+    $request: { url, method: "GET", headers: { Authorization: "Bearer test", Accept: "application/json" } },
+    $response: undefined,
+    $loon: "iPhone",
+    $argument: ["lrclib", true],
+    $done: (v) => calls.push(v),
+    $persistentStore: { read: (key) => map[key] || null, write: (value, key) => { map[key] = value; return true; } },
+    $httpClient: {
+      get: (options, callback) => {
+        if (options.url === url) {
+          officialCb = callback;
+          return;
+        }
+        lateLrclib.push(callback);
+      },
+    },
+  });
+  vm.runInContext(read("loon/spotify/js/spotify_lyrics.js"), context);
+  assert.ok(officialCb && lateLrclib.length > 0, "both official and third-party requests are in flight");
+  officialCb(null, { status: 200, headers: { "Content-Type": "application/json" } }, official);
+  assert.equal(calls.length, 1);
+  assert.equal(JSON.parse(calls[0].response.body).lyrics.lines[0].words, "official line");
+  for (const cb of lateLrclib) {
+    cb(null, { status: 200 }, JSON.stringify({
+      id: 1, trackName: "Song", artistName: "Artist", duration: 200, syncedLyrics: "[00:01.00]third-party",
+    }));
+  }
+  assert.equal(map["spotify.lyrics.cache.v2"], undefined, "official winner must not let late third-party poison cache");
+});
+
+check("Spotify metadata/4/track converts 32-hex GID to 22-char Base62 track ID for cache lookup", () => {
+  const hexGid = "000f22c0461543e4a19bc1ec119d2c4e";
+  const url = "https://spclient.wg.spotify.com/metadata/4/track/" + hexGid + "?market=from_token";
+  const body = JSON.stringify({
+    gid: hexGid,
+    name: "書劍恩仇錄",
+    has_lyrics: false,
+    duration: 189753,
+    artist: [{ gid: "a", name: "鄭少秋" }, { gid: "b", name: "合唱" }],
+  });
+  const map = {};
+  const store = { read: (k) => map[k] || null, write: (v, k) => { map[k] = v; return true; } };
+  run("loon/spotify/js/spotify.js", body, url, { enable_lyrics: true, desktop: "macos" }, { $persistentStore: store });
+  const cache = JSON.parse(map["spotify.track.meta.v2"] || "{}");
+  const keys = Object.keys(cache);
+  assert.equal(keys.length, 1);
+  assert.equal(keys[0].length, 22, "must be 22-char Base62 track ID, not truncated 22-char hex prefix");
+  assert.notEqual(keys[0], hexGid.slice(0, 22));
+  assert.deepEqual(cache[keys[0]].slice(0, 3), ["書劍恩仇錄", "鄭少秋, 合唱", 189753]);
 });
 
 check("Spotify lyrics fold traditional metadata for simplified catalogs", () => {
@@ -1230,15 +1344,14 @@ check("YouTube keeps current and previous Loon argument tuples aligned", () => {
   }
 });
 
-check("YouTube Loon plugin passes every argument and keeps block_feed_cards last", () => {
+check("YouTube Loon plugin passes every argument in compatibility order and Shadowrocket JSON is valid", () => {
   const plugin = read("loon/youtube/youtube-enhance.plugin");
   const declared = [...plugin.matchAll(/^(\w+) = (?:switch|select|input),/gm)].map((match) => match[1]);
-  assert.equal(declared.length, 20, "the plugin must expose 20 arguments");
-  assert.ok(declared.includes("block_feed_cards"));
+  assert.equal(declared.length, 19, "the plugin must expose 19 arguments");
   // 设置页按功能分组，位置数组按兼容顺序：新参数一律追加在末尾。
   const order = [
     "block_ads", "block_ai", "max_height", "caption_lang", "home_menu", "block_shorts_feed", "youtube_music",
-    "block_members_only", "home_cleanup", "jump_ahead", "max_speed", "web", "block_feed_cards",
+    "block_members_only", "home_cleanup", "jump_ahead", "max_speed", "web",
     "player_cleanup", "captions_mode", "feed_cleanup", "watch_cleanup", "video_codec", "web_cleanup", "music_cleanup",
   ];
   const names = (line) => [.../then script\("[^"]+", \{([^)]*)\}\) with/.exec(line)[1].matchAll(/\$\{(\w+)\}/g)].map((match) => match[1]);
@@ -1247,15 +1360,16 @@ check("YouTube Loon plugin passes every argument and keeps block_feed_cards last
   for (const line of lines) assert.deepEqual(names(line), order, "every script tuple must follow the compatibility order");
   assert.deepEqual(declared.slice().sort(), order.slice().sort(), "the plugin must declare every tuple argument");
 
-  // 13 项位置数组按 CURRENT_ARG_ORDER 还原：最后一位是 block_feed_cards。
-  const file = "loon/youtube/js/youtube.response.js";
-  const url = "https://www.youtube.com/youtubei/v1/browse";
-  const body = JSON.stringify({ contents: [{ postRenderer: { contentText: "post" } }, { videoRenderer: { videoId: "ok" } }] });
-  const tuple = (feedCards) => [true, true, "max", "zh-Hans", "", false, true, false, "standard", true, "4", true, feedCards];
-  const run13 = (args) => run(file, body, url, args, { $request: { url }, $response: { url, status: 200, headers: { "content-type": "application/json" }, body } });
-  const on = JSON.parse(run13(tuple(true)).body);
-  assert.deepEqual(on.contents.map((item) => Object.keys(item)[0]), ["videoRenderer"], "block_feed_cards must be read from the last tuple slot");
-  assert.deepEqual(Object.keys(run13(tuple(false))), [], "the switch must stay off when the last slot is false");
+  // Shadowrocket 所有带 argument 的脚本项必须是合法 JSON（不能漏闭合花括号）。
+  const sr = read("shadowrocket/youtube/youtube-enhance.sgmodule");
+  const srLines = sr.split("\n").filter((line) => line.includes("argument=\""));
+  assert.equal(srLines.length, 4, "shadowrocket must have 4 argument-bearing youtube script lines");
+  for (const line of srLines) {
+    const raw = /argument="(.*)"$/.exec(line)[1].replace(/\{\{\{[^}]*\}\}\}/g, "true");
+    const parsed = JSON.parse(raw);
+    assert.equal(parsed.blockAds, true);
+    assert.equal(parsed.musicCleanup, true);
+  }
 });
 
 check("YouTube web JSON strips ads, Shorts shelves and members-only videos", () => {
@@ -1267,12 +1381,10 @@ check("YouTube web JSON strips ads, Shorts shelves and members-only videos", () 
       { videoRenderer: { videoId: "members", badges: [{ metadataBadgeRenderer: { label: "会员专享" } }] } },
       { clarificationRenderer: { text: "AI" } },
       { shoppingShelfRenderer: { title: "shop" } },
-      { postRenderer: { contentText: "post" } },
-      { newsRenderer: { title: "news" } },
     ],
     entries: [{ displayAdRenderer: {} }],
   });
-  const args = { blockAds: true, blockAi: true, blockShortsFeed: true, blockFeedCards: true, blockMembersOnly: true, blockStore: true, web: true };
+  const args = { blockAds: true, blockAi: true, blockShortsFeed: true, blockMembersOnly: true, blockStore: true, web: true };
   for (const platform of ["loon", "egern", "shadowrocket"]) {
     const url = "https://www.youtube.com/youtubei/v1/browse";
     const out = run(platform + "/youtube/js/youtube.response.js", body, url, args, {
@@ -1287,9 +1399,9 @@ check("YouTube web JSON strips ads, Shorts shelves and members-only videos", () 
   }
 });
 
-check("YouTube web JSON drops wrapped cards without leaving blank slots", () => {
-  // 真实网页首页是 richGridRenderer → richItemRenderer → content → renderer。
-  const card = (renderer) => ({ richItemRenderer: { content: renderer } });
+check("YouTube web JSON drops wrapped cards (including trackingParams) without leaving blank slots", () => {
+  // 真实网页首页是 richGridRenderer → richItemRenderer（带 trackingParams）→ content → renderer。
+  const card = (renderer) => ({ richItemRenderer: { content: renderer, trackingParams: "CAEQ" } });
   const body = JSON.stringify({
     contents: {
       twoColumnBrowseResultsRenderer: {
@@ -1300,10 +1412,10 @@ check("YouTube web JSON drops wrapped cards without leaving blank slots", () => 
                 richGridRenderer: {
                   contents: [
                     card({ videoRenderer: { videoId: "ok" } }),
-                    card({ postRenderer: { contentText: "post" } }),
                     card({ reelShelfRenderer: { title: { simpleText: "Shorts" } } }),
                     card({ videoRenderer: { videoId: "short", navigationEndpoint: { reelWatchEndpoint: { videoId: "short" } } } }),
-                    card({ newsRenderer: { title: "news" } }),
+                    card({ videoRenderer: { videoId: "resume", thumbnailOverlays: [{ thumbnailOverlayResumePlaybackRenderer: { percentDurationWatched: 50 } }] } }),
+                    card({ videoRenderer: { videoId: "live", thumbnailOverlays: [{ thumbnailOverlayTimeStatusRenderer: { style: "LIVE" } }] } }),
                     card({ adSlotRenderer: { adSlotMetadata: { slotId: "ad" } } }),
                     card({ videoRenderer: { videoId: "members", badges: [{ metadataBadgeRenderer: { label: "会员专享" } }] } }),
                   ],
@@ -1315,7 +1427,7 @@ check("YouTube web JSON drops wrapped cards without leaving blank slots", () => 
       },
     },
   });
-  const args = { blockAds: true, blockShortsFeed: true, blockFeedCards: true, blockMembersOnly: true, web: true };
+  const args = { blockAds: true, blockShortsFeed: true, blockMembersOnly: true, feedCleanup: "all", web: true };
   const grid = (data) => data.contents.twoColumnBrowseResultsRenderer.tabs[0].tabRenderer.content.richGridRenderer.contents;
   for (const platform of ["loon", "egern", "shadowrocket"]) {
     const url = "https://www.youtube.com/youtubei/v1/browse";
@@ -1452,43 +1564,6 @@ check("YouTube next filters mixed Shorts / news-post cards and leaves autoplay i
     const shortsOn = readNext(runNext(shortsBody, { blockAds: false, blockShortsFeed: true }));
     assert.equal(shortsOn.items.length, 1, platform + " must drop the mixed Shorts card");
     assert.deepEqual([...shortsOn.autoplay], [9, 8, 7, 6], platform + " must not touch autoplay");
-
-    const postBody = buildNext("post_shelf");
-    const postOff = runNext(postBody, { blockAds: false, blockFeedCards: false });
-    assert.deepEqual(Object.keys(postOff), [], platform + " must keep news/post cards when the switch is off");
-    const postOn = readNext(runNext(postBody, { blockAds: false, blockFeedCards: true }));
-    assert.equal(postOn.items.length, 1, platform + " must drop the news/post card");
-    assert.deepEqual([...postOn.autoplay], [9, 8, 7, 6], platform + " must not touch autoplay");
-
-    // 普通视频标题里出现「重大新闻」不能被当成新闻卡片删掉。
-    const titleBody = buildNext("重大新闻");
-    const titleOut = runNext(titleBody, { blockAds: false, blockFeedCards: true });
-    assert.deepEqual(Object.keys(titleOut), [], platform + " must keep videos whose title contains 重大新闻");
-
-    // 货架级：ShelfRenderer 直接挂在 sectionListSupportedRenderers 上时整块删。
-    const buildShelfBody = (marker, copy) => {
-      const reel = serialize(copy ? [b(1, item("video_lockup_with_attachment.eml")), b(2, enc(copy))] : [b(1, item(marker))]);
-      const shelf = serialize([b(5, serialize([b(51431404, reel)]))]);
-      const sections = [b(1, serialize([b(51845067, shelf)]))];
-      if (!copy) sections.push(b(1, serialize([b(50195462, item("video_lockup_with_attachment.eml"))])));
-      const nextResult = serialize([b(1, serialize([b(49399797, serialize(sections))]))]);
-      return serialize([b(7, serialize([b(51779735, nextResult)]))]);
-    };
-    const readSections = (out) => {
-      const top = parse(out.body);
-      const nextResult = parse(first(parse(first(top, 7).p), 51779735).p);
-      return parse(first(parse(first(nextResult, 1).p), 49399797).p).filter((field) => field.no === 1);
-    };
-
-    const shelfBody = buildShelfBody("news_story");
-    const shelfOff = runNext(shelfBody, { blockAds: false, blockFeedCards: false });
-    assert.deepEqual(Object.keys(shelfOff), [], platform + " must keep the news shelf when the switch is off");
-    const shelfOn = readSections(runNext(shelfBody, { blockAds: false, blockFeedCards: true }));
-    assert.equal(shelfOn.length, 1, platform + " must drop the whole news shelf");
-    assert.ok(first(parse(shelfOn[0].p), 50195462), platform + " must keep the item section next to it");
-
-    // 货架标题是本地化文案，不能当判据：标题写「重大新闻」但里面是普通视频时必须保留。
-    assert.deepEqual(Object.keys(runNext(buildShelfBody(null, "重大新闻"), { blockAds: false, blockFeedCards: true })), [], platform + " must not match shelves by localized title copy");
   }
 });
 
@@ -1717,40 +1792,225 @@ check("YouTube Music cleanup locks the highest audio bitrate", () => {
   }
 });
 
-check("YouTube feed cards never touch comment or library list items", () => {
-  // 评论区、我的页面里的列表项也是 richItemContents 里的元素，同样没有视频 id。
-  // 之前按「不是视频卡片就删」的结构兜底会把它们一起删掉，这条测试锁住这个坑。
-  const enc = (text) => new TextEncoder().encode(text);
-  const elem = (marker) => serialize([b(999, enc(marker))]);
-  const videoItem = serialize([b(153515154, elem("video_lockup_with_attachment.eml"))]);
-  const postItem = serialize([b(153515154, elem("post_shelf"))]);
-  const commentItem = serialize([b(114077601, serialize([b(1, enc("comment thread body"))]))]);
-  const libraryItem = serialize([b(113335114, serialize([b(1, enc("library shortcut"))]))]);
+check("YouTube fixes: Ask AI PAyouchat, codec+maxHeight order, ASR audioTracks remap, options & edge cases", () => {
+  const enc = (str) => new TextEncoder().encode(str);
+  const nest = (path, leaf) => path.reduceRight((acc, no) => serialize([b(no, acc)]), leaf);
 
-  const itemSection = serialize([b(1, videoItem), b(1, postItem), b(1, commentItem), b(1, libraryItem)]);
-  const sectionList = serialize([b(1, serialize([b(50195462, itemSection)]))]);
-  const body = serialize([b(7, serialize([b(51779735, serialize([b(1, serialize([b(49399797, sectionList)]))]))]))]);
-  const url = "https://youtubei.googleapis.com/youtubei/v1/next";
+  // 1) Ask AI (PAyouchat) 按钮与面板移除 + 倍速菜单 SPunlimited 推广移除
+  {
+    const askBtn = nest([15, 461054335, 4, 169495254, 138681778, 1], enc("PAyouchat"));
+    const normalBtn = nest([15, 461054335, 4, 169495254, 138681778, 1], enc("other-panel"));
+    const overlay386 = serialize([b(10, askBtn), b(10, normalBtn)]);
+    const body = serialize([b(386137609, overlay386)]);
+    const url = "https://youtubei.googleapis.com/youtubei/v1/next";
+    const out = run("loon/youtube/js/youtube.response.js", body, url, { blockAi: true, blockAds: false }, {
+      $request: { url }, $response: { url, status: 200, headers: {}, body },
+    });
+    assert.ok(out.body, "PAyouchat Ask AI button must be stripped");
+    const remaining = parse(first(parse(out.body), 386137609).p).filter((f) => f.no === 10);
+    assert.equal(remaining.length, 1, "only non-PAyouchat button must remain");
+  }
 
-  for (const platform of ["loon", "egern", "shadowrocket"]) {
-    const file = platform + "/youtube/js/youtube.response.js";
-    const runNext = (args) => run(file, body, url, args, { $request: { url }, $response: { url, status: 200, headers: {}, body } });
+  // 2) 网页版 codec 过滤必须在 maxHeight 选档之前执行：4K VP9/AV1 + 1080p AVC 配 max_height=max + video_codec=avc 应保留 1080p AVC
+  {
+    const body = JSON.stringify({
+      streamingData: {
+        adaptiveFormats: [
+          { itag: 313, mimeType: 'video/webm; codecs="vp9"', height: 2160 },
+          { itag: 401, mimeType: 'video/mp4; codecs="av01.0.12M.08"', height: 2160 },
+          { itag: 137, mimeType: 'video/mp4; codecs="avc1.640028"', height: 1080 },
+          { itag: 140, mimeType: 'audio/mp4; codecs="mp4a.40.2"' },
+        ],
+      },
+    });
+    const url = "https://www.youtube.com/youtubei/v1/player";
+    const out = run("loon/youtube/js/youtube.response.js", body, url, { maxHeight: "max", videoCodec: "avc", web: true }, {
+      $request: { url }, $response: { url, status: 200, headers: { "content-type": "application/json" }, body },
+    });
+    const itags = JSON.parse(out.body).streamingData.adaptiveFormats.map((f) => f.itag);
+    assert.deepEqual(itags, [137, 140], "avc codec filter must run before maxHeight selection");
+  }
 
-    assert.deepEqual(Object.keys(runNext({ blockAds: false, blockFeedCards: false })), [], platform + " must keep every item when the switch is off");
+  // 3) 原生端 max_height=off 但 video_codec=avc 时，videoplayback 请求仍应套用缓存 itag 而不锁画质字段
+  {
+    const map = { YouTubeQuality: JSON.stringify({ vid1: { height: 1080, itags: [137], codec: "avc" } }) };
+    const store = { read: (k) => (k in map ? map[k] : null), write: (v, k) => ((map[k] = v), true) };
+    const fmtAvc = serialize([v(1, 137)]);
+    const fmtAv1 = serialize([v(1, 399)]);
+    const reqBody = serialize([
+      b(1, serialize([v(16, 480)])),
+      b(5, serialize([b(1, serialize([b(6, fmtAvc), b(6, fmtAv1)]))])),
+      b(17, fmtAv1),
+    ]);
+    const url = "https://rr1---sn.googlevideo.com/videoplayback?id=vid1";
+    const out = run("loon/youtube/js/youtube.request.js", reqBody, url, { maxHeight: "off", videoCodec: "avc" }, {
+      $request: { url, headers: {}, body: reqBody }, $persistentStore: store,
+    });
+    assert.ok(out && out.body, "videoplayback must rewrite field 17 for videoCodec even when maxHeight=off");
+    const fields = parse(out.body);
+    assert.equal(Number(first(parse(first(fields, 1).p), 16).v), 480, "field 1 height must stay untouched when maxHeight=off");
+    const f17 = fields.filter((f) => f.no === 17);
+    assert.equal(f17.length, 1);
+    assert.equal(Number(first(parse(f17[0].p), 1).v), 137);
+  }
 
-    const out = runNext({ blockAds: false, blockFeedCards: true });
-    const top = parse(out.body);
-    const nextResult = parse(first(parse(first(top, 7).p), 51779735).p);
-    const sectionListOut = parse(first(parse(first(nextResult, 1).p), 49399797).p);
-    const supported = parse(sectionListOut.filter((field) => field.no === 1)[0].p);
-    const items = parse(first(supported, 50195462).p).filter((field) => field.no === 1);
-    const remaining = items.map((field) => Buffer.from(field.p).toString("latin1"));
+  // 4) 移除 ASR 字幕后同步重映射 audioTracks 索引（Web JSON & App Protobuf）
+  {
+    const webBody = JSON.stringify({
+      captions: {
+        playerCaptionsTrackListRenderer: {
+          captionTracks: [
+            { baseUrl: "https://x/t?lang=en&kind=asr", languageCode: "en", vssId: "a.en", kind: "asr" },
+            { baseUrl: "https://x/t?lang=ja", languageCode: "ja", vssId: ".ja", kind: "" },
+          ],
+          audioTracks: [{ captionTrackIndices: [0, 1], defaultCaptionTrackIndex: 1, forcedCaptionTrackIndex: 1, captionsInitialState: 3 }],
+          defaultCaptionTrackIndex: 1,
+        },
+      },
+    });
+    const url = "https://www.youtube.com/youtubei/v1/player";
+    const out = JSON.parse(run("loon/youtube/js/youtube.response.js", webBody, url, { captionsMode: "off", web: true }, {
+      $request: { url }, $response: { url, status: 200, headers: { "content-type": "application/json" }, body: webBody },
+    }).body).captions.playerCaptionsTrackListRenderer;
+    assert.equal(out.defaultCaptionTrackIndex, 0);
+    assert.deepEqual(out.audioTracks[0].captionTrackIndices, [0]);
+    assert.equal(out.audioTracks[0].defaultCaptionTrackIndex, 0);
+    assert.equal(out.audioTracks[0].forcedCaptionTrackIndex, 0);
 
-    assert.equal(items.length, 3, platform + " must drop the post card only");
-    assert.ok(remaining[0].includes("video_lockup_with_attachment.eml"), platform + " must keep the video card");
-    assert.ok(!remaining.some((item) => item.includes("post_shelf")), platform + " must drop the post card");
-    assert.ok(remaining.some((item) => item.includes("comment thread body")), platform + " must keep the comment item");
-    assert.ok(remaining.some((item) => item.includes("library shortcut")), platform + " must keep the library item");
+    const track = (vssId, kind) => serialize([s(1, "https://x/t"), s(3, vssId), s(5, kind)]);
+    const appBody = serialize([b(10, serialize([b(51621377, serialize([
+      b(1, track("a.en", "asr")),
+      b(1, track(".ja", "")),
+      b(2, serialize([v(2, 0), v(2, 1), v(3, 1), v(4, 1), v(11, 3)])),
+      v(6, 1),
+    ]))]))]);
+    const appUrl = "https://youtubei.googleapis.com/youtubei/v1/player";
+    const appOut = run("loon/youtube/js/youtube.response.js", appBody, appUrl, { captionsMode: "off", blockAds: false }, {
+      $request: { url: appUrl }, $response: { url: appUrl, status: 200, headers: {}, body: appBody },
+    });
+    const r = parse(first(parse(first(parse(appOut.body), 10).p), 51621377).p);
+    const audio = parse(first(r, 2).p);
+    assert.equal(Number(first(r, 6).v), 0);
+    assert.deepEqual([...audio.filter((f) => f.no === 2).map((f) => Number(f.v))], [0]);
+    assert.equal(Number(first(audio, 3).v), 0);
+    assert.equal(Number(first(audio, 4).v), 0);
+  }
+
+  // 5) 非 player 路由的 cards 不被误删；get_watch 支持 related/topbar；topbarButtons 识别 topbarMenuButtonRenderer & notificationTopbarButtonRenderer
+  {
+    const browseUrl = "https://www.youtube.com/youtubei/v1/browse";
+    const browseBody = JSON.stringify({ section: { cards: [{ id: 1 }] } });
+    const pass = run("loon/youtube/js/youtube.response.js", browseBody, browseUrl, { playerCleanup: "standard", web: true }, {
+      $request: { url: browseUrl }, $response: { url: browseUrl, status: 200, headers: { "content-type": "application/json" }, body: browseBody },
+    });
+    assert.deepEqual(Object.keys(pass), [], "browse.cards must not be deleted by playerCleanup");
+
+    const watchUrl = "https://www.youtube.com/youtubei/v1/get_watch";
+    const watchBody = JSON.stringify({
+      topbar: {
+        desktopTopbarRenderer: {
+          topbarButtons: [
+            { topbarMenuButtonRenderer: { icon: { iconType: "CREATE" } } },
+            { notificationTopbarButtonRenderer: { icon: { iconType: "NOTIFICATIONS" } } },
+            { buttonRenderer: { icon: { iconType: "SEARCH" } } },
+          ],
+        },
+      },
+      contents: [{ next: { secondaryResults: { results: [1] } } }],
+    });
+    const watchOut = JSON.parse(run("loon/youtube/js/youtube.response.js", watchBody, watchUrl, { watchCleanup: "all", webCleanup: true, web: true }, {
+      $request: { url: watchUrl }, $response: { url: watchUrl, status: 200, headers: { "content-type": "application/json" }, body: watchBody },
+    }).body);
+    assert.equal(watchOut.contents[0].next.secondaryResults, undefined, "get_watch must honor watchCleanup=all");
+    assert.equal(watchOut.topbar.desktopTopbarRenderer.topbarButtons.length, 1, "topbarButtons must filter real menu/notification renderers");
+  }
+
+  // 6) options 边界：大小写敏感自定义 browseId、homeCleanup=false、maxSpeed="false"、captionLang="es-419"
+  {
+    const guideUrl = "https://www.youtube.com/youtubei/v1/guide";
+    const guideBody = JSON.stringify({
+      items: [
+        { guideEntryRenderer: { navigationEndpoint: { browseEndpoint: { browseId: "FEmusic_explore" } } } },
+        { guideEntryRenderer: { navigationEndpoint: { browseEndpoint: { browseId: "FEwhat_to_watch" } } } },
+      ],
+    });
+    const out = JSON.parse(run("loon/youtube/js/youtube.response.js", guideBody, guideUrl, { homeMenu: "all,-FEmusic_explore", web: true }, {
+      $request: { url: guideUrl }, $response: { url: guideUrl, status: 200, headers: { "content-type": "application/json" }, body: guideBody },
+    }).body);
+    assert.deepEqual(out.items.map((x) => x.guideEntryRenderer.navigationEndpoint.browseEndpoint.browseId), ["FEwhat_to_watch"]);
+
+    const playerUrl = "https://www.youtube.com/youtubei/v1/player";
+    const playerBody = JSON.stringify({
+      playerConfig: { granularVariableSpeedConfig: { maximumPlaybackRate: 200 } },
+      captions: { playerCaptionsTrackListRenderer: { captionTracks: [{ baseUrl: "https://x/t?lang=en", languageCode: "en", vssId: ".en" }] } },
+    });
+    const out2 = JSON.parse(run("loon/youtube/js/youtube.response.js", playerBody, playerUrl, { maxSpeed: "false", captionLang: "es-419", web: true }, {
+      $request: { url: playerUrl }, $response: { url: playerUrl, status: 200, headers: { "content-type": "application/json" }, body: playerBody },
+    }).body);
+    assert.equal(out2.playerConfig.granularVariableSpeedConfig.maximumPlaybackRate, 200, "maxSpeed='false' must not modify speed");
+    assert.equal(out2.captions.playerCaptionsTrackListRenderer.captionTracks[1].languageCode, "es-419", "es-419 captionLang must be accepted");
+  }
+
+  // 7) extractUmpKeys 在重复字段号 + 无 Uint8Array.toBase64 的 Loon 环境也能正常提取密钥
+  {
+    const clientKey = new Uint8Array(32).fill(5);
+    const encryptKey = new Uint8Array(16).fill(8);
+    const leaf = serialize([b(1, clientKey), b(2, encryptKey)]);
+    // 故意在顶层放两个 field 1（第二个带目标嵌套），测试 fieldData(..., true) 取最后一项。
+    const body = serialize([
+      b(1, new Uint8Array([8, 1])),
+      b(1, nest([16, 7, 138536474, 146311580], leaf)),
+    ]);
+    const url = "https://youtubei.googleapis.com/youtubei/v1/config";
+    const map = {};
+    const store = { read: (k) => (k in map ? map[k] : null), write: (v, k) => ((map[k] = v), true) };
+    const ctx = vm.createContext({
+      TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, console,
+      $request: { url, headers: {} }, $response: { url, status: 200, headers: {}, body },
+      $persistentStore: store, $done: () => {},
+    });
+    vm.runInContext("delete Uint8Array.fromBase64; delete Uint8Array.prototype.toBase64;", ctx);
+    vm.runInContext(read("loon/youtube/js/youtube.key.js"), ctx, { timeout: 10000 });
+    const saved = JSON.parse(map.YouTubeConfig || "{}");
+    assert.equal(saved.youtube?.clientKey, Buffer.from(clientKey).toString("base64"));
+    assert.equal(saved.youtube?.encryptKey, Buffer.from(encryptKey).toString("base64"));
+  }
+
+  // 8) googlevideo.com 请求通过 Origin/Referer 识别网页版与 Music；/vi_webp/ 会员视频与多噪声 /pagead/ 匹配
+  {
+    const reqUrl = "https://rr1---sn.googlevideo.com/initplayback";
+    const reqBody = serialize([b(3, serialize([b(5, new Uint8Array([1, 2, 3]))]))]);
+    const webOff = run("loon/youtube/js/youtube.request.js", reqBody, reqUrl, { web: false }, {
+      $request: { url: reqUrl, headers: { Origin: "https://www.youtube.com" }, body: reqBody },
+    });
+    assert.equal(webOff, undefined, "web=false must bypass googlevideo.com requests from www.youtube.com");
+
+    // 构造含大量 '/' 噪声（256 字节内 >8 个 '/'）后才出现 /pagead/ 的字段，验证 containsBytes 不会漏判。
+    const noisyAd = enc("a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/pagead/click");
+    const item = serialize([b(153515154, serialize([b(999, noisyAd)]))]);
+    const browseBody = serialize([b(9, serialize([b(255072793, serialize([b(1, item), b(1, serialize([b(153515154, serialize([b(999, enc("normal"))]))]))]))]))]);
+    const browseUrl = "https://youtubei.googleapis.com/youtubei/v1/browse";
+    const browseOut = run("loon/youtube/js/youtube.response.js", browseBody, browseUrl, { blockAds: true }, {
+      $request: { url: browseUrl }, $response: { url: browseUrl, status: 200, headers: {}, body: browseBody },
+    });
+    assert.ok(browseOut.body, "noisy /pagead/ item must be dropped");
+    const remainingItems = parse(first(parse(first(parse(browseOut.body), 9).p), 255072793).p).filter((f) => f.no === 1);
+    assert.equal(remainingItems.length, 1);
+
+    // /vi_webp/ 会员视频卡片应能识别并过滤，而含 2 个视频（1 个会员 + 1 个普通，会员带无障碍文案）的混排货架应保留。
+    const webpMember = serialize([b(153515154, serialize([b(998, enc("https://i.ytimg.com/vi_webp/abcdefghijk/hq720.webp")), b(999, enc("Members only"))]))]);
+    const mixedShelf = serialize([b(153515154, serialize([
+      b(996, enc("https://i.ytimg.com/vi_webp/11111111111/hq720.webp")),
+      b(997, enc("https://i.ytimg.com/vi_webp/22222222222/hq720.webp")),
+      b(998, enc("Members only")),
+      b(999, enc("Members only, 10 minutes")),
+    ]))]);
+    const memBody = serialize([b(9, serialize([b(255072793, serialize([b(1, webpMember), b(1, mixedShelf)]))]))]);
+    const memOut = run("loon/youtube/js/youtube.response.js", memBody, browseUrl, { blockAds: false, blockMembersOnly: true }, {
+      $request: { url: browseUrl }, $response: { url: browseUrl, status: 200, headers: {}, body: memBody },
+    });
+    const memItems = parse(first(parse(first(parse(memOut.body), 9).p), 255072793).p).filter((f) => f.no === 1);
+    assert.equal(memItems.length, 1, "single vi_webp members-only card must be dropped while mixed shelf survives");
   }
 });
 
@@ -2492,6 +2752,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     const base = "https://spclient.wg.spotify.com/color-lyrics/v2/track/id";
     const lines = [{ startTimeMs: "41310", words: "First", syllables: [], endTimeMs: "0" },
       { startTimeMs: "48450", words: "Second", syllables: [], endTimeMs: "0" }];
+    const expected = lines.concat([{ startTimeMs: "49450", words: "— 歌词来自第三方（LRCLIB） —", syllables: [], endTimeMs: "0" }]);
     for (const format of ["json", "protobuf"]) {
       const out = run(file, "", base + "?format=" + format, { lyrics_source: "lrclib" }, {
         $response: { status: 404, body: "" },
@@ -2504,7 +2765,8 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
       if (format === "json") {
         const lyrics = JSON.parse(out.body).lyrics;
         assert.equal(lyrics.syncType, "LINE_SYNCED");
-        assert.deepEqual(lyrics.lines, lines);
+        assert.deepEqual(lyrics.lines, expected);
+        assert.deepEqual(lyrics.previewLines, lines);
         assert.equal(lyrics.provider, "LRCLIB");
         assert.equal(lyrics.providerLyricsId, "123");
       } else {
@@ -2514,7 +2776,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
           const line = parse(f.p);
           return { startTimeMs: String(first(line, 1).v), words: text(first(line, 2)), syllables: [], endTimeMs: "0" };
         });
-        assert.deepEqual(decoded, lines);
+        assert.deepEqual(decoded, expected);
         assert.equal(text(first(lyrics, 5)), "LRCLIB");
       }
     }
@@ -2971,9 +3233,10 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
       else {
         const lyrics = parse(first(parse(out.body), 1).p);
         const lines = lyrics.filter((f) => f.no === 2).map((f) => parse(f.p));
-        assert.equal(lines.length, 2);
+        assert.equal(lines.length, 3);
         assert.equal(first(lines[0], 1).v, 1000n);
         assert.equal(text(first(lines[0], 2)), "Hello");
+        assert.equal(text(first(lines[2], 2)), "— 歌词来自第三方（LRCLIB） —");
       }
     }
     assert.equal(Object.keys(run(file, "denied", base, {}, { $response: { status: 403, body: "denied" },
@@ -3639,30 +3902,45 @@ function testBilibiliGrpc() {
 }
 
 async function testUmp() {
-  const context = vm.createContext({ Uint8Array, Uint32Array, Uint16Array, TextEncoder, TextDecoder,
+  let dropNextCalled = 0;
+  const context = vm.createContext({ Uint8Array, Uint32Array, Uint16Array, TextEncoder, TextDecoder, crypto: globalThis.crypto,
     EAGER_TYPES: { ump: {} }, bytesEqual: (a, c) => Buffer.from(a).equals(Buffer.from(c)),
     concatBytes: (parts) => concat(...parts), parseFields: () => [{ no: 1, wire: 0, data: new Uint8Array([25]) }],
-    readVarintValue: () => 25, rewritePlayer: () => false, filterBrowseTree: () => false });
-  vm.runInContext(read("src/youtube/response/ump.js") + "\nglobalThis.ump = { createUmpCrypto, decryptUmp, UmpWriter };", context);
-  const { createUmpCrypto, decryptUmp, UmpWriter } = context.ump;
+    readVarintValue: () => 25, rewritePlayer: () => false, filterBrowseTree: () => false,
+    dropNextExtras: () => ((dropNextCalled++), false), setField: (o, k, v) => ((o[k] = v), true) });
+  vm.runInContext(read("src/youtube/response/ump.js") + "\nglobalThis.ump = { createUmpCrypto, createNativeCryptoContext, decryptUmp, UmpWriter };", context);
+  const { createUmpCrypto, createNativeCryptoContext, decryptUmp, UmpWriter } = context.ump;
   const key = new Uint8Array(32).fill(7);
-  const crypto = new (createUmpCrypto().CryptoContext)(key);
-  crypto.iv = new Uint8Array(16).fill(3);
-  const payload = new Uint8Array([10, 0]);
-  const encrypted = crypto.encrypt(payload);
-  const envelope = { ...encrypted, iv: crypto.iv, compressionAlgorithm: 0 };
-  context.messageCodec = (name) => name === "EncryptedResponsePart" ? { fromBinary: () => envelope } : { fromBinary: () => ({ contents: [] }) };
+  const jsCrypto = new (createUmpCrypto().CryptoContext)(key);
+  jsCrypto.iv = new Uint8Array(16).fill(3);
+  const payload = new Uint8Array([10, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
+  const encrypted = jsCrypto.encrypt(payload);
+
+  // 验证 WebCrypto 与纯 JS 实现加解密字节完全等价。
+  const nativeCtx = await createNativeCryptoContext(key);
+  assert.ok(nativeCtx, "WebCrypto context must initialize when crypto.subtle exists");
+  const decNative = await nativeCtx.decrypt({ ...encrypted, iv: jsCrypto.iv });
+  assert.ok(Buffer.from(decNative).equals(Buffer.from(payload)), "WebCrypto must decrypt JS ciphertext");
+  const encNative = await nativeCtx.encrypt(payload);
+  assert.ok(Buffer.from(encNative.encryptedContent).equals(Buffer.from(encrypted.encryptedContent)), "WebCrypto ciphertext must match JS");
+  assert.ok(Buffer.from(encNative.hmac).equals(Buffer.from(encrypted.hmac)), "WebCrypto HMAC must match JS");
+
+  const envelope = { ...encrypted, iv: jsCrypto.iv, compressionAlgorithm: 0 };
+  context.messageCodec = (name) => name === "EncryptedResponsePart" ? { fromBinary: () => envelope } : { fromBinary: () => ({ contents: [{ next: {} }] }) };
   const writer = new UmpWriter();
   writer.writePart({ type: 10, data: new Uint8Array([8, 25]) });
   writer.writePart({ type: 11, data: new Uint8Array([1, 2, 3]) });
   const body = writer.finish();
-  const result = await decryptUmp(body, { autoHd: false }, [key]);
+  const result = await decryptUmp(body, { autoHd: false, videoCodec: "avc" }, [key]);
   assert.strictEqual(result.body, body, "unchanged encrypted part must retain original container");
+  assert.equal(dropNextCalled, 1, "UMP must invoke dropNextExtras on item.next");
   context.rewritePlayer = () => true;
   context.messageCodec = (name) => name === "EncryptedResponsePart" ? { fromBinary: () => envelope } : { fromBinary: () => ({ contents: [{ player: {} }] }), toBinary: () => payload };
-  assert.strictEqual((await decryptUmp(body, { autoHd: false }, [key])).body, body, "identical re-encoding must retain original container");
+  const res2 = await decryptUmp(body, { autoHd: false, videoCodec: "avc" }, [key]);
+  assert.strictEqual(res2.body, body, "identical re-encoding must retain original container");
+  assert.equal(res2.players.length, 1, "UMP must collect players when videoCodec !== any even if autoHd=false");
   checks++;
-  console.log("ok   YouTube real UMP crypto: unchanged encrypted part retains original bytes");
+  console.log("ok   YouTube real UMP crypto (WebCrypto + JS): dropNextExtras, videoCodec player collection & container preservation");
 }
 testBilibiliGrpc()
   .then(() => testUmp())

@@ -9,19 +9,19 @@
   // 官方没有歌词的曲目，服务端不下发这一格。这里按真实形状补一格，section id
   // 复用真实歌词 section 的值；只补当前曲目的列表，已有歌词 section 时不重复补。
   const LYRICS_SECTION_ID = "spotify:section:0JQ5DB6s3cssW5Bo6cGq21";
-  const LYRICS_SECTION_ID_BYTES = new TextEncoder().encode(LYRICS_SECTION_ID);
+  const LYRICS_SECTION_ID_BYTES = TE.encode(LYRICS_SECTION_ID);
 
   function scrollTrackId(url) {
     const match = /\/scrollsita\/v\d+\/scroll\/(?:spotify%3Atrack%3A|spotify:track:)([A-Za-z0-9]{22})/i.exec(url);
     return match ? match[1] : "";
   }
 
-  // 在 Uint8Array 里搜索 needle；命中返回 true。hasLyricsCard 和 patchScroll 共用。
+  // 在 Uint8Array 里用原生 indexOf 搜索 needle；比逐字节 JS 循环在 12MB 响应上快一个数量级。
   function containsBytes(buffer, needle) {
     if (!buffer || !buffer.length || buffer.length < needle.length) return false;
+    const firstByte = needle[0];
     const last = buffer.length - needle.length;
-    for (let i = 0; i <= last; i += 1) {
-      if (buffer[i] !== needle[0]) continue;
+    for (let i = buffer.indexOf(firstByte); i >= 0 && i <= last; i = buffer.indexOf(firstByte, i + 1)) {
       let j = 1;
       while (j < needle.length && buffer[i + j] === needle[j]) j += 1;
       if (j === needle.length) return true;
@@ -125,7 +125,7 @@
     // 这时插一个 section 进去会把整包结构写坏 —— 客户端解析失败后整页空白，
     // 比「没有歌词卡」严重得多，所以只删广告、不插卡。
     let recognized = 0;
-    const trackRef = trackId ? new TextEncoder().encode("spotify:track:" + trackId) : null;
+    const trackRef = trackId ? TE.encode("spotify:track:" + trackId) : null;
     for (const section of sections) {
       if (section.no !== 1 || section.wire !== 2) {
         kept.push(section.raw);
@@ -147,8 +147,8 @@
         return null;
       }
       if (ad || hasTrack || hasSectionId) recognized += 1;
-      // 官方歌词 section 的真实字节：和 lyricsSection() 的合成结果对比用。
-      if (hasTrack && hasSectionId) hasLyrics = true;
+      // 只有非广告的歌词 section 才算已有歌词卡，避免赞助卡误抑制补卡。
+      if (!ad && hasTrack && hasSectionId) hasLyrics = true;
       // 当前曲目的 section 里通常带 track_title / artist_name，抄进元数据缓存。
       if (trackRef && hasTrack && containsBytes(section.data, trackRef)) {
         rememberScrollMeta(section.data, trackId);
@@ -164,8 +164,9 @@
     // 结构写坏，客户端解析失败后整页空白，比不补卡严重得多。
     // 判定条件放宽到「认出了任意一列卡片」或者「body 里确实有当前曲目的引用」，
     // 后者能兜住客户端换 section 结构、但列表确实属于这首歌的情况。
-    const addCard = wantCard && !!trackId && !hasLyrics
+    const canAdd = !!trackId && !hasLyrics
       && (recognized > 0 || (trackRef && containsBytes(buffer, trackRef)));
+    const addCard = canAdd && (typeof wantCard === "function" ? !!wantCard() : !!wantCard);
     if (!removed && !addCard) return null;
     if (addCard) kept.unshift(wireEncodeField(1, 2, lyricsSection(trackId)));
 

@@ -8,11 +8,9 @@
     return kept;
   }
 
-  function patchConfiguration(buffer, fields = parse(buffer), assigned = null) {
-    if (!fields || !allCanonical(fields)) return null;
-    const out = [];
-    const present = Object.create(null);
-    // 本次响应的规则索引，只分配引用；保留原始规则顺序（包括通配规则）。
+  let cachedRuleIndex = null;
+  function getRuleIndex() {
+    if (cachedRuleIndex) return cachedRuleIndex;
     const byName = new Map();
     const wildcard = [];
     for (let i = 0; i < RULES.length; i++) {
@@ -24,11 +22,22 @@
         byName.get(rule[1]).push(i);
       }
     }
+    cachedRuleIndex = { byName, wildcard };
+    return cachedRuleIndex;
+  }
+
+  function patchConfiguration(buffer, fields = parse(buffer), assigned = null) {
+    if (!fields || !allCanonical(fields)) return null;
+    const out = [];
+    const present = Object.create(null);
+    const scopes = Object.create(null);
+    const { byName, wildcard } = getRuleIndex();
+    const isDesktop = typeof desktop !== "undefined" && desktop;
     for (const f of fields) {
       let value = null;
       const described = assigned && assigned.get(f);
       if (f.no === 3 && f.w === 2) value = described ? described.value : parse(f.p);
-      if (!value || !same(serialize(value), f.p)) {
+      if (!value || !allCanonical(value)) {
         out.push(f);
         continue;
       }
@@ -65,12 +74,15 @@
       }
       if (removed) continue;
       present[scope + "\u0000" + name] = true;
+      if (scope) scopes[scope] = true;
       if (touched) f.p = serialize(value);
       out.push(f);
     }
     for (const rule of RULES) {
       if (rule[2] !== 2 || !rule[0] || !rule[1]) continue;
-      if (rule[5] === "ad" && !adsOn) continue;
+      if ((rule[5] === "ad" && !adsOn) || (rule[5] === "cap" && !playOn)) continue;
+      // 移动端 protobuf 不塞入桌面端专属 desktop-ui 开关，避免冗余噪声。
+      if (!isDesktop && rule[0] === "desktop-ui" && !scopes[rule[0]]) continue;
       if (present[rule[0] + "\u0000" + rule[1]]) continue;
       const identifier = serialize([fieldString(1, rule[0]), fieldString(2, rule[1])]);
       out.push(fieldBytes(3, serialize([fieldBytes(1, identifier), fieldBytes(3, boolValue(rule[3]))])));
@@ -160,17 +172,7 @@
   function patchConfigurationJson(data) {
     const target = jsonAssignedList(data);
     if (!target) return null;
-    const byName = new Map();
-    const wildcard = [];
-    for (let i = 0; i < RULES.length; i++) {
-      const rule = RULES[i];
-      if ((rule[5] === "ad" && !adsOn) || (rule[5] === "cap" && !playOn)) continue;
-      if (!rule[1]) wildcard.push(i);
-      else {
-        if (!byName.has(rule[1])) byName.set(rule[1], []);
-        byName.get(rule[1]).push(i);
-      }
-    }
+    const { byName, wildcard } = getRuleIndex();
     const present = Object.create(null);
     const scopes = Object.create(null);
     const kept = [];
@@ -220,7 +222,7 @@
     }
     for (const rule of RULES) {
       if (rule[2] !== 2 || !rule[0] || !rule[1]) continue;
-      if (rule[5] === "ad" && !adsOn) continue;
+      if ((rule[5] === "ad" && !adsOn) || (rule[5] === "cap" && !playOn)) continue;
       // JSON 这条只补「响应里本来就有的 scope」，避免把 iOS 那批 scope 的开关
       // 塞进桌面端响应里（客户端不认，纯噪声）。
       if (!scopes[rule[0]]) continue;
@@ -311,7 +313,7 @@
     if (fields.length === 1 && fields[0].no === 1 && fields[0].w === 2) {
       const inner = parse(fields[0].p);
       const description = inner && describeConfiguration(inner);
-      if (description && same(serialize(inner), fields[0].p)) {
+      if (description && allCanonical(inner)) {
         wrapper = fields;
         target = fields[0].p;
         targetFields = inner;

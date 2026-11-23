@@ -186,8 +186,10 @@ test("a 404 is replaced with synthesized protobuf lyrics on mobile", async () =>
   assert.equal(response.headers.get("content-type"), "application/x-protobuf");
 
   const body = new Uint8Array(await response.arrayBuffer());
-  assert.equal(protoLineCount(body), 2);
-  assert.ok(decoder.decode(body).includes("Hello"));
+  assert.equal(protoLineCount(body), 3);
+  const text = decoder.decode(body);
+  assert.ok(text.includes("Hello"));
+  assert.ok(text.includes("歌词来自第三方（LRCLIB）"));
   assert.ok(calls.some((url) => url.startsWith("https://lrclib.net/api/get?")));
 });
 
