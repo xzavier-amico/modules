@@ -45,7 +45,9 @@
     $done({});
     return;
   }
-  const maxBytes = isMeta ? MAX_META_BYTES : isConfig || isAttr ? MAX_FEED_BYTES : MAX_BOOTSTRAP_BYTES;
+  const maxBytes = isMeta
+    ? /\/(?:context-resolve|connect-state)\//.test(url) ? MAX_CONTEXT_BYTES : MAX_META_BYTES
+    : isConfig || isAttr ? MAX_FEED_BYTES : MAX_BOOTSTRAP_BYTES;
   if (body.length > maxBytes) {
     $done({});
     return;

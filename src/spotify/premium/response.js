@@ -1,7 +1,7 @@
   // ---------------------------------------------------------------- response
 
   function patchUcs(buffer, fields = parse(buffer)) {
-    if (!fields || !same(serialize(fields), buffer)) return null;
+    if (!fields || !allCanonical(fields)) return null;
     const resolve = first(fields, 1);
     let attributes = first(fields, 3);
     // 字段 3 也可能是 ResolveConfiguration 的 AssignedValue，需先确认结构。
@@ -67,7 +67,7 @@
   function editUcs(message, path) {
     if (!path.length) return looksLikeUcs(message) ? patchUcs(message) : null;
     const fields = parse(message);
-    if (!fields || !same(serialize(fields), message)) return null;
+    if (!fields || !allCanonical(fields)) return null;
     const f = first(fields, path[0]);
     if (!f || f.w !== 2) return null;
     const inner = editUcs(f.p, path.slice(1));
@@ -83,13 +83,13 @@
 
   function patchNested(buffer) {
     const fields = parse(buffer);
-    if (!fields || !same(serialize(fields), buffer)) return null;
+    if (!fields || !allCanonical(fields)) return null;
     const walk = (fields, depth) => {
       let changed = false;
       for (const f of fields) {
         if (f.w !== 2) continue;
         const sub = parse(f.p);
-        if (!sub || !same(serialize(sub), f.p)) continue;
+        if (!sub || !allCanonical(sub)) continue;
         if (looksLikeUcs(f.p, sub)) {
           const patched = patchUcsIfChanged(f.p, sub);
           if (patched) {

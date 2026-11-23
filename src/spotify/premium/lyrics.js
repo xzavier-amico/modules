@@ -205,18 +205,18 @@
   function stripRequestEtagsBytes(payload) {
     if (!payload || !payload.length) return null;
     const top = parse(payload);
-    if (!top || !same(serialize(top), payload)) return null;
+    if (!top || !allCanonical(top)) return null;
 
     let dropped = 0;
     for (const f of top) {
       if (f.no !== 2 || f.w !== 2) continue;
       const entity = parse(f.p);
-      if (!entity || !same(serialize(entity), f.p)) continue;
+      if (!entity || !allCanonical(entity)) continue;
       let touched = false;
       for (const q of entity) {
         if (q.no !== 2 || q.w !== 2) continue;
         const query = parse(q.p);
-        if (!query || !same(serialize(query), q.p)) continue;
+        if (!query || !allCanonical(query)) continue;
         const kept = [];
         let hit = false;
         for (const k of query) {

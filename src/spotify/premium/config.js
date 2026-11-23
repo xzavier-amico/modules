@@ -9,7 +9,7 @@
   }
 
   function patchConfiguration(buffer, fields = parse(buffer), assigned = null) {
-    if (!fields || !same(serialize(fields), buffer)) return null;
+    if (!fields || !allCanonical(fields)) return null;
     const out = [];
     const present = Object.create(null);
     // 本次响应的规则索引，只分配引用；保留原始规则顺序（包括通配规则）。
@@ -265,7 +265,7 @@
       return out ? WIRE_TEXT.encode(out) : null;
     }
     const fields = parse(buffer);
-    if (!fields || !same(serialize(fields), buffer)) return null;
+    if (!fields || !allCanonical(fields)) return null;
     if (!looksLikeAttributes(buffer, fields)) return null;
     const patched = patchAttributes(buffer, fields);
     if (!patched || same(patched, buffer)) return null;
@@ -303,7 +303,7 @@
       return data ? WIRE_TEXT.encode(data) : null;
     }
     const fields = parse(buffer);
-    if (!fields || !same(serialize(fields), buffer)) return null;
+    if (!fields || !allCanonical(fields)) return null;
     let target = buffer;
     let wrapper = null;
     let targetFields = fields;

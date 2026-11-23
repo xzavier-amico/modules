@@ -60,6 +60,9 @@
   const playOn = autoPlay(opt.unlock_playback) ? !desktop : flag(opt.unlock_playback, !desktop);
   const lyricsOn = flag(opt.enable_lyrics, true);
   // 响应体上限：超过上限直接放行，避免异常响应占满内存。
-  const MAX_META_BYTES = 12 * 1024 * 1024; // extended-metadata / context-resolve / connect-state / metadata
+  const MAX_META_BYTES = 12 * 1024 * 1024; // extended-metadata / metadata：大块无关扩展数据会被跳过，不整树解析
+  // context-resolve / connect-state 是大量小字段，整树解析时每 1MB 响应约占 7MB JS 堆；
+  // Loon 的网络扩展只有约 50MB，超过 3MB 直接放行，避免把隧道进程撑爆。
+  const MAX_CONTEXT_BYTES = 3 * 1024 * 1024;
   const MAX_FEED_BYTES = 12 * 1024 * 1024; // home / browse / scroll / remote-config / nebula
   const MAX_BOOTSTRAP_BYTES = 40 * 1024 * 1024; // bootstrap / user-customization

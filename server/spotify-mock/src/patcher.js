@@ -285,7 +285,10 @@ function buildPatcher($argument) {
   const playOn = autoPlay(opt.unlock_playback) ? !desktop : flag(opt.unlock_playback, !desktop);
   const lyricsOn = flag(opt.enable_lyrics, true);
   // 响应体上限：超过上限直接放行，避免异常响应占满内存。
-  const MAX_META_BYTES = 12 * 1024 * 1024; // extended-metadata / context-resolve / connect-state / metadata
+  const MAX_META_BYTES = 12 * 1024 * 1024; // extended-metadata / metadata：大块无关扩展数据会被跳过，不整树解析
+  // context-resolve / connect-state 是大量小字段，整树解析时每 1MB 响应约占 7MB JS 堆；
+  // Loon 的网络扩展只有约 50MB，超过 3MB 直接放行，避免把隧道进程撑爆。
+  const MAX_CONTEXT_BYTES = 3 * 1024 * 1024;
   const MAX_FEED_BYTES = 12 * 1024 * 1024; // home / browse / scroll / remote-config / nebula
   const MAX_BOOTSTRAP_BYTES = 40 * 1024 * 1024; // bootstrap / user-customization
 
@@ -299,26 +302,160 @@ function buildPatcher($argument) {
   const TD = WIRE_UTF8;
   const readVarint = wireReadVarint;
 
-  // 字节不是合法消息时返回 null。
-  function parse(b) {
-    let fields;
-    try {
-      fields = wireParseFields(b);
-    } catch (e) {
-      return null;
+  // 小整数 varint（字段号 / 长度）：失败（截断 / 超长）返回 -1，不抛异常。
+  // 元数据响应里大量字符串会被拿来试探「是不是子消息」，绝大多数会在这里失败；
+  // 用异常处理失败既慢又会反复捕获调用栈。
+  function readCount(bytes, state) {
+    const start = state.i;
+    const limit = bytes.length;
+    let at = start;
+    let value = 0;
+    let shift = 0;
+    while (at < limit) {
+      const byte = bytes[at++];
+      if (shift < 28) {
+        value |= (byte & 0x7f) << shift;
+        if (!(byte & 0x80)) {
+          state.i = at;
+          return value >>> 0;
+        }
+        shift += 7;
+        continue;
+      }
+      // 超过 4 字节：退回 BigInt 路径，与 wireReadCount 的行为一致。
+      try {
+        return Number(wireReadVarint(bytes, state, limit));
+      } catch (e) {
+        return -1;
+      }
     }
-    return fields.map((f) => {
-      if (f.wire === 0) return { no: f.no, w: 0, v: wireReadVarint(f.data, { i: 0 }), raw: f.raw };
-      // group 原样保留：p 存的是含起止 tag 的整段，serialize 直接写回。
-      if (f.wire === 3) return { no: f.no, w: 3, p: f.raw, raw: f.raw };
-      return { no: f.no, w: f.wire, p: f.data, raw: f.raw };
-    });
+    return -1;
   }
 
+  // 字节不是合法消息时返回 null。一趟扫描直接产出字段对象，不经过中间数组。
+  function parse(b) {
+    const fields = [];
+    const state = { i: 0 };
+    const total = b.length;
+    while (state.i < total) {
+      const rawStart = state.i;
+      const tag = readCount(b, state);
+      if (tag < 0) return null;
+      const no = tag >>> 3;
+      const wire = tag & 7;
+      if (!no) return null;
+
+      let dataStart = state.i;
+      let end;
+      if (wire === 2) {
+        const length = readCount(b, state);
+        if (length < 0 || length > total - state.i) return null;
+        dataStart = state.i;
+        end = dataStart + length;
+      } else if (wire === 0) {
+        end = dataStart;
+        while (end < total && b[end++] & 0x80) { /* 只跳过 varint */ }
+        if (end === dataStart || b[end - 1] & 0x80) return null;
+      } else if (wire === 1) {
+        end = dataStart + 8;
+      } else if (wire === 5) {
+        end = dataStart + 4;
+      } else if (wire === 3) {
+        // group：整段（含起止 tag）当 opaque 值保留，重新编码时原样写回。
+        try {
+          end = wireSkipGroup(b, dataStart, no);
+        } catch (e) {
+          return null;
+        }
+      } else {
+        return null;
+      }
+      if (end > total) return null;
+      state.i = end;
+
+      const raw = b.subarray(rawStart, end);
+      if (wire === 0) {
+        let value;
+        try {
+          value = wireReadVarint(b.subarray(dataStart, end), { i: 0 });
+        } catch (e) {
+          return null;
+        }
+        fields.push({ no: no, w: 0, v: value, raw: raw });
+      } else if (wire === 3) {
+        // group 原样保留：p 存的是含起止 tag 的整段，serialize 直接写回。
+        fields.push({ no: no, w: 3, p: raw, raw: raw });
+      } else {
+        fields.push({ no: no, w: wire, p: b.subarray(dataStart, end), raw: raw });
+      }
+    }
+    return fields;
+  }
+
+  // varint 的 Number 版：字段号 / 长度 / 常见数值都远小于 2^53，不必为每个字段
+  // 分配 BigInt 和临时 Uint8Array。超过 2^53 的 64 位值仍走 BigInt 保证不丢位。
+  const MAX_SAFE_BIG = 9007199254740991n;
+  function varintSize(n) {
+    let size = 1;
+    while (n >= 128) {
+      n = Math.floor(n / 128);
+      size += 1;
+    }
+    return size;
+  }
+
+  function writeVarint(out, at, n) {
+    while (n >= 128) {
+      out[at++] = (n % 128) | 128;
+      n = Math.floor(n / 128);
+    }
+    out[at++] = n;
+    return at;
+  }
+
+  function writeVarintBig(out, at, value) {
+    let rest = value;
+    while (rest >= 0x80n) {
+      out[at++] = Number(rest & 0x7fn) | 0x80;
+      rest >>= 7n;
+    }
+    out[at++] = Number(rest);
+    return at;
+  }
+
+  const isBigValue = (v) => typeof v === "bigint" && v > MAX_SAFE_BIG;
+
+  // 一次算好总长度、一次分配、直接写入；输出字节与逐字段 wireEncodeField + wireConcat 完全一致。
   function serialize(fields) {
-    return wireConcat(fields.map((f) => (f.w === 3
-      ? f.p
-      : wireEncodeField(f.no, f.w, f.w === 0 ? wireEncodeVarint(f.v) : f.p))));
+    let size = 0;
+    for (const f of fields) {
+      if (f.w === 3) {
+        size += f.p.length;
+        continue;
+      }
+      size += varintSize(f.no * 8 + f.w);
+      if (f.w === 0) size += isBigValue(f.v) ? wireVarintLength(f.v) : varintSize(Number(f.v));
+      else if (f.w === 2) size += varintSize(f.p.length) + f.p.length;
+      else size += f.p.length;
+    }
+    const out = new Uint8Array(size);
+    let at = 0;
+    for (const f of fields) {
+      if (f.w === 3) {
+        out.set(f.p, at);
+        at += f.p.length;
+        continue;
+      }
+      at = writeVarint(out, at, f.no * 8 + f.w);
+      if (f.w === 0) {
+        at = isBigValue(f.v) ? writeVarintBig(out, at, f.v) : writeVarint(out, at, Number(f.v));
+      } else {
+        if (f.w === 2) at = writeVarint(out, at, f.p.length);
+        out.set(f.p, at);
+        at += f.p.length;
+      }
+    }
+    return out;
   }
 
   // 判断整条消息是否本来就是规范编码。等价于 same(serialize(parse(buffer)), buffer)，
@@ -329,22 +466,39 @@ function buildPatcher($argument) {
     return true;
   }
 
+  // raw[at..at+len) 是否恰好是 n 的最短 varint 编码（不分配）。
+  function matchesVarint(raw, at, n, len) {
+    for (let i = 0; i < len; i += 1) {
+      const byte = i < len - 1 ? (n % 128) | 128 : n;
+      if (raw[at + i] !== byte) return false;
+      n = Math.floor(n / 128);
+    }
+    return true;
+  }
+
   function allCanonical(fields) {
     for (const f of fields) {
-      if (!f.raw) return false;
-      const tag = wireEncodeVarint(BigInt(f.no) * 8n + BigInt(f.w));
-      if (f.raw.length < tag.length || !samePrefix(f.raw.subarray(0, tag.length), tag)) return false;
+      const raw = f.raw;
+      if (!raw) return false;
+      const tag = f.no * 8 + f.w;
+      const tagLen = varintSize(tag);
+      if (raw.length < tagLen || !matchesVarint(raw, 0, tag, tagLen)) return false;
       if (f.w === 0) {
-        const value = wireEncodeVarint(f.v);
-        if (!samePrefix(f.raw.subarray(tag.length), value)) return false;
+        if (isBigValue(f.v)) {
+          if (!samePrefix(raw.subarray(tagLen), wireEncodeVarint(f.v))) return false;
+        } else {
+          const value = Number(f.v);
+          const valueLen = varintSize(value);
+          if (raw.length !== tagLen + valueLen || !matchesVarint(raw, tagLen, value, valueLen)) return false;
+        }
       } else if (f.w === 2) {
-        const length = wireEncodeVarint(f.p.length);
-        if (f.raw.length !== tag.length + length.length + f.p.length) return false;
-        if (!samePrefix(f.raw.subarray(tag.length, tag.length + length.length), length)) return false;
+        const lengthLen = varintSize(f.p.length);
+        if (raw.length !== tagLen + lengthLen + f.p.length) return false;
+        if (!matchesVarint(raw, tagLen, f.p.length, lengthLen)) return false;
       } else if (f.w === 3) {
         // group 按 raw 原样写回，只要保留着就认为是规范编码。
         if (!f.raw || f.raw.length !== f.p.length) return false;
-      } else if (f.raw.length !== tag.length + (f.w === 1 ? 8 : 4)) {
+      } else if (raw.length !== tagLen + (f.w === 1 ? 8 : 4)) {
         return false;
       }
     }
@@ -368,7 +522,7 @@ function buildPatcher($argument) {
   function edit(message, path, fn) {
     if (!path.length) return fn(message);
     const fields = parse(message);
-    if (!fields || !same(serialize(fields), message)) return null;
+    if (!fields || !allCanonical(fields)) return null;
     const f = first(fields, path[0]);
     if (!f || f.w !== 2) return null;
     const inner = edit(f.p, path.slice(1), fn);
@@ -763,7 +917,7 @@ function buildPatcher($argument) {
   };
 
   function patchAttributes(buffer, fields = parse(buffer)) {
-    if (!fields || !same(serialize(fields), buffer)) return null;
+    if (!fields || !allCanonical(fields)) return null;
     // 先记下账号地区，headers 脚本据此选择时区。
     rememberRegion(fields);
     const out = [];
@@ -877,7 +1031,7 @@ function buildPatcher($argument) {
   }
 
   function patchConfiguration(buffer, fields = parse(buffer), assigned = null) {
-    if (!fields || !same(serialize(fields), buffer)) return null;
+    if (!fields || !allCanonical(fields)) return null;
     const out = [];
     const present = Object.create(null);
     // 本次响应的规则索引，只分配引用；保留原始规则顺序（包括通配规则）。
@@ -1133,7 +1287,7 @@ function buildPatcher($argument) {
       return out ? WIRE_TEXT.encode(out) : null;
     }
     const fields = parse(buffer);
-    if (!fields || !same(serialize(fields), buffer)) return null;
+    if (!fields || !allCanonical(fields)) return null;
     if (!looksLikeAttributes(buffer, fields)) return null;
     const patched = patchAttributes(buffer, fields);
     if (!patched || same(patched, buffer)) return null;
@@ -1171,7 +1325,7 @@ function buildPatcher($argument) {
       return data ? WIRE_TEXT.encode(data) : null;
     }
     const fields = parse(buffer);
-    if (!fields || !same(serialize(fields), buffer)) return null;
+    if (!fields || !allCanonical(fields)) return null;
     let target = buffer;
     let wrapper = null;
     let targetFields = fields;
@@ -1200,7 +1354,7 @@ function buildPatcher($argument) {
   // ---------------------------------------------------------------- response
 
   function patchUcs(buffer, fields = parse(buffer)) {
-    if (!fields || !same(serialize(fields), buffer)) return null;
+    if (!fields || !allCanonical(fields)) return null;
     const resolve = first(fields, 1);
     let attributes = first(fields, 3);
     // 字段 3 也可能是 ResolveConfiguration 的 AssignedValue，需先确认结构。
@@ -1266,7 +1420,7 @@ function buildPatcher($argument) {
   function editUcs(message, path) {
     if (!path.length) return looksLikeUcs(message) ? patchUcs(message) : null;
     const fields = parse(message);
-    if (!fields || !same(serialize(fields), message)) return null;
+    if (!fields || !allCanonical(fields)) return null;
     const f = first(fields, path[0]);
     if (!f || f.w !== 2) return null;
     const inner = editUcs(f.p, path.slice(1));
@@ -1282,13 +1436,13 @@ function buildPatcher($argument) {
 
   function patchNested(buffer) {
     const fields = parse(buffer);
-    if (!fields || !same(serialize(fields), buffer)) return null;
+    if (!fields || !allCanonical(fields)) return null;
     const walk = (fields, depth) => {
       let changed = false;
       for (const f of fields) {
         if (f.w !== 2) continue;
         const sub = parse(f.p);
-        if (!sub || !same(serialize(sub), f.p)) continue;
+        if (!sub || !allCanonical(sub)) continue;
         if (looksLikeUcs(f.p, sub)) {
           const patched = patchUcsIfChanged(f.p, sub);
           if (patched) {
@@ -1534,18 +1688,18 @@ function buildPatcher($argument) {
   function stripRequestEtagsBytes(payload) {
     if (!payload || !payload.length) return null;
     const top = parse(payload);
-    if (!top || !same(serialize(top), payload)) return null;
+    if (!top || !allCanonical(top)) return null;
 
     let dropped = 0;
     for (const f of top) {
       if (f.no !== 2 || f.w !== 2) continue;
       const entity = parse(f.p);
-      if (!entity || !same(serialize(entity), f.p)) continue;
+      if (!entity || !allCanonical(entity)) continue;
       let touched = false;
       for (const q of entity) {
         if (q.no !== 2 || q.w !== 2) continue;
         const query = parse(q.p);
-        if (!query || !same(serialize(query), q.p)) continue;
+        if (!query || !allCanonical(query)) continue;
         const kept = [];
         let hit = false;
         for (const k of query) {

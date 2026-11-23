@@ -113,7 +113,7 @@
   };
 
   function patchAttributes(buffer, fields = parse(buffer)) {
-    if (!fields || !same(serialize(fields), buffer)) return null;
+    if (!fields || !allCanonical(fields)) return null;
     // 先记下账号地区，headers 脚本据此选择时区。
     rememberRegion(fields);
     const out = [];
