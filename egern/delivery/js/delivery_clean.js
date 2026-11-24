@@ -132,7 +132,7 @@ export default async function (ctx) {
     try {
 
 //=======================================================================================
-// Shopping Clean — 京东、淘宝、拼多多、美团、饿了么开屏、弹窗与信息流推广清理
+// Shopping Clean — 京东、淘宝、拼多多、美团、饿了么、菜鸟裹裹、丰巢开屏、弹窗与信息流推广清理
 //
 // 为什么之前装了完全没效果（即使本地 Loon 已全局拦截 QUIC）：
 //   1) 16 位数字无差别自杀：旧版用 /\d{16,}/.test(body) 检查整段原始响应（连引号内的字符串都算）。
@@ -143,16 +143,19 @@ export default async function (ctx) {
 //      - 京东 welcomeHome / personinfoBusiness / search 等真实调用里，functionId 往往放在 POST
 //        表单 body 或 URL path (/api?functionId=...)，且楼层结构是 floorList[].mId / bId / subFloors，
 //        并不叫 guessed 的 card_type="ad_*"；
-//      - 淘宝 / 饿了么走阿里 MTOP 网关 (guide-acs.m.taobao.com / trade-acs.m.taobao.com / waimai-guide.ele.me)，
-//        真实结构是 data.containers / data.sections / data.result 里的 item.bizData /ext.is_p4p / p4p / ad；
+//      - 淘宝 / 饿了么 / 菜鸟裹裹走阿里 MTOP 网关 (guide-acs.m.taobao.com / trade-acs.m.taobao.com /
+//        waimai-guide.ele.me / acs.m.cainiao.com / gw.cainiao.com)，
+//        真实结构是 data.containers / data.sections / data.result 里的 item.bizData / ext.is_p4p / p4p / ad；
+//      - 丰巢 (fcbox.com) 走 app.fcbox.com / wx.fcbox.com / dsp.fcbox.com，取件码结果页、开屏与首页弹窗
+//        挂在 adList / bannerList / popup / floatAd / advertList；
 //      - 拼多多走 api.pinduoduo.com / api.yangkeduo.com，首页与搜索流挂在 goods_list / items / flip，
 //        推广条目带 ad / p_search.is_ad / icon_list 广告标，弹窗挂在 popup / activity_integration_popup；
 //      - 美团 / 美团外卖走 wmapi / apimobile / i.meituan.com / wx.waimai.meituan.com，
 //        竞价店带 charge_info (CPC/CPM 计费串) / ad_mark / is_ad / ad_attr。
 //
 // 参数：
-//   block_ads (默认 true) ：去开屏、首页弹窗浮层、搜索/推荐信息流里的 CPC/CPM/P4P 竞价广告卡
-//   clean_ui  (默认 false)：额外精简京东/美团/淘宝/拼多多「我的」页与首页的白条/金条/借钱/多多视频/小游戏营销楼层
+//   block_ads (默认 true) ：去开屏、首页弹窗浮层、取件页广告、搜索/推荐信息流里的 CPC/CPM/P4P 竞价广告卡
+//   clean_ui  (默认 true) ：额外精简京东/美团/淘宝/拼多多/菜鸟/丰巢的白条/金条/借钱/多多视频/小游戏/果园营销楼层
 //=======================================================================================
 
 (() => {
@@ -182,7 +185,7 @@ export default async function (ctx) {
     v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0");
 
   const blockAds = flag(opt.block_ads, true);
-  const cleanUi = flag(opt.clean_ui, false);
+  const cleanUi = flag(opt.clean_ui, true);
   if (!blockAds && !cleanUi) {
     $done({});
     return;
@@ -528,12 +531,21 @@ export default async function (ctx) {
     }
 
     // =========================================================================
-    // 2. 淘宝 / 天猫 / 饿了么阿里系 MTOP (*.taobao.com / *.tmall.com / *.ele.me)
+    // 2. 淘宝 / 天猫 / 饿了么 / 菜鸟裹裹 阿里系 MTOP (*.taobao.com / *.tmall.com / *.ele.me / *.cainiao.com)
     // =========================================================================
-    if (/\.(?:taobao|tmall)\.com|\.ele\.me/i.test(url)) {
+    if (/\.(?:taobao|tmall|cainiao)\.com|\.ele\.me/i.test(url)) {
       const d = isObj(root.data) ? root.data : root;
 
       if (blockAds) {
+        // 菜鸟裹裹纯广告 MTOP 接口或开屏/推广块直接清空
+        if (/mtop\.cainiao\.(?:ad|guoguo\.nbnetflow\.ads|nbmensa\.research|adx)/i.test(url)) {
+          for (const k of Object.keys(d)) {
+            if (Array.isArray(d[k])) d[k] = [];
+            else if (isObj(d[k])) d[k] = {};
+          }
+          changed = true;
+        }
+
         // 清理开屏、弹窗、浮层与顶栏横幅
         for (const holder of [root, d, isObj(d.data) ? d.data : null, isObj(d.result) ? d.result : null]) {
           if (!isObj(holder)) continue;
@@ -552,6 +564,13 @@ export default async function (ctx) {
             "topAtmosphere",
             "adv_info",
             "adInfo",
+            "adList",
+            "ads",
+            "bannerList",
+            "marketingList",
+            "operationList",
+            "homePopup",
+            "pickupAd",
           ]);
           for (const listKey of [
             "items",
@@ -581,7 +600,7 @@ export default async function (ctx) {
           }
         }
 
-        // 淘宝首页 MTOP (mtop.taobao.wireless.home.newface.awesome.get) 的 containers 树结构
+        // 淘宝 & 菜鸟首页 MTOP 的 containers 树结构
         if (isObj(d.containers)) {
           for (const cKey of Object.keys(d.containers)) {
             const container = d.containers[cKey];
@@ -597,13 +616,78 @@ export default async function (ctx) {
         }
       }
 
-      // clean_ui：淘宝「我的」页 (mtop.taobao.mclaren) 隐藏借钱/省钱卡/小游戏娱乐楼层
-      if (cleanUi && isObj(d.hierarchy) && isObj(d.data)) {
-        const TB_CLUTTER_RE = /借钱|网商贷|花呗分期|芭芭农场|斗地主|小游戏|省钱月卡|红包签到/;
-        for (const k of Object.keys(d.data)) {
-          const node = d.data[k];
-          if (isObj(node) && TB_CLUTTER_RE.test(JSON.stringify(node.fields || node))) {
-            delete d.data[k];
+      // clean_ui：淘宝 & 菜鸟「我的」页与首页底部隐藏借钱/省钱卡/小游戏/裹酱积分商城/猜你喜欢商品流
+      if (cleanUi) {
+        const ALI_CLUTTER_RE =
+          /借钱|网商贷|花呗分期|芭芭农场|斗地主|小游戏|省钱月卡|红包签到|裹酱|免费领水果|天天领现金|省钱专区|好物推荐|猜你喜欢/;
+        if (isObj(d.hierarchy) && isObj(d.data)) {
+          for (const k of Object.keys(d.data)) {
+            const node = d.data[k];
+            if (isObj(node) && ALI_CLUTTER_RE.test(JSON.stringify(node.fields || node))) {
+              delete d.data[k];
+              changed = true;
+            }
+          }
+        }
+        // 菜鸟裹裹 modules / sections 里的营销与商品推荐块
+        for (const holder of [d, isObj(d.data) ? d.data : null, isObj(d.result) ? d.result : null]) {
+          if (!isObj(holder)) continue;
+          for (const arrKey of ["modules", "sections", "cards", "items", "list"]) {
+            if (!Array.isArray(holder[arrKey]) || !holder[arrKey].length) continue;
+            const kept = holder[arrKey].filter((m) => {
+              if (!isObj(m)) return true;
+              const code = String(m.moduleCode || m.bizCode || m.sectionBizCode || m.type || m.name || "");
+              const title = String(m.title || m.moduleName || m.desc || "");
+              if (/ad|banner|popup|recommend_mall|goods_feed|guess_like|welfare|game| orchard|farm/i.test(code)) {
+                return false;
+              }
+              if (title && ALI_CLUTTER_RE.test(title)) return false;
+              return true;
+            });
+            if (kept.length && kept.length !== holder[arrKey].length) {
+              holder[arrKey] = kept;
+              changed = true;
+            }
+          }
+        }
+      }
+    }
+
+    // =========================================================================
+    // 2.5 丰巢 (*.fcbox.com / *.fengchao.com) —— 开屏、取件结果页弹窗、首页轮播与会员营销
+    // =========================================================================
+    if (/\.(?:fcbox|fengchao)\.com/i.test(url)) {
+      if (blockAds) {
+        for (const holder of [root, root.data, root.result, isObj(root.data) ? root.data.data : null]) {
+          if (!isObj(holder)) continue;
+          for (const k of [
+            "adList",
+            "ads",
+            "advertList",
+            "adverts",
+            "bannerList",
+            "banners",
+            "popup",
+            "popupList",
+            "popList",
+            "floatAd",
+            "floatingAd",
+            "splash",
+            "splashAd",
+            "openScreenAd",
+            "activityList",
+            "marketingList",
+          ]) {
+            clearSlot(holder, k);
+          }
+          for (const listKey of ["list", "items", "modules", "cards", "floorList", "records"]) {
+            filterArray(holder, listKey, isShoppingAdItem, true);
+          }
+        }
+        // 如果整个接口本身就是丰巢广告拉取接口（如 /ad/、/advert/、/banner/、/splash/），且 root.data 是非空数组，直接置空
+        if (/\/(?:ad|ads|advert|banner|splash|popup|marketing)(?:\/|[?]|$)/i.test(url)) {
+          if (Array.isArray(root.data) && root.data.length) {
+            root.data = [];
             changed = true;
           }
         }

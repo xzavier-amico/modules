@@ -1,14 +1,16 @@
 #!name=Shopping Clean
-#!desc=京东、淘宝、拼多多、美团、饿了么去开屏、弹窗浮层与信息流竞价推广卡片。
+#!desc=京东、淘宝、拼多多、美团、饿了么、菜鸟裹裹、丰巢去开屏、弹窗浮层与信息流竞价推广卡片。
 #!author=xzavier-amico
 #!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/delivery.png
-#!arguments=去购物与外卖广告:true, 精简金融与娱乐模块:false
-#!arguments-desc=去购物与外卖广告：过滤京东、淘宝、拼多多、美团、饿了么的开屏、弹窗浮层与搜索/推荐流里的 CPC/CPM/P4P 竞价广告。\n精简金融与娱乐模块：额外隐藏京东白条/金条/借钱、淘宝借钱/小游戏、拼多多多多视频/大转盘等营销入口。
+#!arguments=去购物与快递广告:true, 精简金融与娱乐模块:true
+#!arguments-desc=去购物与快递广告：过滤京东、淘宝、拼多多、美团、饿了么、菜鸟裹裹、丰巢的开屏、取件页弹窗浮层与搜索/推荐流里的 CPC/CPM/P4P 竞价广告。\n精简金融与娱乐模块：隐藏京东白条/金条/借钱、淘宝借钱/小游戏、拼多多多多视频/大转盘、菜鸟裹酱/果园/商品流等营销模块。
 
 [Rule]
 AND,((DOMAIN-SUFFIX,jd.com),(PROTOCOL,QUIC)),REJECT
 AND,((DOMAIN-SUFFIX,taobao.com),(PROTOCOL,QUIC)),REJECT
 AND,((DOMAIN-SUFFIX,tmall.com),(PROTOCOL,QUIC)),REJECT
+AND,((DOMAIN-SUFFIX,cainiao.com),(PROTOCOL,QUIC)),REJECT
+AND,((DOMAIN-SUFFIX,fcbox.com),(PROTOCOL,QUIC)),REJECT
 AND,((DOMAIN-SUFFIX,pinduoduo.com),(PROTOCOL,QUIC)),REJECT
 AND,((DOMAIN-SUFFIX,yangkeduo.com),(PROTOCOL,QUIC)),REJECT
 AND,((DOMAIN-SUFFIX,meituan.com),(PROTOCOL,QUIC)),REJECT
@@ -47,6 +49,11 @@ DOMAIN-SUFFIX,h-adashx.ut.taobao.com,REJECT
 DOMAIN-SUFFIX,v6-adashx.ut.taobao.com,REJECT
 DOMAIN-SUFFIX,ut.taobao.com,REJECT
 DOMAIN-SUFFIX,tunion-api.m.taobao.com,REJECT
+DOMAIN-SUFFIX,adash.cainiao.com,REJECT
+DOMAIN-SUFFIX,log.cainiao.com,REJECT
+DOMAIN-SUFFIX,dsp.fcbox.com,REJECT
+DOMAIN-SUFFIX,ad.fcbox.com,REJECT
+DOMAIN-SUFFIX,track.fcbox.com,REJECT
 DOMAIN-SUFFIX,t-dsp.pinduoduo.com,REJECT
 DOMAIN-SUFFIX,th.pinduoduo.com,REJECT
 DOMAIN-SUFFIX,ta.pinduoduo.com,REJECT
@@ -76,7 +83,9 @@ DOMAIN,trace.ele.me,REJECT
 ^https?:\/\/api\.m\.jd\.com\/(?:client\.action|api)\?.*functionId=(?:deliverLayer|popupConfig|adStart|getAdList|start|home_launchConfig)\b reject-dict
 ^https?:\/\/homepage-gw\.jd\.com\/npromotion reject-dict
 ^https?:\/\/api\.smart\.jd\.com\/c\/service\/getLoadingLinks\b reject-dict
-^https?:\/\/(?:guide-acs|acs)\.m\.taobao\.com\/gw\/mtop\.(?:taobao\.baichuan\.smb\.get|taobao\.idle\.home\.welcome|alimama\.etao\.ad|taobao\.ad)\. reject-dict
+^https?:\/\/(?:guide-acs|acs)\.m\.taobao\.com\/gw\/mtop\.(?:taobao\.baichuan\.smb\.get|taobao\.idle\.home\.welcome|alimama\.etao\.ad|taobao\.ad|cainiao\.adx|cainiao\.guoguo\.nbnetflow\.ads)\. reject-dict
+^https?:\/\/(?:acs\.m|gw)\.cainiao\.com\/gw\/mtop\.cainiao\.(?:adx|ad|guoguo\.nbnetflow\.ads|nbmensa\.research)\. reject-dict
+^https?:\/\/(?:app|wx|api|m)\.fcbox\.com\/.*\/(?:ad|ads|advert|splash|openScreen|popup|marketing)(?:\/|[?]|$) reject-dict
 ^https?:\/\/api\.(?:pinduoduo|yangkeduo)\.com\/api\/(?:oak\/integration\/render|carnival\/image_list|cappuccino\/splash) reject-dict
 ^https?:\/\/wmapi\.meituan\.com\/api\/v\d+\/(?:ad|loadInfo|startpicture|openscreen)(?:[/?]|$) reject-dict
 ^https?:\/\/apimobile\.meituan\.com\/(?:group\/v\d+\/ad|abtest\/v\d+\/ad|appupdate\/legacy\/check)(?:[/?]|$) reject-dict
@@ -86,8 +95,8 @@ DOMAIN,trace.ele.me,REJECT
 ^https?:\/\/waimai-guide\.ele\.me\/h5\/mtop\.alsc\.waimai\.ad\. reject-dict
 
 [Script]
-shopping.clean = type=http-response,pattern=^https?:\/\/(?:api\.m\.jd\.com\/(?:client\.action|api)|(?:guide-acs|trade-acs|acs)\.m\.taobao\.com\/gw\/mtop\.|api\.(?:pinduoduo|yangkeduo)\.com\/(?:api\/|search|v\d+\/)|(?:wmapi|apimobile|mapi|i)\.meituan\.com\/|wx\.waimai\.meituan\.com\/weapp\/|(?:waimai-guide|client-api|newton-api)\.ele\.me\/),requires-body=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/delivery/js/delivery_clean.js?v=20261123-2,argument="{"block_ads":{{{去购物与外卖广告}}},"clean_ui":{{{精简金融与娱乐模块}}}}"
+shopping.clean = type=http-response,pattern=^https?:\/\/(?:api\.m\.jd\.com\/(?:client\.action|api)|(?:guide-acs|trade-acs|acs)\.m\.taobao\.com\/gw\/mtop\.|(?:acs\.m|gw)\.cainiao\.com\/gw\/mtop\.|(?:app|wx|api|m)\.fcbox\.com\/|api\.(?:pinduoduo|yangkeduo)\.com\/(?:api\/|search|v\d+\/)|(?:wmapi|apimobile|mapi|i)\.meituan\.com\/|wx\.waimai\.meituan\.com\/weapp\/|(?:waimai-guide|client-api|newton-api)\.ele\.me\/),requires-body=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/delivery/js/delivery_clean.js?v=20261123-3,argument="{"block_ads":{{{去购物与快递广告}}},"clean_ui":{{{精简金融与娱乐模块}}}}"
 
 [MITM]
-hostname = %APPEND% api.m.jd.com, api.smart.jd.com, homepage-gw.jd.com, guide-acs.m.taobao.com, trade-acs.m.taobao.com, acs.m.taobao.com, api.pinduoduo.com, api.yangkeduo.com, wmapi.meituan.com, apimobile.meituan.com, mapi.meituan.com, i.meituan.com, rms.meituan.com, wx.waimai.meituan.com, s3plus.meituan.net, waimai-guide.ele.me, client-api.ele.me, newton-api.ele.me
+hostname = %APPEND% api.m.jd.com, api.smart.jd.com, homepage-gw.jd.com, guide-acs.m.taobao.com, trade-acs.m.taobao.com, acs.m.taobao.com, acs.m.cainiao.com, gw.cainiao.com, app.fcbox.com, wx.fcbox.com, api.fcbox.com, m.fcbox.com, api.pinduoduo.com, api.yangkeduo.com, wmapi.meituan.com, apimobile.meituan.com, mapi.meituan.com, i.meituan.com, rms.meituan.com, wx.waimai.meituan.com, s3plus.meituan.net, waimai-guide.ele.me, client-api.ele.me, newton-api.ele.me
 h2 = true

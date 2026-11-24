@@ -1,5 +1,5 @@
 //=======================================================================================
-// NetEase Music Clean — 网易云音乐开屏、首页横幅、搜索热词与评论区广告清理
+// NetEase Music Clean — 网易云音乐开屏、首页横幅、左滑抽屉侧边栏、搜索热词与评论区广告清理
 //
 // 只改明文 JSON 响应（遇到二进制或 eapi 密文自动原样放行），不碰音频流与歌单正文：
 //
@@ -9,7 +9,14 @@
 //     首页发现流与聚合 batch 接口：
 //     - 过滤 blocks[] 里 blockCode="HOMEPAGE_BANNER" 内部的商业广告图 (adid / adInfo / adSource)
 //     - 过滤 blockCode 为 AD_BANNER / HOMEPAGE_AD_* 的纯广告模块
-//     - clean_ui=true 时额外移除直播间 / 语音房 / 播客推广模块 (HOMEPAGE_PODCAST* / *_LIVE* / *_VOICELIST*)
+//     - clean_ui=true（默认开启）时额外移除直播间 / 语音房 / 播客推广模块
+//   左滑抽屉侧边栏（商城、云村有票、云推歌、彩铃、游戏、直播、装扮、借钱等）：
+//     - 网易云左滑菜单由 `/eapi/batch` 或独立接口 `/eapi/sidebar/`、`/eapi/entrance/`、
+//       `/eapi/v1/user/detail`、`/eapi/music-main-sidebar/`、`/eapi/resource/exposure` 下发；
+//     - 清洗 `sidebar` / `sideBar` / `menus` / `sections` / `entranceList` / `modules` 数组，
+//       剔除「商城」「云村有票」「云推歌」「云贝中心」「游戏专区」「直播」「彩铃」「免费听歌」
+//       「音乐推广」「热歌助推」等营销项，仅保留消息中心、创作者中心、黑胶会员（可选）、
+//       设置、夜间模式、定时关闭、音乐闹钟、边听边存等核心工具！
 //   /(eapi|api)/search/(hot|default|suggest)
 //     搜索热词与默认占位词：过滤带 adInfo / alg="ad" / isAd 的商业买榜词
 //   /(eapi|api)/(v1/resource/comments|v2/resource/comments|comment/)
@@ -31,7 +38,6 @@
 
   const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 
-  // Loon 传位置数组或对象，Egern 传 JSON 字符串，三种都兼容。
   let opt = {};
   try {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
@@ -45,7 +51,7 @@
     v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0");
 
   const blockAds = flag(opt.block_ads, true);
-  const cleanUi = flag(opt.clean_ui, false);
+  const cleanUi = flag(opt.clean_ui, true);
   if (!blockAds && !cleanUi) {
     $done({});
     return;
@@ -100,7 +106,7 @@
   };
 
   const AD_BLOCK_CODE_RE = /(?:^|_)(?:AD|ADVERT|COMMERCIAL|PROMOTION)(?:_|$)/i;
-  const UI_CLUTTER_BLOCK_RE = /(?:LIVE|VOICE|PODCAST|LOOK|KTV|MALL|GAME|YUNBEI|VIP_GUIDE)/i;
+  const UI_CLUTTER_BLOCK_RE = /(?:LIVE|VOICE|PODCAST|LOOK|KTV|MALL|GAME|YUNBEI|VIP_GUIDE|TICKET|PUSH_SONG)/i;
 
   const isAdBlock = (block) => {
     if (!isObj(block)) return false;
@@ -113,13 +119,102 @@
     return false;
   };
 
+  // ---------- 左滑抽屉侧边栏 (Sidebar / Drawer) 营销项判定 ----------
+  // 目标剔除：商城、云村有票、云推歌、热歌助推、音乐推、云贝中心、游戏专区、云村直播/LOOK直播、
+  // 彩铃专区、口袋彩铃、免费听歌、借钱/金融、网盘推广、在线听歌免流量、优惠券/我的订单等。
+  const SIDEBAR_CLUTTER_TITLE_RE =
+    /商城|有票|演出|云推歌|推歌|音乐推|热歌助推|火前留名|云贝|游戏|直播|语音房|K歌|歌房|相亲|交友|彩铃|免费听|领会员|赚云贝|做任务|福利|抽奖|借钱|贷款|白条|信用卡|王卡|免流量|优惠券|礼品卡|周边|黑胶时光机|听歌识曲推广|多多|特惠/;
+  const SIDEBAR_CLUTTER_CODE_RE =
+    /(?:^|_|-)(?:mall|store|shop|ticket|show|yuntuige|push_song|song_push|yunbei|game|live|look|voice|ktv|ringtone|cailing|free_listen|task|welfare|loan|finance|free_flow|coupon|order|ad|banner|promo)(?:$|_|-)/i;
+
+  const isSidebarClutterItem = (item) => {
+    if (!isObj(item)) return false;
+    if (blockAds && (truthy(item.isAd) || truthy(item.is_ad) || nonEmptyObj(item.adInfo) || item.adid)) {
+      return true;
+    }
+    if (!cleanUi) return false;
+    const title = String(
+      item.title || item.name || item.text || item.mainTitle || item.label || item.showName || item.desc || ""
+    ).trim();
+    const code = String(
+      item.id || item.code || item.itemType || item.bizType || item.type || item.actionType || item.key || ""
+    ).trim();
+    const urlStr = String(item.url || item.actionUrl || item.scheme || item.orpheus || item.targetUrl || "");
+
+    if (title && SIDEBAR_CLUTTER_TITLE_RE.test(title)) return true;
+    if (code && SIDEBAR_CLUTTER_CODE_RE.test(code)) return true;
+    if (
+      urlStr &&
+      /(?:store\/product|music\.163\.com\/store|show\/detail|ticket|yuntuige|pushsong|yunbei|look\.163\.com|game\.163)/i.test(
+        urlStr
+      )
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  // 递归清理左滑侧边栏的分组列表与子菜单
+  const cleanSidebarArray = (holder, key) => {
+    if (!isObj(holder) || !Array.isArray(holder[key]) || !holder[key].length) return;
+    const list = holder[key];
+    const kept = [];
+    let modified = false;
+
+    for (const item of list) {
+      if (!isObj(item)) {
+        kept.push(item);
+        continue;
+      }
+      if (isSidebarClutterItem(item)) {
+        modified = true;
+        continue;
+      }
+      // 如果 item 是一个分组（如「音乐服务」「其他」分组，内部带 items / list / children / entrances / menus）
+      for (const subKey of ["items", "list", "children", "entrances", "entranceList", "menus", "cells", "services"]) {
+        if (Array.isArray(item[subKey]) && item[subKey].length) {
+          const subKept = item[subKey].filter((sub) => !isObj(sub) || !isSidebarClutterItem(sub));
+          if (subKept.length !== item[subKey].length) {
+            modified = true;
+            item[subKey] = subKept;
+          }
+        }
+      }
+      // 如果某个分组（「音乐服务」那栏本身就是商城/有票/云推歌/彩铃）被删空了，整个分组壳子也一并拿掉
+      const hasEmptySubList = ["items", "list", "children", "entrances", "entranceList", "menus", "cells", "services"].some(
+        (k) => Array.isArray(item[k]) && item[k].length === 0
+      );
+      if (hasEmptySubList) {
+        modified = true;
+        continue;
+      }
+      kept.push(item);
+    }
+
+    if (modified) {
+      holder[key] = kept;
+      changed = true;
+    }
+  };
+
   // 处理单个数据节点（支持直接接口响应，也支持 /batch 接口里每个子路径对应的字典值）
   const cleanNode = (node) => {
     if (!isObj(node)) return;
 
     // 1. 纯广告字段清理
     if (blockAds) {
-      for (const k of ["ads", "adInfo", "adList", "loadingAd", "splashAd", "pendantData", "topAd", "floatAd"]) {
+      for (const k of [
+        "ads",
+        "adInfo",
+        "adList",
+        "loadingAd",
+        "splashAd",
+        "pendantData",
+        "topAd",
+        "floatAd",
+        "vipPro",
+        "redPacket",
+      ]) {
         if (Array.isArray(node[k]) && node[k].length) {
           node[k] = [];
           changed = true;
@@ -153,7 +248,6 @@
           blockModified = true;
           continue;
         }
-        // HOMEPAGE_BANNER 内部裝在 extInfo.banners 里
         if (blockAds && isObj(block.extInfo) && Array.isArray(block.extInfo.banners)) {
           const bList = block.extInfo.banners;
           const bKept = bList.filter((b) => !isBannerAd(b));
@@ -166,7 +260,6 @@
             blockModified = true;
           }
         }
-        // creatives 数组里的推广卡
         if (blockAds && Array.isArray(block.creatives) && block.creatives.length) {
           const cKept = block.creatives.filter(
             (c) => !isObj(c) || (!c.adInfo && !c.adid && !truthy(c.isAd) && c.creativeType !== "AD")
@@ -188,7 +281,39 @@
       }
     }
 
-    // 4. 搜索热词与默认搜索词
+    // 4. 左滑抽屉侧边栏 (Sidebar / Drawer: 商城、云村有票、云推歌、彩铃、直播、游戏)
+    for (const sHolder of [node, d, isObj(d.data) ? d.data : null]) {
+      if (!isObj(sHolder)) continue;
+      for (const sKey of [
+        "sidebar",
+        "sideBar",
+        "sidebarList",
+        "menus",
+        "menuList",
+        "sections",
+        "sectionList",
+        "entranceList",
+        "entrances",
+        "modules",
+        "moduleList",
+        "services",
+        "cells",
+        "items",
+      ]) {
+        cleanSidebarArray(sHolder, sKey);
+      }
+      // 侧边栏顶部的黑胶 VIP 续费广告横幅或活动推广卡
+      if (blockAds || cleanUi) {
+        for (const bannerKey of ["topBanner", "bannerInfo", "adBanner", "vipBanner", "activityBanner"]) {
+          if (sHolder[bannerKey] !== undefined && sHolder[bannerKey] !== null) {
+            delete sHolder[bannerKey];
+            changed = true;
+          }
+        }
+      }
+    }
+
+    // 5. 搜索热词与默认搜索词
     if (blockAds && Array.isArray(d.trendingList || d.hot)) {
       const key = Array.isArray(d.trendingList) ? "trendingList" : "hot";
       const list = d[key];
@@ -210,7 +335,7 @@
       }
     }
 
-    // 5. 评论区推广条目与顶部横幅
+    // 6. 评论区推广条目与顶部横幅
     for (const cHolder of [node, d]) {
       if (!isObj(cHolder)) continue;
       if (blockAds) {
@@ -251,7 +376,7 @@
 
     cleanNode(root);
 
-    // /batch 接口的顶层键是以 "/api/..." 开头的子响应对象
+    // /batch 接口的顶层键是以 "/api/..." 或 "/eapi/..." 开头的子响应对象
     for (const key of Object.keys(root)) {
       if (key.indexOf("/api/") === 0 || key.indexOf("/eapi/") === 0) {
         if (blockAds && /\/(?:ad|sp\/loading)\b/i.test(key) && isObj(root[key])) {

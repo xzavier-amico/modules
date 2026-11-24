@@ -3940,19 +3940,54 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     const eleData = JSON.parse(eleOut.body).data;
     assert.equal(eleData.float_ad, undefined);
     assert.deepEqual(eleData.items.map((i) => i.id), ["e1"]);
+
+    // 菜鸟裹裹 MTOP 与丰巢取件页弹窗/横幅清理
+    const cnBody = JSON.stringify({
+      data: {
+        homePopup: { id: 1 },
+        bannerList: [{ id: 1 }],
+        modules: [
+          { moduleCode: "express_list", title: "我的包裹" },
+          { moduleCode: "ad_banner", title: "广告" },
+          { moduleCode: "orchard_welfare", title: "免费领水果" },
+        ],
+      },
+    });
+    const cnOut = JSON.parse(run(file, cnBody, "https://acs.m.cainiao.com/gw/mtop.cainiao.guoguo.nbnetflow.ads.show/1.0/").body).data;
+    assert.equal(cnOut.homePopup, undefined);
+    assert.equal(cnOut.bannerList, undefined);
+
+    const cnHomeOut = JSON.parse(run(file, cnBody, "https://acs.m.cainiao.com/gw/mtop.cainiao.app.home/1.0/").body).data;
+    assert.deepEqual(cnHomeOut.modules.map((m) => m.moduleCode), ["express_list"]);
+
+    const fcBody = JSON.stringify({
+      code: 0,
+      data: {
+        adList: [{ id: 1 }],
+        popup: { show: true },
+        bannerList: [{ id: 2 }],
+        expressInfo: { pickCode: "888888" },
+      },
+    });
+    const fcOut = JSON.parse(run(file, fcBody, "https://app.fcbox.com/box/v1/pickup/detail").body).data;
+    assert.deepEqual(fcOut.adList, []);
+    assert.deepEqual(fcOut.popup, {});
+    assert.deepEqual(fcOut.bannerList, []);
+    assert.equal(fcOut.expressInfo.pickCode, "888888");
   });
 }
 
-// Weibo Clean：微博时间线、评论区、发现热搜与开屏三端回归。
+// Weibo Clean：微博时间线、评论区、发现热搜、我的页全方位净化与开屏三端回归。
 for (const platform of ["loon", "egern", "shadowrocket"]) {
   const file = platform + "/weibo/js/weibo_clean.js";
 
-  check(platform + " weibo: filters timeline promoted mblogs, comment ads and commercial hot-search", () => {
-    const tlBody = '{"statuses":[{"id":4987654321012345678,"text":"正常微博"},{"id":4987654321012345679,"mblogtypename":"广告","promotion":{"ad":"1"}},{"id":4987654321012345680,"readtimetype":"adMblog"}],"advertises":[{"id":1}]}';
+  check(platform + " weibo: filters timeline promoted mblogs, comment ads, commercial hot-search and profile clutter", () => {
+    const tlBody = '{"statuses":[{"id":4987654321012345678,"text":"正常微博","common_struct":[{"name":"商品同款"}]},{"id":4987654321012345679,"mblogtypename":"广告","promotion":{"ad":"1"}},{"id":4987654321012345680,"readtimetype":"adMblog"}],"advertises":[{"id":1}]}';
     const tlOut = run(file, tlBody, "https://api.weibo.cn/2/statuses/unread_hot_timeline?gsid=1");
     assert.ok(tlOut.body && tlOut.body.includes("4987654321012345678"));
     const tl = JSON.parse(tlOut.body);
     assert.equal(tl.statuses.length, 1);
+    assert.equal(tl.statuses[0].common_struct, undefined);
     assert.deepEqual(tl.advertises, []);
 
     const cmtBody = JSON.stringify({
@@ -3982,6 +4017,33 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     const searchOut = JSON.parse(run(file, searchBody, "https://api.weibo.cn/2/search/finder").body);
     assert.equal(searchOut.cards.length, 1);
     assert.deepEqual(searchOut.cards[0].card_group.map((g) => g.desc), ["正常热搜"]);
+
+    // 微博「我的」页默认净化：删掉轮播 banner、我的钱包、借钱、游戏，只留头像和我的相册/赞/收藏
+    const profileBody = JSON.stringify({
+      vip_center: { id: 1 },
+      items: [
+        { itemId: "profile_mine_header", data: { card_type: 1, title: "个人头像" } },
+        {
+          itemId: "mine_grid",
+          data: {
+            card_type: 17,
+            elements: [
+              { title_sub: "我的相册", scheme: "sinaweibo://album" },
+              { title_sub: "我的赞", scheme: "sinaweibo://like" },
+              { title_sub: "借钱", scheme: "sinaweibo://finance" },
+              { title_sub: "游戏中心", scheme: "sinaweibo://game" },
+            ],
+          },
+        },
+        { itemId: "mine_banner_ad", data: { card_type: 118, title: "活动轮播图" } },
+        { itemId: "mine_wallet", data: { card_type: 11, title: "我的钱包" } },
+        { itemId: "mine_hot_service", data: { card_type: 11, title: "推荐服务" } },
+      ],
+    });
+    const profOut = JSON.parse(run(file, profileBody, "https://api.weibo.cn/2/profile/me").body);
+    assert.equal(profOut.vip_center, undefined);
+    assert.deepEqual(profOut.items.map((x) => x.itemId), ["profile_mine_header", "mine_grid"]);
+    assert.deepEqual(profOut.items[1].data.elements.map((e) => e.title_sub), ["我的相册", "我的赞"]);
   });
 }
 
@@ -4007,11 +4069,11 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
   });
 }
 
-// NetEase Music Clean：网易云音乐 batch / 首页横幅 / 搜索热词 / 评论区三端回归。
+// NetEase Music Clean：网易云音乐 batch / 首页横幅 / 左滑侧边栏（商城、云村有票、云推歌） / 搜索热词 / 评论区三端回归。
 for (const platform of ["loon", "egern", "shadowrocket"]) {
   const file = platform + "/netease/js/netease_clean.js";
 
-  check(platform + " netease: filters homepage ad banners, live blocks, hot search ads and comment ads", () => {
+  check(platform + " netease: filters homepage ad banners, live blocks, left-drawer sidebar (商城/云村有票/云推歌) and comment ads", () => {
     const batchBody = JSON.stringify({
       code: 200,
       "/api/ad/get": { ads: [{ id: 1 }], data: { ad: 1 } },
@@ -4032,17 +4094,47 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
           ],
         },
       },
+      "/api/music-main-sidebar/get": {
+        data: {
+          topBanner: { id: "vip_ad" },
+          sections: [
+            {
+              title: "个人与工具",
+              items: [
+                { title: "我的消息", code: "msg" },
+                { title: "定时关闭", code: "timer" },
+                { title: "云贝中心", code: "yunbei" },
+              ],
+            },
+            {
+              title: "音乐服务",
+              items: [
+                { title: "商城", code: "mall" },
+                { title: "云村有票", code: "ticket" },
+                { title: "云推歌", code: "yuntuige" },
+                { title: "彩铃专区", code: "ringtone" },
+              ],
+            },
+          ],
+        },
+      },
     });
     const url = "https://interface3.music.163.com/eapi/batch";
-    const outDefault = JSON.parse(run(file, batchBody, url, { block_ads: true, clean_ui: false }).body);
+    // 默认 clean_ui=true：左滑菜单的商城/云村有票/云推歌整个分组被清空移除，仅保留我的消息与定时关闭
+    const outDefault = JSON.parse(run(file, batchBody, url).body);
     assert.deepEqual(outDefault["/api/ad/get"].ads, []);
     const blocksDefault = outDefault["/api/homepage/block/page"].data.blocks;
-    assert.deepEqual(blocksDefault.map((b) => b.blockCode), ["HOMEPAGE_BANNER", "HOMEPAGE_PODCAST_LIVE"]);
+    assert.deepEqual(blocksDefault.map((b) => b.blockCode), ["HOMEPAGE_BANNER"]);
     assert.deepEqual(blocksDefault[0].extInfo.banners.map((b) => b.bannerId), ["ok1"]);
 
-    const outClean = JSON.parse(run(file, batchBody, url, { block_ads: true, clean_ui: true }).body);
-    const blocksClean = outClean["/api/homepage/block/page"].data.blocks;
-    assert.deepEqual(blocksClean.map((b) => b.blockCode), ["HOMEPAGE_BANNER"]);
+    const sidebarDefault = outDefault["/api/music-main-sidebar/get"].data;
+    assert.equal(sidebarDefault.topBanner, undefined);
+    assert.equal(sidebarDefault.sections.length, 1, "entire 音乐服务 section of 商城/云村有票/云推歌 must be dropped when emptied");
+    assert.deepEqual(sidebarDefault.sections[0].items.map((i) => i.title), ["我的消息", "定时关闭"]);
+
+    const outNoCleanUi = JSON.parse(run(file, batchBody, url, { block_ads: true, clean_ui: false }).body);
+    const blocksNoClean = outNoCleanUi["/api/homepage/block/page"].data.blocks;
+    assert.deepEqual(blocksNoClean.map((b) => b.blockCode), ["HOMEPAGE_BANNER", "HOMEPAGE_PODCAST_LIVE"]);
   });
 }
 

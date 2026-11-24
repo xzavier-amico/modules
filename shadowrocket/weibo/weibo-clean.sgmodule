@@ -1,9 +1,9 @@
 #!name=Weibo Clean
-#!desc=微博去开屏、时间线推广、评论区软广与商业热搜。
+#!desc=微博去开屏、时间线推广、评论区软广、商业热搜与「我的」页营销卡片。
 #!author=xzavier-amico
 #!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/weibo.png
-#!arguments=去广告:true, 精简我的页:false
-#!arguments-desc=去广告：过滤微博开屏、推荐/关注时间线、评论区软广及发现页商业热搜。\n精简我的页：在「我的」页额外隐藏钱包、借钱、游戏等营销服务卡片。
+#!arguments=去广告:true, 净化我的页:true
+#!arguments-desc=去广告：过滤微博开屏、推荐/关注时间线、评论区软广、发现页商业热搜及活动横幅。\n净化我的页：在「我的」页隐藏我的钱包、借钱、微贷、游戏、直播、免费小说、商城等杂乱营销卡片。
 
 [Rule]
 AND,((DOMAIN-SUFFIX,weibo.cn),(PROTOCOL,QUIC)),REJECT
@@ -33,8 +33,11 @@ DOMAIN,zymo.mps.weibo.com,REJECT
 ^https?:\/\/(?:api|m)\.weibo\.cn\/2\/(?:ad|sdk|preload)\/ reject-dict
 ^https?:\/\/api\.weibo\.cn\/2\/statuses\/unread_hot_timeline_ad\b reject-dict
 
+[Header Rewrite]
+http-request ^https?:\/\/(?:api|m|mapi)\.weibo\.c(?:n|om)\/2\/(?:profile\/|search\/|page|cardlist) header-del if-none-match
+
 [Script]
-weibo.clean = type=http-response,pattern=^https?:\/\/(?:api|m|mapi)\.weibo\.c(?:n|om)\/(?:wbapplua\/wbpullad\.lua|2\/(?:push\/active|statuses\/(?:unread_hot_timeline|friends_timeline|container_timeline|bilateral_timeline|extend)|groups\/timeline|video\/tiny_stream_video_list|comments\/build_comments|search\/(?:finder|container_timeline|container_discover)|page|cardlist|profile\/me))(?:[/?]|$),requires-body=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/weibo/js/weibo_clean.js?v=20261123-1,argument="{"block_ads":{{{去广告}}},"clean_ui":{{{精简我的页}}}}"
+weibo.clean = type=http-response,pattern=^https?:\/\/(?:api|m|mapi)\.weibo\.c(?:n|om)\/(?:wbapplua\/wbpullad\.lua|2\/(?:push\/active|client\/|checkin\/|statuses\/|groups\/timeline|video\/|comments\/build_comments|search\/|page|cardlist|profile\/)),requires-body=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/weibo/js/weibo_clean.js?v=20261123-2,argument="{"block_ads":{{{去广告}}},"clean_ui":{{{净化我的页}}}}"
 
 [MITM]
 hostname = %APPEND% api.weibo.cn, m.weibo.cn, mapi.weibo.com, sdkapp.uve.weibo.com

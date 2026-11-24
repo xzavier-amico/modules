@@ -1,25 +1,25 @@
 #=======================================================================================
 # Shopping Clean — Egern 模块
 #
-# 京东、淘宝、拼多多、美团、饿了么去开屏、弹窗浮层与信息流竞价推广卡片。
+# 京东、淘宝、拼多多、美团、饿了么、菜鸟裹裹、丰巢去开屏、弹窗浮层与信息流竞价推广卡片。
 #=======================================================================================
 
 name: "Shopping Clean"
-description: "京东、淘宝、拼多多、美团、饿了么去开屏、弹窗浮层与信息流竞价推广卡片。"
+description: "京东、淘宝、拼多多、美团、饿了么、菜鸟裹裹、丰巢去开屏、弹窗浮层与信息流竞价推广卡片。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"
 icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/delivery.png"
 
 env_schema:
   block_ads:
-    name: "去购物与外卖广告"
-    description: "过滤京东、淘宝、拼多多、美团、饿了么的开屏、弹窗浮层与搜索/推荐流里的 CPC/CPM/P4P 竞价广告"
+    name: "去购物与快递广告"
+    description: "过滤京东、淘宝、拼多多、美团、饿了么、菜鸟裹裹、丰巢的开屏、取件页弹窗浮层与搜索/推荐流里的 CPC/CPM/P4P 竞价广告"
     default_value: "true"
     options: ["true", "false"]
   clean_ui:
     name: "精简金融与娱乐模块"
-    description: "额外隐藏京东白条/金条/借钱、淘宝借钱/小游戏、拼多多多多视频/大转盘等营销入口"
-    default_value: "false"
+    description: "隐藏京东白条/金条/借钱、淘宝借钱/小游戏、拼多多多多视频/大转盘、菜鸟裹酱/果园/商品流等营销模块"
+    default_value: "true"
     options: ["true", "false"]
 
 rules:
@@ -41,6 +41,20 @@ rules:
       match:
         - domain_suffix:
             match: "tmall.com"
+        - protocol:
+            match: quic
+      policy: REJECT
+  - and:
+      match:
+        - domain_suffix:
+            match: "cainiao.com"
+        - protocol:
+            match: quic
+      policy: REJECT
+  - and:
+      match:
+        - domain_suffix:
+            match: "fcbox.com"
         - protocol:
             match: quic
       policy: REJECT
@@ -179,6 +193,21 @@ rules:
       match: "tunion-api.m.taobao.com"
       policy: REJECT
   - domain_suffix:
+      match: "adash.cainiao.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "log.cainiao.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "dsp.fcbox.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "ad.fcbox.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "track.fcbox.com"
+      policy: REJECT
+  - domain_suffix:
       match: "t-dsp.pinduoduo.com"
       policy: REJECT
   - domain_suffix:
@@ -258,7 +287,11 @@ url_rewrites:
     location: "http://reject-dict/"
   - match: "^https?:\\/\\/api\\.smart\\.jd\\.com\\/c\\/service\\/getLoadingLinks\\b"
     location: "http://reject-dict/"
-  - match: "^https?:\\/\\/(?:guide-acs|acs)\\.m\\.taobao\\.com\\/gw\\/mtop\\.(?:taobao\\.baichuan\\.smb\\.get|taobao\\.idle\\.home\\.welcome|alimama\\.etao\\.ad|taobao\\.ad)\\."
+  - match: "^https?:\\/\\/(?:guide-acs|acs)\\.m\\.taobao\\.com\\/gw\\/mtop\\.(?:taobao\\.baichuan\\.smb\\.get|taobao\\.idle\\.home\\.welcome|alimama\\.etao\\.ad|taobao\\.ad|cainiao\\.adx|cainiao\\.guoguo\\.nbnetflow\\.ads)\\."
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/(?:acs\\.m|gw)\\.cainiao\\.com\\/gw\\/mtop\\.cainiao\\.(?:adx|ad|guoguo\\.nbnetflow\\.ads|nbmensa\\.research)\\."
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/(?:app|wx|api|m)\\.fcbox\\.com\\/.*\\/(?:ad|ads|advert|splash|openScreen|popup|marketing)(?:\\/|[?]|$)"
     location: "http://reject-dict/"
   - match: "^https?:\\/\\/api\\.(?:pinduoduo|yangkeduo)\\.com\\/api\\/(?:oak\\/integration\\/render|carnival\\/image_list|cappuccino\\/splash)"
     location: "http://reject-dict/"
@@ -278,8 +311,8 @@ url_rewrites:
 scriptings:
   - http_response:
       name: "shopping.clean"
-      match: "^https?:\\/\\/(?:api\\.m\\.jd\\.com\\/(?:client\\.action|api)|(?:guide-acs|trade-acs|acs)\\.m\\.taobao\\.com\\/gw\\/mtop\\.|api\\.(?:pinduoduo|yangkeduo)\\.com\\/(?:api\\/|search|v\\d+\\/)|(?:wmapi|apimobile|mapi|i)\\.meituan\\.com\\/|wx\\.waimai\\.meituan\\.com\\/weapp\\/|(?:waimai-guide|client-api|newton-api)\\.ele\\.me\\/)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/delivery/js/delivery_clean.js?v=20261123-2"
+      match: "^https?:\\/\\/(?:api\\.m\\.jd\\.com\\/(?:client\\.action|api)|(?:guide-acs|trade-acs|acs)\\.m\\.taobao\\.com\\/gw\\/mtop\\.|(?:acs\\.m|gw)\\.cainiao\\.com\\/gw\\/mtop\\.|(?:app|wx|api|m)\\.fcbox\\.com\\/|api\\.(?:pinduoduo|yangkeduo)\\.com\\/(?:api\\/|search|v\\d+\\/)|(?:wmapi|apimobile|mapi|i)\\.meituan\\.com\\/|wx\\.waimai\\.meituan\\.com\\/weapp\\/|(?:waimai-guide|client-api|newton-api)\\.ele\\.me\\/)"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/delivery/js/delivery_clean.js?v=20261123-3"
       body_required: true
       max_size: 8388608
       timeout: 20
@@ -293,6 +326,12 @@ mitm:
       - "guide-acs.m.taobao.com"
       - "trade-acs.m.taobao.com"
       - "acs.m.taobao.com"
+      - "acs.m.cainiao.com"
+      - "gw.cainiao.com"
+      - "app.fcbox.com"
+      - "wx.fcbox.com"
+      - "api.fcbox.com"
+      - "m.fcbox.com"
       - "api.pinduoduo.com"
       - "api.yangkeduo.com"
       - "wmapi.meituan.com"

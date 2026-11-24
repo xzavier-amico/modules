@@ -1,5 +1,5 @@
 #!name=Shopping Clean
-#!desc=京东、淘宝、拼多多、美团、饿了么去开屏、弹窗浮层与信息流竞价推广卡片。
+#!desc=京东、淘宝、拼多多、美团、饿了么、菜鸟裹裹、丰巢去开屏、弹窗浮层与信息流竞价推广卡片。
 #!category=Shopping
 #!author=xzavier-amico
 #!homepage=https://github.com/xzavier-amico/modules
@@ -7,14 +7,16 @@
 #!tag=Shopping
 
 [Argument]
-block_ads = switch,true,type=boolean,tag=去购物与外卖广告,desc=过滤京东、淘宝、拼多多、美团、饿了么的开屏、弹窗浮层与搜索/推荐流里的 CPC/CPM/P4P 竞价广告。
-clean_ui = switch,false,type=boolean,tag=精简金融与娱乐模块,desc=额外隐藏京东白条/金条/借钱、淘宝借钱/小游戏、拼多多多多视频/大转盘等营销入口。
+block_ads = switch,true,type=boolean,tag=去购物与快递广告,desc=过滤京东、淘宝、拼多多、美团、饿了么、菜鸟裹裹、丰巢的开屏、取件页弹窗浮层与搜索/推荐流里的 CPC/CPM/P4P 竞价广告。
+clean_ui = switch,true,type=boolean,tag=精简金融与娱乐模块,desc=隐藏京东白条/金条/借钱、淘宝借钱/小游戏、拼多多多多视频/大转盘、菜鸟裹酱/果园/商品流等营销模块。
 
 [Rule]
 # 阻止 QUIC (HTTP/3)，确保未开全局禁 QUIC 的客户端也能回退 HTTPS 走 MITM
 AND, ((DOMAIN-SUFFIX, jd.com), (PROTOCOL, QUIC)), REJECT
 AND, ((DOMAIN-SUFFIX, taobao.com), (PROTOCOL, QUIC)), REJECT
 AND, ((DOMAIN-SUFFIX, tmall.com), (PROTOCOL, QUIC)), REJECT
+AND, ((DOMAIN-SUFFIX, cainiao.com), (PROTOCOL, QUIC)), REJECT
+AND, ((DOMAIN-SUFFIX, fcbox.com), (PROTOCOL, QUIC)), REJECT
 AND, ((DOMAIN-SUFFIX, pinduoduo.com), (PROTOCOL, QUIC)), REJECT
 AND, ((DOMAIN-SUFFIX, yangkeduo.com), (PROTOCOL, QUIC)), REJECT
 AND, ((DOMAIN-SUFFIX, meituan.com), (PROTOCOL, QUIC)), REJECT
@@ -45,10 +47,10 @@ DOMAIN, saturn.jd.com, REJECT
 DOMAIN, uranus.jd.com, REJECT
 DOMAIN, xlog.jd.com, REJECT
 
-# ---------- 淘宝 / 天猫 / 阿里妈妈广告与统计域名 ----------
+# ---------- 淘宝 / 天猫 / 菜鸟裹裹 / 阿里妈妈广告与统计域名 ----------
 DOMAIN-SUFFIX, atanja.tanx.com, REJECT
 DOMAIN-SUFFIX, tanx.com, REJECT
-DOMAIN-SUFFIX,alimama.com, REJECT
+DOMAIN-SUFFIX, alimama.com, REJECT
 DOMAIN-SUFFIX, simba.taobao.com, REJECT
 DOMAIN-SUFFIX, re.taobao.com, REJECT
 DOMAIN-SUFFIX, agoodm.m.taobao.com, REJECT
@@ -57,6 +59,13 @@ DOMAIN-SUFFIX, h-adashx.ut.taobao.com, REJECT
 DOMAIN-SUFFIX, v6-adashx.ut.taobao.com, REJECT
 DOMAIN-SUFFIX, ut.taobao.com, REJECT
 DOMAIN-SUFFIX, tunion-api.m.taobao.com, REJECT
+DOMAIN-SUFFIX, adash.cainiao.com, REJECT
+DOMAIN-SUFFIX, log.cainiao.com, REJECT
+
+# ---------- 丰巢广告与 DSP 域名 ----------
+DOMAIN-SUFFIX, dsp.fcbox.com, REJECT
+DOMAIN-SUFFIX, ad.fcbox.com, REJECT
+DOMAIN-SUFFIX, track.fcbox.com, REJECT
 
 # ---------- 拼多多广告与遥测域名 ----------
 DOMAIN-SUFFIX, t-dsp.pinduoduo.com, REJECT
@@ -92,8 +101,12 @@ request if ${url} ~= /^https?:\/\/api\.m\.jd\.com\/(?:client\.action|api)\?.*fun
 request if ${url} ~= /^https?:\/\/homepage-gw\.jd\.com\/npromotion/ then reject_dict(200)
 request if ${url} ~= /^https?:\/\/api\.smart\.jd\.com\/c\/service\/getLoadingLinks\b/ then reject_dict(200)
 
-# 淘宝开屏与弹窗纯广告接口
-request if ${url} ~= /^https?:\/\/(?:guide-acs|acs)\.m\.taobao\.com\/gw\/mtop\.(?:taobao\.baichuan\.smb\.get|taobao\.idle\.home\.welcome|alimama\.etao\.ad|taobao\.ad)\./ then reject_dict(200)
+# 淘宝与菜鸟裹裹开屏、弹窗及纯广告 MTOP 接口
+request if ${url} ~= /^https?:\/\/(?:guide-acs|acs)\.m\.taobao\.com\/gw\/mtop\.(?:taobao\.baichuan\.smb\.get|taobao\.idle\.home\.welcome|alimama\.etao\.ad|taobao\.ad|cainiao\.adx|cainiao\.guoguo\.nbnetflow\.ads)\./ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/(?:acs\.m|gw)\.cainiao\.com\/gw\/mtop\.cainiao\.(?:adx|ad|guoguo\.nbnetflow\.ads|nbmensa\.research)\./ then reject_dict(200)
+
+# 丰巢开屏、取件弹窗与横幅广告接口
+request if ${url} ~= /^https?:\/\/(?:app|wx|api|m)\.fcbox\.com\/.*\/(?:ad|ads|advert|splash|openScreen|popup|marketing)(?:\/|[?]|$)/ then reject_dict(200)
 
 # 拼多多开屏与弹窗接口
 request if ${url} ~= /^https?:\/\/api\.(?:pinduoduo|yangkeduo)\.com\/api\/(?:oak\/integration\/render|carnival\/image_list|cappuccino\/splash)/ then reject_dict(200)
@@ -107,9 +120,9 @@ request if ${url} ~= /^https?:\/\/s3plus\.meituan\.net\/v1\/mss_[^/]+\/linglong\
 request if ${url} ~= /^https?:\/\/waimai-guide\.ele\.me\/h5\/mtop\.alsc\.waimai\.ad\./ then reject_dict(200)
 
 [Script]
-# 兼容京东 POST body 传 functionId（不限制 URL query 必带 functionId）、淘宝 MTOP、拼多多、美团及饿了么
-response if ${url} ~= /^https?:\/\/(?:api\.m\.jd\.com\/(?:client\.action|api)|(?:guide-acs|trade-acs|acs)\.m\.taobao\.com\/gw\/mtop\.|api\.(?:pinduoduo|yangkeduo)\.com\/(?:api\/|search|v\d+\/)|(?:wmapi|apimobile|mapi|i)\.meituan\.com\/|wx\.waimai\.meituan\.com\/weapp\/|(?:waimai-guide|client-api|newton-api)\.ele\.me\/)/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/delivery/js/delivery_clean.js?v=20261123-2", {${block_ads}, ${clean_ui}}) with requires_body=true, tag="Shopping Clean", timeout=20
+# 兼容京东 POST body 传 functionId、淘宝/菜鸟 MTOP、丰巢、拼多多、美团及饿了么
+response if ${url} ~= /^https?:\/\/(?:api\.m\.jd\.com\/(?:client\.action|api)|(?:guide-acs|trade-acs|acs)\.m\.taobao\.com\/gw\/mtop\.|(?:acs\.m|gw)\.cainiao\.com\/gw\/mtop\.|(?:app|wx|api|m)\.fcbox\.com\/|api\.(?:pinduoduo|yangkeduo)\.com\/(?:api\/|search|v\d+\/)|(?:wmapi|apimobile|mapi|i)\.meituan\.com\/|wx\.waimai\.meituan\.com\/weapp\/|(?:waimai-guide|client-api|newton-api)\.ele\.me\/)/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/delivery/js/delivery_clean.js?v=20261123-3", {${block_ads}, ${clean_ui}}) with requires_body=true, tag="Shopping Clean", timeout=20
 
 [MitM]
-hostname = api.m.jd.com, api.smart.jd.com, homepage-gw.jd.com, guide-acs.m.taobao.com, trade-acs.m.taobao.com, acs.m.taobao.com, api.pinduoduo.com, api.yangkeduo.com, wmapi.meituan.com, apimobile.meituan.com, mapi.meituan.com, i.meituan.com, rms.meituan.com, wx.waimai.meituan.com, s3plus.meituan.net, waimai-guide.ele.me, client-api.ele.me, newton-api.ele.me
+hostname = api.m.jd.com, api.smart.jd.com, homepage-gw.jd.com, guide-acs.m.taobao.com, trade-acs.m.taobao.com, acs.m.taobao.com, acs.m.cainiao.com, gw.cainiao.com, app.fcbox.com, wx.fcbox.com, api.fcbox.com, m.fcbox.com, api.pinduoduo.com, api.yangkeduo.com, wmapi.meituan.com, apimobile.meituan.com, mapi.meituan.com, i.meituan.com, rms.meituan.com, wx.waimai.meituan.com, s3plus.meituan.net, waimai-guide.ele.me, client-api.ele.me, newton-api.ele.me
 h2 = true

@@ -1,11 +1,11 @@
 #=======================================================================================
 # Weibo Clean — Egern 模块
 #
-# 微博去开屏、时间线推广、评论区软广与商业热搜。
+# 微博去开屏、时间线推广、评论区软广、商业热搜与「我的」页营销卡片。
 #=======================================================================================
 
 name: "Weibo Clean"
-description: "微博去开屏、时间线推广、评论区软广与商业热搜。"
+description: "微博去开屏、时间线推广、评论区软广、商业热搜与「我的」页营销卡片。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"
 icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/weibo.png"
@@ -13,13 +13,13 @@ icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/weibo
 env_schema:
   block_ads:
     name: "去广告"
-    description: "过滤微博开屏、推荐/关注时间线、评论区软广及发现页商业热搜"
+    description: "过滤微博开屏、推荐/关注时间线、评论区软广、发现页商业热搜及活动横幅"
     default_value: "true"
     options: ["true", "false"]
   clean_ui:
-    name: "精简我的页"
-    description: "在「我的」页额外隐藏钱包、借钱、游戏等营销服务卡片"
-    default_value: "false"
+    name: "净化我的页"
+    description: "在「我的」页隐藏我的钱包、借钱、微贷、游戏、直播、免费小说、商城等杂乱营销卡片"
+    default_value: "true"
     options: ["true", "false"]
 
 rules:
@@ -107,11 +107,17 @@ url_rewrites:
   - match: "^https?:\\/\\/api\\.weibo\\.cn\\/2\\/statuses\\/unread_hot_timeline_ad\\b"
     location: "http://reject-dict/"
 
+header_rewrites:
+  - delete:
+      match: "^https?:\\/\\/(?:api|m|mapi)\\.weibo\\.c(?:n|om)\\/2\\/(?:profile\\/|search\\/|page|cardlist)"
+      name: "if-none-match"
+      type: "request"
+
 scriptings:
   - http_response:
       name: "weibo.clean"
-      match: "^https?:\\/\\/(?:api|m|mapi)\\.weibo\\.c(?:n|om)\\/(?:wbapplua\\/wbpullad\\.lua|2\\/(?:push\\/active|statuses\\/(?:unread_hot_timeline|friends_timeline|container_timeline|bilateral_timeline|extend)|groups\\/timeline|video\\/tiny_stream_video_list|comments\\/build_comments|search\\/(?:finder|container_timeline|container_discover)|page|cardlist|profile\\/me))(?:[/?]|$)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/weibo/js/weibo_clean.js?v=20261123-1"
+      match: "^https?:\\/\\/(?:api|m|mapi)\\.weibo\\.c(?:n|om)\\/(?:wbapplua\\/wbpullad\\.lua|2\\/(?:push\\/active|client\\/|checkin\\/|statuses\\/|groups\\/timeline|video\\/|comments\\/build_comments|search\\/|page|cardlist|profile\\/))"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/weibo/js/weibo_clean.js?v=20261123-2"
       body_required: true
       max_size: 8388608
       timeout: 20
