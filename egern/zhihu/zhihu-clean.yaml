@@ -1,11 +1,11 @@
 #=======================================================================================
 # Zhihu Clean — Egern 模块
 #
-# 知乎去开屏、推荐流伪装广告、热榜合作推广、回答页夹层广告与评论区推广（阻断硬编码 IP / HTTPDNS 绕过）。
+# 知乎去开屏、首页推荐流广告与盐选推广、文章/回答底部推文全清（只留点赞/评论栏）及各类漂浮广告（阻断硬编码 IP / HTTPDNS 绕过）。
 #=======================================================================================
 
 name: "Zhihu Clean"
-description: "知乎去开屏、推荐流伪装广告、热榜合作推广、回答页夹层广告与评论区推广。"
+description: "知乎去开屏、首页推荐流广告与盐选推广、文章/回答底部推文全清及各类漂浮广告。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"
 icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/zhihu.png"
@@ -13,13 +13,13 @@ icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/zhihu
 env_schema:
   block_ads:
     name: "去广告"
-    description: "过滤知乎开屏、首页推荐流 feed_advert、热榜合作推广、回答夹层 ad_info 与评论区插件广告"
+    description: "过滤知乎开屏、首页推荐流伪装广告、漂浮广告、热榜合作推广、回答夹层 ad_info 与评论区插件广告"
     default_value: "true"
     options: ["true", "false"]
   clean_ui:
-    name: "过滤盐选推广"
-    description: "额外过滤推荐流里的盐选故事、知乎严选、训练营与付费回答，以及首页冗余活动/直播 Tab"
-    default_value: "false"
+    name: "极简文章底部与去盐选"
+    description: "清空文章/回答底部的推荐推文与相关阅读（只留点赞/评论等操作栏），并过滤推荐流里的盐选故事、训练营、直播与带货卡"
+    default_value: "true"
     options: ["true", "false"]
 
 rules:
@@ -62,30 +62,44 @@ rules:
       policy: REJECT
 
 url_rewrites:
-  - match: "^https?:\\/\\/api\\.zhihu\\.com\\/commercial_api\\/(?:launch_v\\d+|real_time_launch_v\\d+|banners_v\\d+\\/app_topstory_banner|banners|egg_payload|answer\\/\\d+\\/bottom-v2|article\\/\\d+\\/bottom-v2)"
+  - match: "^https?:\\/\\/api\\.zhihu\\.com\\/commercial_api\\/(?:launch_v\\d+|real_time_launch_v\\d+|app_float_layer|ad_float_layer|float\\w*|banners_v\\d+\\/app_topstory_banner|banners|egg_payload|(?:answer|article)\\/\\d+\\/bottom-v\\d+)"
     location: "http://reject-dict/"
-  - match: "^https?:\\/\\/api\\.zhihu\\.com\\/(?:ad-style-service\\/|fringe\\/ad|content-distribution-core\\/bubble\\/common\\/settings|root\\/window|moments\\/lastread|drama\\/hot-drama-list|bazaar\\/float_window|market\\/popovers_v\\d+|me\\/guides)"
+  - match: "^https?:\\/\\/api\\.zhihu\\.com\\/(?:ad(?:-style-service\\/|s\\/|vert\\/|_)|fringe\\/|content-distribution-core\\/(?:bubble|float|pendant|popup|banner)\\/|root\\/window|moments\\/lastread|drama\\/(?:hot-drama-list|living-info)|bazaar\\/float_window|market\\/(?:popovers_v\\d+|float\\w*)|me\\/guides|distribute\\/rhea\\/)"
     location: "http://reject-dict/"
+  - match: "^https?:\\/\\/api\\.zhihu\\.com\\/ab\\/api\\/v\\d+\\/products\\/zhihu\\/platforms\\/ios\\/config"
+    location: "http://reject/"
   - match: "^https?:\\/\\/api\\.zhihu\\.com\\/(?:api\\/v\\d+\\/)?(?:PresetWords|search\\/(?:preset_words|hot_search)|feed\\/render\\/revisit\\/current_reading)"
     location: "http://reject-dict/"
-  - match: "^https?:\\/\\/api\\.zhihu\\.com\\/(?:comment_v\\d+\\/(?:articles|answers)\\/\\d+\\/list-headers|prague\\/related_suggestion_native\\/feed|v\\d+(?:\\.\\d+)?\\/topics\\/answer\\/\\d+\\/relation|\\w+\\/\\d+\\/comments\\/featured-comment-ad|distribute\\/rhea\\/qa_ad_card\\/h5\\/recommendation)"
+  - match: "^https?:\\/\\/api\\.zhihu\\.com\\/(?:comment_v\\d+\\/(?:articles|answers)\\/\\d+\\/list-headers|prague\\/related_suggestion_native\\/feed|v\\d+(?:\\.\\d+)?\\/topics\\/(?:answer|article)\\/\\d+\\/relation|\\w+\\/\\d+\\/comments\\/featured-comment-ad|appview\\/api\\/v\\d+\\/(?:answers|articles)\\/\\d+\\/recommendations?)"
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/(?:api|www)\\.zhihu\\.com\\/(?:api\\/v\\d+\\/|v\\d+\\/)?(?:answers|articles|questions)\\/\\d+\\/(?:recommendations?|related-readings)"
     location: "http://reject-dict/"
   - match: "^https?:\\/\\/api\\.zhihu\\.com\\/unlimited\\/go\\/my_card"
     location: "http://reject/"
   - match: "^https?:\\/\\/appcloud2\\.zhihu\\.com\\/v\\d+\\/resource\\?group_name=mp"
     location: "http://reject-dict/"
-  - match: "^https?:\\/\\/www\\.zhihu\\.com\\/(?:api\\/v\\d+\\/(?:search\\/related_queries\\/(?:answer|article)\\/\\d+|hot_recommendation|mcn\\/v\\d+\\/linkcards|(?:answers|questions)\\/\\d+\\/related-readings)|commercial_api\\/banners_v\\d+\\/mobile_banner)"
+  - match: "^https?:\\/\\/www\\.zhihu\\.com\\/(?:api\\/v\\d+\\/(?:search\\/related_queries\\/(?:answer|article)\\/\\d+|hot_recommendation|mcn\\/v\\d+\\/linkcards)|commercial_api\\/banners_v\\d+\\/mobile_banner|appview\\/v\\d+\\/zhmore)"
     location: "http://reject-dict/"
   - match: "^https?:\\/\\/zhuanlan\\.zhihu\\.com\\/api\\/articles\\/\\d+\\/recommendation"
     location: "http://reject/"
   - match: "^https?:\\/\\/zhstatic\\.zhihu\\.com\\/brand-ad"
     location: "http://reject/"
 
+header_rewrites:
+  - delete:
+      match: "^https?:\\/\\/(?:appcloud2|m-cloud|api|page-info)\\.zhihu\\.com\\/(?:v\\d+\\/config|api\\/cloud\\/config\\/all|(?:answers|articles)\\/v\\d+\\/|next-(?:bff|data|render))"
+      name: "if-none-match"
+      type: "request"
+  - delete:
+      match: "^https?:\\/\\/(?:appcloud2|m-cloud|api|page-info)\\.zhihu\\.com\\/(?:v\\d+\\/config|api\\/cloud\\/config\\/all|(?:answers|articles)\\/v\\d+\\/|next-(?:bff|data|render))"
+      name: "if-modified-since"
+      type: "request"
+
 scriptings:
   - http_response:
       name: "zhihu.clean"
-      match: "^https?:\\/\\/(?:api|www|page-info|appcloud2|m-cloud)\\.zhihu\\.com\\/(?:v\\d+\\/config|api\\/cloud\\/config\\/all|commercial_api\\/app_float_layer|(?:v\\d+\\/)?topstory\\/(?:recommend(?:_v\\d+)?|hot-lists)|moments_v\\d+|feed\\/render\\/tab\\/config|root\\/tab|bazaar\\/vip_tab\\/header|(?:api\\/v\\d+\\/|v\\d+\\/)?(?:questions\\/\\d+\\/(?:answers|feeds)|answers|articles|comment(?:_v\\d+|s)|search)|next-(?:bff|data|render))(?:[/?]|$)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/zhihu/js/zhihu_clean.js?v=20261124-1"
+      match: "^https?:\\/\\/(?:api|www|m|page-info|appcloud2|m-cloud)\\.zhihu\\.com\\/(?:v\\d+\\/config|api\\/cloud\\/config\\/all|commercial_api\\/(?:app|ad)_float_layer|(?:v\\d+\\/|feed\\/)?(?:preload-)?topstory\\/(?:recommend[\\w-]*|hot-lists|feed)|preload-topstory|moments(?:_v\\d+)?|feed\\/render\\/tab\\/config|root\\/tab|bazaar\\/vip_tab\\/header|(?:api\\/v\\d+\\/|v\\d+\\/)?(?:questions\\/\\d+(?:\\/(?:answers|feeds))?|answers|articles|comment(?:_v\\d+|s)|search)|next-(?:bff|data|render))(?:[/?]|$)"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/zhihu/js/zhihu_clean.js?v=20261124-2"
       body_required: true
       max_size: 8388608
       timeout: 20
@@ -95,6 +109,7 @@ mitm:
     includes:
       - "api.zhihu.com"
       - "www.zhihu.com"
+      - "m.zhihu.com"
       - "page-info.zhihu.com"
       - "appcloud2.zhihu.com"
       - "m-cloud.zhihu.com"

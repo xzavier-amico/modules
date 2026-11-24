@@ -1,11 +1,11 @@
 #=======================================================================================
 # Weibo Clean — Egern 模块
 #
-# 微博去开屏、时间线推广、评论区软广、发现/热搜/综合搜索广告与「我的」页任务中心/钱包营销卡片。
+# 微博去开屏、时间线与评论区广告；极简发现页（仅留纯净热搜，去横幅与下方 feed 流）、清空视频页推荐流，以及极简「我的」页（去超话社区/更多功能/任务中心/钱包）。
 #=======================================================================================
 
 name: "Weibo Clean"
-description: "微博去开屏、时间线推广、评论区软广、发现/热搜/综合搜索广告与「我的」页任务中心/钱包营销卡片。"
+description: "微博去开屏、时间线与评论区广告；极简发现页（仅留纯净热搜）、清空视频页推荐流与极简「我的」页。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"
 icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/weibo.png"
@@ -13,12 +13,12 @@ icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/weibo
 env_schema:
   block_ads:
     name: "去广告"
-    description: "过滤微博开屏、推荐/关注时间线、正文详情、评论区软广、发现页商业热搜及综合搜索广告"
+    description: "过滤微博开屏、推荐/关注时间线、正文详情、评论区软广、商业热搜及综合搜索广告"
     default_value: "true"
     options: ["true", "false"]
   clean_ui:
-    name: "净化我的页"
-    description: "在「我的」页按真实 itemId 白名单彻底隐藏任务中心、红包签到、我的钱包、借钱、游戏、直播、小说、商城等杂乱卡片"
+    name: "极简界面"
+    description: "发现页仅保留热搜（清空下方横幅与全部 feed 流）；清空视频页推荐流；「我的」页移除超话社区、更多功能、任务中心、红包签到、钱包、借钱与游戏卡片"
     default_value: "true"
     options: ["true", "false"]
 
@@ -142,7 +142,7 @@ url_rewrites:
     location: "http://reject-dict/"
   - match: "^https?:\\/\\/sdkapp\\.uve\\.weibo\\.com\\/interface\\/sdk\\/(?:get-lbs-cell-info|sdkconfig)\\.php"
     location: "http://reject/"
-  - match: "^https?:\\/\\/[^/]*weibo\\.c(?:n|om)\\/2\\/(?:ug\\/checkin\\/list|push\\/daily|push\\/info|logservice\\/service|statuses\\/unread_hot_timeline_ad|statuses\\/container_positive|statuses\\/push_info|comments\\/bullet_screens|video\\/redpacket|hot\\/hours_spotlight|search\\/container_discover|!\\/live\\/media_homelist|!\\/chaohua\\/discovery\\/home_bottom\\/switch|!\\/huati\\/(?:discovery_home_bottom_getdotinfo|mobile_discovery_searchchange)|!\\/was\\/finder\\/searchbarchange|!\\/wbox\\/\\w+\\/(?:home_bottom_modal|interest_category)|(?:ad|sdk|preload|floater|pullad)\\/)"
+  - match: "^https?:\\/\\/[^/]*weibo\\.c(?:n|om)\\/2\\/(?:ug\\/checkin\\/list|push\\/daily|push\\/info|logservice\\/service|statuses\\/unread_hot_timeline_ad|statuses\\/container_positive|statuses\\/push_info|comments\\/bullet_screens|video\\/(?:redpacket|remind_info)|hot\\/hours_spotlight|search\\/container_discover|profile\\/recommend_popuser|!\\/live\\/media_homelist|!\\/chaohua\\/discovery\\/home_bottom\\/switch|!\\/huati\\/(?:discovery_home_bottom_getdotinfo|mobile_discovery_searchchange)|!\\/was\\/finder\\/searchbarchange|!\\/wbox\\/\\w+\\/(?:home_bottom_modal|interest_category)|(?:ad|sdk|preload|floater|pullad)\\/)"
     location: "http://reject-dict/"
   - match: "^https?:\\/\\/api\\.weibo\\.cn\\/!\\/sug\\/list\\/finderchange\\b"
     location: "http://reject-dict/"
@@ -151,11 +151,11 @@ url_rewrites:
 
 header_rewrites:
   - delete:
-      match: "^https?:\\/\\/[^/]*weibo\\.c(?:n|om)\\/2\\/(?:profile\\/|users\\/|search\\/|searchall|flowpage|page|cardlist|container\\/)"
+      match: "^https?:\\/\\/[^/]*weibo\\.c(?:n|om)\\/2\\/(?:profile\\/|users\\/|search\\/|searchall|flowpage|page|cardlist|container\\/|video\\/|statuses\\/video_mixtimeline)"
       name: "if-none-match"
       type: "request"
   - delete:
-      match: "^https?:\\/\\/[^/]*weibo\\.c(?:n|om)\\/2\\/(?:profile\\/|users\\/|search\\/|searchall|flowpage|page|cardlist|container\\/)"
+      match: "^https?:\\/\\/[^/]*weibo\\.c(?:n|om)\\/2\\/(?:profile\\/|users\\/|search\\/|searchall|flowpage|page|cardlist|container\\/|video\\/|statuses\\/video_mixtimeline)"
       name: "if-modified-since"
       type: "request"
 
@@ -163,14 +163,14 @@ scriptings:
   - http_response:
       name: "weibo.splash"
       match: "^https?:\\/\\/(?:(?:sdk|wb)app|bootpreload)\\.uve\\.weibo\\.com\\/(?:interface\\/sdk\\/sdkad\\.php|wbapplua\\/wbpullad\\.lua|preload\\/get_ad|v\\d+\\/ad\\/preload)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/weibo/js/weibo_clean.js?v=20261124-1"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/weibo/js/weibo_clean.js?v=20261124-2"
       body_required: true
       max_size: 8388608
       timeout: 20
   - http_response:
       name: "weibo.clean"
-      match: "^https?:\\/\\/(?:[\\w-]+\\.)?(?:api|m|mapi)\\.weibo\\.c(?:n|om)\\/2\\/(?:push\\/active|client\\/|checkin\\/show|statuses\\/|groups\\/(?:timeline|allgroups\\/v2)|video\\/|comments\\/(?:build_comments|mix_comments)|search\\/|searchall|flowpage|flowlist|container\\/|page|cardlist|profile\\/|users\\/show|direct_messages\\/user_list|messageflow\\/notice|!\\/huati\\/discovery_home_bottom_channels)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/weibo/js/weibo_clean.js?v=20261124-1"
+      match: "^https?:\\/\\/(?:[\\w-]+\\.)?(?:api|m|mapi)\\.weibo\\.c(?:n|om)\\/2\\/(?:push\\/active|client\\/|checkin\\/show|ug\\/checkin\\/stream|statuses\\/|groups\\/(?:timeline|allgroups\\/v2)|video\\/|comments\\/(?:build_comments|mix_comments)|search\\/|searchall|flowpage|flowlist|container\\/|page|cardlist|profile\\/|users\\/show|direct_messages\\/user_list|messageflow\\/notice|!\\/huati\\/discovery_home_bottom_channels)"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/weibo/js/weibo_clean.js?v=20261124-2"
       body_required: true
       max_size: 8388608
       timeout: 20

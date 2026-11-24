@@ -4160,13 +4160,14 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.deepEqual(profOut.items.map((x) => x.itemId), ["profile_mine_header", "mine_grid"]);
     assert.deepEqual(profOut.items[1].data.elements.map((e) => e.title_sub), ["我的相册", "我的赞"]);
 
-    // 真实新版微博 /2/profile/me (itemId=profileme_mine / 100505_-_top8 / 100505_-_manage2 / 无字符串 title 的任务中心块)
+    // 真实新版微博 /2/profile/me：移除超话社区 (100505_-_chaohua)、更多功能 (100505_-_manage / manage2)、任务中心与钱包
     const realMe = JSON.stringify({
       vipHeaderBgImage: "https://vip.bg",
       items: [
         { itemId: "profileme_mine", header: { vipView: { x: 1 }, vipCenter: { x: 2 }, vipIcon: { x: 3 }, user: { id: 1 } } },
         {
           itemId: "100505_-_top8",
+          footer: { title: "更多功能" },
           items: [
             { itemId: "100505_-_album" },
             { itemId: "100505_-_like" },
@@ -4175,6 +4176,8 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
             { itemId: "100505_-_promote" },
           ],
         },
+        { itemId: "100505_-_chaohua", header: { title: { content: "超话社区" } } },
+        { itemId: "100505_-_manage", title: "更多功能" },
         { itemId: "100505_-_manage2", body: { promo: 1 }, footer: { ad: 1 } },
         { itemId: "100505_-_newman_task", header: { title: { content: "任务中心" } } },
         { itemId: "100505_-_hongbao2026" },
@@ -4182,13 +4185,12 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     });
     const realMeOut = JSON.parse(run(file, realMe, "https://api.weibo.cn/2/profile/me?gsid=1").body);
     assert.equal(realMeOut.vipHeaderBgImage, undefined);
-    assert.deepEqual(realMeOut.items.map((x) => x.itemId), ["profileme_mine", "100505_-_top8", "100505_-_manage2"]);
+    assert.deepEqual(realMeOut.items.map((x) => x.itemId), ["profileme_mine", "100505_-_top8"]);
     assert.equal(realMeOut.items[0].header.vipView, undefined);
+    assert.equal(realMeOut.items[1].footer, undefined);
     assert.deepEqual(realMeOut.items[1].items.map((x) => x.itemId), ["100505_-_album", "100505_-_like"]);
-    assert.equal(realMeOut.items[2].body, undefined);
-    assert.equal(realMeOut.items[2].footer, undefined);
 
-    // 开屏 sdkad.php 保留末尾 "OK" 并推迟投放时间；发现页 /2/search/finder payload 清洗
+    // 开屏 sdkad.php 保留末尾 "OK" 并推迟投放时间
     const sdkBody = JSON.stringify({ show_push_splash_ad: true, ads: [{ displaytime: 5, begintime: "2026-01-01" }] }) + "OK";
     const sdkOut = run(file, sdkBody, "https://sdkapp.uve.weibo.com/interface/sdk/sdkad.php").body;
     assert.ok(sdkOut.endsWith("OK"), "sdkad.php must preserve trailing OK");
@@ -4196,41 +4198,134 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.equal(sdkJson.show_push_splash_ad, false);
     assert.equal(sdkJson.ads[0].begintime, "2040-01-01 00:00:00");
 
+    // 发现页 /2/search/finder：清 header.insert_data / 顶部广告、只留主发现频道、仅保留热搜 (card_type 17/235)，删热搜下方广告与全部 feed 流
     const finderPayload = JSON.stringify({
+      header: {
+        insert_data: { ad: 1 },
+        data: {
+          items: [
+            { data: { card_type: 118, title: "热搜下方广告横幅" } },
+            {
+              category: "group",
+              items: [
+                {
+                  data: {
+                    card_type: 17,
+                    group: [
+                      { title_sub: "正常热搜1", itemid: "hot_1" },
+                      { title_sub: "商业热搜", itemid: "is_ad_pos_1" },
+                      { title_sub: "推广热搜", promotion: { id: 1 } },
+                    ],
+                  },
+                },
+                { data: { card_type: 118, title: "紧贴热搜的广告" } },
+              ],
+            },
+          ],
+        },
+      },
       channelInfo: {
         channels: [
           {
+            id: 1001,
             name: "发现",
             payload: {
-              loadedInfo: { searchBarContent: [{ word: "推广" }] },
+              since_id: "cursor_1",
+              loadedInfo: { searchBarContent: [{ word: "推广" }], headerBack: { img: "ad" }, has_more: true },
               items: [
-                { category: "feed", data: { id: 1, text: "ok" } },
-                { category: "card", data: { card_type: 118 } },
+                {
+                  category: "group",
+                  items: [
+                    {
+                      data: {
+                        card_type: 235,
+                        channel_list: [
+                          {
+                            group: [
+                              { title_sub: "新版热搜1", itemid: "n1" },
+                              { title_sub: "新版商业热搜", itemid: "city_code_ad" },
+                            ],
+                          },
+                        ],
+                      },
+                    },
+                    { data: { card_type: 118, title: "热搜下面的广告图" } },
+                  ],
+                },
+                { data: { card_type: 101, title: "热门微博" } },
+                { category: "feed", data: { id: 1, text: "普通发现页feed也要删" } },
                 { category: "feed", data: { id: 2, ads_material_info: { is_ads: true } } },
               ],
             },
           },
+          { id: 1015, name: "趋势", payload: { items: [{ category: "feed", data: { id: 9 } }] } },
         ],
       },
     });
     const finderOut = JSON.parse(run(file, finderPayload, "https://api.weibo.cn/2/search/finder?gsid=1").body);
-    assert.deepEqual(finderOut.channelInfo.channels[0].payload.loadedInfo.searchBarContent, []);
-    assert.deepEqual(finderOut.channelInfo.channels[0].payload.items.map((x) => x.data.id), [1]);
+    assert.equal(finderOut.header.insert_data, undefined);
+    assert.equal(finderOut.header.data.items.length, 1);
+    assert.equal(finderOut.header.data.items[0].items.length, 1);
+    assert.deepEqual(finderOut.header.data.items[0].items[0].data.group.map((g) => g.title_sub), ["正常热搜1"]);
+    assert.equal(finderOut.channelInfo.channels.length, 1, "only main discover channel stays");
+    const mainPl = finderOut.channelInfo.channels[0].payload;
+    assert.deepEqual(mainPl.loadedInfo.searchBarContent, []);
+    assert.equal(mainPl.loadedInfo.headerBack, undefined);
+    assert.equal(mainPl.since_id, undefined);
+    assert.equal(mainPl.items.length, 1, "only hot-search container stays; banner & feeds dropped");
+    assert.equal(mainPl.items[0].items.length, 1);
+    assert.deepEqual(mainPl.items[0].items[0].data.channel_list[0].group.map((g) => g.title_sub), ["新版热搜1"]);
+
+    // 发现页刷新/分页 /2/search/container_timeline：纯 feed 页直接返回空 items=[]
+    const discoverPageOut = JSON.parse(
+      run(file, JSON.stringify({ items: [{ category: "feed", data: { id: 1 } }, { data: { card_type: 118 } }], since_id: "2" }), "https://api.weibo.cn/2/search/container_timeline?gsid=1").body
+    );
+    assert.deepEqual(discoverPageOut.items, []);
+    assert.equal(discoverPageOut.since_id, undefined);
+
+    // 视频页 (/2/video/community_tab, /2/video/tiny_stream_video_list, /2/statuses/video_mixtimeline) 清空
+    const vidTabOut = JSON.parse(
+      run(file, JSON.stringify({ data: { tab_list: [{ id: 1 }], items: [{ id: 2 }] } }), "https://api.weibo.cn/2/video/community_tab?gsid=1").body
+    );
+    assert.deepEqual(vidTabOut.data.tab_list, []);
+    assert.deepEqual(vidTabOut.data.items, []);
+
+    const vidListOut = JSON.parse(
+      run(file, JSON.stringify({ statuses: [{ id: 10 }], tab_list: [{ id: 1 }] }), "https://api.weibo.cn/2/video/tiny_stream_video_list?gsid=1").body
+    );
+    assert.deepEqual(vidListOut.statuses, []);
+    assert.deepEqual(vidListOut.tab_list, []);
+
+    const vidMixOut = JSON.parse(
+      run(file, JSON.stringify({ items: [{ id: 1 }], statuses: [{ id: 2 }] }), "https://api.weibo.cn/2/statuses/video_mixtimeline?gsid=1").body
+    );
+    assert.deepEqual(vidMixOut.items, []);
+    assert.deepEqual(vidMixOut.statuses, []);
   });
 }
 
-// Zhihu Clean：知乎开屏、云控关 LocalDNS、推荐流、热榜、回答夹层、next-data/next-bff 与评论区三端回归。
+// Zhihu Clean：知乎开屏、云控关 LocalDNS、推荐流广告、文章/回答底部推文全清、漂浮广告与热榜三端回归。
 for (const platform of ["loon", "egern", "shadowrocket"]) {
   const file = platform + "/zhihu/js/zhihu_clean.js";
 
-  check(platform + " zhihu: filters topstory feed_advert, answer ad_info, cloud LocalDNS and nested next-data/hot-lists", () => {
-    const feedBody = '{"data":[{"id":1,"offset":1,"type":"feed","extra":{"type":"normal"}},{"id":2,"offset":2,"type":"feed_advert"},{"id":3,"offset":3,"type":"feed","adjson":"{\\"ad\\":1}"},{"id":4,"offset":4,"type":"feed","extra":{"type":"km_sku"}}],"paging":{"is_end":false}}';
+  check(platform + " zhihu: filters feed ads (incl. footline[1]/brief), empties article-bottom next-* feeds & clears floating ads", () => {
+    const feedBody = JSON.stringify({
+      data: [
+        { id: 1, offset: 1, type: "feed", extra: { type: "normal" } },
+        { id: 2, offset: 2, type: "feed_advert" },
+        { id: 3, offset: 3, type: "feed", adjson: '{"ad":1}' },
+        { id: 4, offset: 4, type: "feed", extra: { type: "km_sku" } },
+        { id: 5, offset: 5, type: "common_card", common_card: { footline: { elements: [{ image: {} }, { text: { panel_text: "知乎推广" } }] } } },
+        { id: 6, offset: 6, type: "common_card", brief: '{"source":"commercial","id":6}' },
+      ],
+      paging: { is_end: false },
+    });
     const feedUrl = "https://api.zhihu.com/topstory/recommend?action=down";
-    const defaultFeed = JSON.parse(run(file, feedBody, feedUrl, { block_ads: true, clean_ui: false }).body);
-    assert.deepEqual(defaultFeed.data.map((x) => x.id), [1, 4]);
-    assert.deepEqual(defaultFeed.data.map((x) => x.offset), [1, 2], "offset must be re-indexed");
-    const cleanFeed = JSON.parse(run(file, feedBody, feedUrl, { block_ads: true, clean_ui: true }).body);
-    assert.deepEqual(cleanFeed.data.map((x) => x.id), [1]);
+    const noCleanFeed = JSON.parse(run(file, feedBody, feedUrl, { block_ads: true, clean_ui: false }).body);
+    assert.deepEqual(noCleanFeed.data.map((x) => x.id), [1, 4], "all ads including footline[1] and brief must be dropped");
+    assert.deepEqual(noCleanFeed.data.map((x) => x.offset), [1, 2], "offset must be re-indexed");
+    const defaultFeed = JSON.parse(run(file, feedBody, feedUrl).body);
+    assert.deepEqual(defaultFeed.data.map((x) => x.id), [1], "clean_ui defaults to true and removes km_sku");
 
     // 同时验证无 /api/v4 前缀的 App 真实路径 (/questions/123/feeds)
     const ansBody = '{"ad_info":{"ad_id":999},"data":[{"id":3456789012345678901,"type":"answer","ad_info":{"x":1}},{"id":3456789012345678902,"type":"feed_advert"}]}';
@@ -4247,18 +4342,69 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.equal(cfgOut.config.zhcnh_thread_sync.isOpenLocalDNS, "0");
     assert.equal(cfgOut.config.zhcnh_thread_sync.ZHBackUpIP_Switch_Open, "0");
 
-    // next-data 两层 data.data[] & next-bff origin_data & everyone-seeing 合作推广
-    const nextDataOut = JSON.parse(run(file, JSON.stringify({ data: { data: [{ id: 1, type: "answer" }, { id: 2, type: "feed_ad" }] } }), "https://api.zhihu.com/next-data?id=1").body);
-    assert.deepEqual(nextDataOut.data.data.map((x) => x.id), [1]);
+    // 文章/回答底部 next-data / next-bff / next-render：默认 clean_ui=true 彻底清空推文流并标记 paging.is_end=true
+    const nextDataOut = JSON.parse(
+      run(file, JSON.stringify({ data: { data: [{ id: 1, type: "answer" }, { id: 2, type: "feed_ad" }] }, paging: { is_end: false, next: "u" } }), "https://api.zhihu.com/next-data?id=1").body
+    );
+    assert.deepEqual(nextDataOut.data.data, []);
+    assert.equal(nextDataOut.paging.is_end, true);
 
-    const nextBffOut = JSON.parse(run(file, JSON.stringify({ data: [{ id: 1, origin_data: { type: "answer" } }, { id: 2, origin_data: { type: "ad_card" } }] }), "https://api.zhihu.com/next-bff?id=1").body);
-    assert.deepEqual(nextBffOut.data.map((x) => x.id), [1]);
+    const nextBffOut = JSON.parse(
+      run(file, JSON.stringify({ data: [{ id: 1, origin_data: { type: "answer" } }, { id: 2, origin_data: { type: "ad_card" } }], paging: { is_end: false } }), "https://api.zhihu.com/next-bff?id=1").body
+    );
+    assert.deepEqual(nextBffOut.data, []);
+    assert.equal(nextBffOut.paging.is_end, true);
+
+    const nextRenderOut = JSON.parse(
+      run(file, JSON.stringify({ data: [{ id: 1, biz_type_list: ["article"] }], paging: { is_end: false } }), "https://api.zhihu.com/next-render?id=1").body
+    );
+    assert.deepEqual(nextRenderOut.data, []);
+    assert.equal(nextRenderOut.paging.is_end, true);
+
+    // 文章详情扩展 (/articles/v2/123) 保留点赞/评论/正文，剥离 third_business 推荐、带货与漂浮挂件
+    const artV2 = JSON.stringify({
+      id: 123,
+      content: "<p>正文</p>",
+      voteup_count: 99,
+      comment_count: 10,
+      floating_ad: { img: "ad" },
+      recommend_info: { list: [1] },
+      third_business: { related_queries: { queries: ["q1"] }, recommend_cards: [1], goods_card: { id: 1 }, keep_meta: true },
+    });
+    const artV2Out = JSON.parse(run(file, artV2, "https://api.zhihu.com/articles/v2/123").body);
+    assert.equal(artV2Out.content, "<p>正文</p>");
+    assert.equal(artV2Out.voteup_count, 99);
+    assert.equal(artV2Out.comment_count, 10);
+    assert.equal(artV2Out.floating_ad, undefined);
+    assert.equal(artV2Out.recommend_info, undefined);
+    assert.equal(artV2Out.third_business.related_queries, undefined);
+    assert.equal(artV2Out.third_business.recommend_cards, undefined);
+    assert.equal(artV2Out.third_business.goods_card, undefined);
+    assert.equal(artV2Out.third_business.keep_meta, true);
 
     const hotOut = JSON.parse(run(file, JSON.stringify({ data: { data: [{ id: 1, target: { metrics_area: { text: "100万热度" } } }, { id: 2, target: { metrics_area: { text: "合作推广" } } }] } }), "https://api.zhihu.com/v2/topstory/hot-lists/everyone-seeing?limit=20").body);
     assert.deepEqual(hotOut.data.data.map((x) => x.id), [1]);
 
-    const floatOut = run(file, JSON.stringify({ feed_egg: { img: "ad" } }), "https://api.zhihu.com/commercial_api/app_float_layer");
+    const floatOut = run(file, JSON.stringify({ other_float: { img: "ad" } }), "https://api.zhihu.com/commercial_api/app_float_layer");
     assert.equal(floatOut.body, "{}");
+
+    // 预加载推荐流 (preload-topstory)、问题详情页 (questions/123?include=...) 与搜索推荐词
+    const preloadOut = JSON.parse(
+      run(file, JSON.stringify({ data: [{ id: 1, type: "feed" }, { id: 2, type: "common_card", common_card: { ad_extra: { k: 1 } } }, { id: 3, type: "common_card", fields: { ad_info: { k: 2 } } }] }), "https://api.zhihu.com/preload-topstory?action=down").body
+    );
+    assert.deepEqual(preloadOut.data.map((x) => x.id), [1]);
+
+    const qDetailOut = JSON.parse(
+      run(file, JSON.stringify({ id: 123, title: "Q", ad_info: { a: 1 }, query_info: { q: 1 } }), "https://api.zhihu.com/questions/123?include=detail").body
+    );
+    assert.equal(qDetailOut.title, "Q");
+    assert.equal(qDetailOut.ad_info, undefined);
+    assert.equal(qDetailOut.query_info, undefined);
+
+    const searchRecOut = JSON.parse(
+      run(file, JSON.stringify({ recommend_queries: { queries: ["ad"] }, paging: {} }), "https://api.zhihu.com/search/recommend_query/v2?q=test").body
+    );
+    assert.deepEqual(searchRecOut.recommend_queries, {});
   });
 }
 

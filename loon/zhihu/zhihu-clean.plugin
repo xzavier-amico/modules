@@ -1,5 +1,5 @@
 #!name=Zhihu Clean
-#!desc=知乎去开屏、推荐流伪装广告、热榜合作推广、回答页夹层广告与评论区推广（阻断硬编码 IP / HTTPDNS 绕过）。
+#!desc=知乎去开屏、首页推荐流广告与盐选推广、文章/回答底部推文全清（只留点赞/评论栏）及各类漂浮广告（阻断硬编码 IP / HTTPDNS 绕过）。
 #!category=Zhihu
 #!author=xzavier-amico
 #!homepage=https://github.com/xzavier-amico/modules
@@ -7,8 +7,8 @@
 #!tag=Zhihu
 
 [Argument]
-block_ads = switch,true,type=boolean,tag=去广告,desc=过滤知乎开屏、首页推荐流 feed_advert、热榜合作推广、回答夹层 ad_info 与评论区插件广告。
-clean_ui = switch,false,type=boolean,tag=过滤盐选推广,desc=额外过滤推荐流里的盐选故事、知乎严选、训练营与付费回答，以及首页冗余活动/直播 Tab。
+block_ads = switch,true,type=boolean,tag=去广告,desc=过滤知乎开屏、首页推荐流伪装广告、漂浮广告、热榜合作推广、回答夹层 ad_info 与评论区插件广告。
+clean_ui = switch,true,type=boolean,tag=极简文章底部与去盐选,desc=清空文章/回答底部的推荐推文与相关阅读（只留点赞/评论等操作栏），并过滤推荐流里的盐选故事、训练营、直播与带货卡。
 
 [Rule]
 # 拒绝 QUIC，强制回落 TCP：HTTP/3 走 UDP 不经过 MITM，脚本看不到请求。
@@ -28,21 +28,27 @@ DOMAIN, sugar.zhihu.com, REJECT
 DOMAIN, zxid-m.mobileservice.cn, REJECT
 
 [Rewrite]
-# 开屏、首页横幅、回答底部广告与营销配置接口直接返回空字典
-request if ${url} ~= /^https?:\/\/api\.zhihu\.com\/commercial_api\/(?:launch_v\d+|real_time_launch_v\d+|banners_v\d+\/app_topstory_banner|banners|egg_payload|answer\/\d+\/bottom-v2|article\/\d+\/bottom-v2)/ then reject_dict(200)
-request if ${url} ~= /^https?:\/\/api\.zhihu\.com\/(?:ad-style-service\/|fringe\/ad|content-distribution-core\/bubble\/common\/settings|root\/window|moments\/lastread|drama\/hot-drama-list|bazaar\/float_window|market\/popovers_v\d+|me\/guides)/ then reject_dict(200)
+# 去掉条件缓存头，避免云控关 LocalDNS 与文章页返回 304 复用旧缓存
+request if ${url} ~= /^https?:\/\/(?:appcloud2|m-cloud|api|page-info)\.zhihu\.com\/(?:v\d+\/config|api\/cloud\/config\/all|(?:answers|articles)\/v\d+\/|next-(?:bff|data|render))/ then request.header.del("if-none-match")
+request if ${url} ~= /^https?:\/\/(?:appcloud2|m-cloud|api|page-info)\.zhihu\.com\/(?:v\d+\/config|api\/cloud\/config\/all|(?:answers|articles)\/v\d+\/|next-(?:bff|data|render))/ then request.header.del("if-modified-since")
+
+# 开屏、漂浮广告、首页横幅、文章/回答底部广告与推荐阅读直接返回空字典
+request if ${url} ~= /^https?:\/\/api\.zhihu\.com\/commercial_api\/(?:launch_v\d+|real_time_launch_v\d+|app_float_layer|ad_float_layer|float\w*|banners_v\d+\/app_topstory_banner|banners|egg_payload|(?:answer|article)\/\d+\/bottom-v\d+)/ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/api\.zhihu\.com\/(?:ad(?:-style-service\/|s\/|vert\/|_)|fringe\/|content-distribution-core\/(?:bubble|float|pendant|popup|banner)\/|root\/window|moments\/lastread|drama\/(?:hot-drama-list|living-info)|bazaar\/float_window|market\/(?:popovers_v\d+|float\w*)|me\/guides|distribute\/rhea\/)/ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/api\.zhihu\.com\/ab\/api\/v\d+\/products\/zhihu\/platforms\/ios\/config/ then reject(404)
 request if ${url} ~= /^https?:\/\/api\.zhihu\.com\/(?:api\/v\d+\/)?(?:PresetWords|search\/(?:preset_words|hot_search)|feed\/render\/revisit\/current_reading)/ then reject_dict(200)
-request if ${url} ~= /^https?:\/\/api\.zhihu\.com\/(?:comment_v\d+\/(?:articles|answers)\/\d+\/list-headers|prague\/related_suggestion_native\/feed|v\d+(?:\.\d+)?\/topics\/answer\/\d+\/relation|\w+\/\d+\/comments\/featured-comment-ad|distribute\/rhea\/qa_ad_card\/h5\/recommendation)/ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/api\.zhihu\.com\/(?:comment_v\d+\/(?:articles|answers)\/\d+\/list-headers|prague\/related_suggestion_native\/feed|v\d+(?:\.\d+)?\/topics\/(?:answer|article)\/\d+\/relation|\w+\/\d+\/comments\/featured-comment-ad|appview\/api\/v\d+\/(?:answers|articles)\/\d+\/recommendations?)/ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/(?:api|www)\.zhihu\.com\/(?:api\/v\d+\/|v\d+\/)?(?:answers|articles|questions)\/\d+\/(?:recommendations?|related-readings)/ then reject_dict(200)
 request if ${url} ~= /^https?:\/\/api\.zhihu\.com\/unlimited\/go\/my_card/ then reject(404)
 request if ${url} ~= /^https?:\/\/appcloud2\.zhihu\.com\/v\d+\/resource\?group_name=mp/ then reject_dict(200)
-request if ${url} ~= /^https?:\/\/www\.zhihu\.com\/(?:api\/v\d+\/(?:search\/related_queries\/(?:answer|article)\/\d+|hot_recommendation|mcn\/v\d+\/linkcards|(?:answers|questions)\/\d+\/related-readings)|commercial_api\/banners_v\d+\/mobile_banner)/ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/www\.zhihu\.com\/(?:api\/v\d+\/(?:search\/related_queries\/(?:answer|article)\/\d+|hot_recommendation|mcn\/v\d+\/linkcards)|commercial_api\/banners_v\d+\/mobile_banner|appview\/v\d+\/zhmore)/ then reject_dict(200)
 request if ${url} ~= /^https?:\/\/zhuanlan\.zhihu\.com\/api\/articles\/\d+\/recommendation/ then reject(404)
 request if ${url} ~= /^https?:\/\/zhstatic\.zhihu\.com\/brand-ad/ then reject(404)
 
 [Script]
-# 兼容 App 真实无 /api/v4 前缀路径与云控关 LocalDNS 配置
-response if ${url} ~= /^https?:\/\/(?:api|www|page-info|appcloud2|m-cloud)\.zhihu\.com\/(?:v\d+\/config|api\/cloud\/config\/all|commercial_api\/app_float_layer|(?:v\d+\/)?topstory\/(?:recommend(?:_v\d+)?|hot-lists)|moments_v\d+|feed\/render\/tab\/config|root\/tab|bazaar\/vip_tab\/header|(?:api\/v\d+\/|v\d+\/)?(?:questions\/\d+\/(?:answers|feeds)|answers|articles|comment(?:_v\d+|s)|search)|next-(?:bff|data|render))(?:[/?]|$)/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/zhihu/js/zhihu_clean.js?v=20261124-1", {${block_ads}, ${clean_ui}}) with requires_body=true, tag="Zhihu Clean", timeout=20
+# 兼容 App 真实路径、云控关 LocalDNS、首页推荐流广告过滤与文章底部推文全清
+response if ${url} ~= /^https?:\/\/(?:api|www|m|page-info|appcloud2|m-cloud)\.zhihu\.com\/(?:v\d+\/config|api\/cloud\/config\/all|commercial_api\/(?:app|ad)_float_layer|(?:v\d+\/|feed\/)?(?:preload-)?topstory\/(?:recommend[\w-]*|hot-lists|feed)|preload-topstory|moments(?:_v\d+)?|feed\/render\/tab\/config|root\/tab|bazaar\/vip_tab\/header|(?:api\/v\d+\/|v\d+\/)?(?:questions\/\d+(?:\/(?:answers|feeds))?|answers|articles|comment(?:_v\d+|s)|search)|next-(?:bff|data|render))(?:[/?]|$)/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/zhihu/js/zhihu_clean.js?v=20261124-2", {${block_ads}, ${clean_ui}}) with requires_body=true, tag="Zhihu Clean", timeout=20
 
 [MitM]
-hostname = api.zhihu.com, www.zhihu.com, page-info.zhihu.com, appcloud2.zhihu.com, m-cloud.zhihu.com, zhuanlan.zhihu.com, zhstatic.zhihu.com
+hostname = api.zhihu.com, www.zhihu.com, m.zhihu.com, page-info.zhihu.com, appcloud2.zhihu.com, m-cloud.zhihu.com, zhuanlan.zhihu.com, zhstatic.zhihu.com
 h2 = true
