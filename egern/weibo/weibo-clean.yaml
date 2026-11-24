@@ -1,0 +1,125 @@
+#=======================================================================================
+# Weibo Clean — Egern 模块
+#
+# 微博去开屏、时间线推广、评论区软广与商业热搜。
+#=======================================================================================
+
+name: "Weibo Clean"
+description: "微博去开屏、时间线推广、评论区软广与商业热搜。"
+author: "xzavier-amico"
+homepage: "https://github.com/xzavier-amico/modules"
+icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/weibo.png"
+
+env_schema:
+  block_ads:
+    name: "去广告"
+    description: "过滤微博开屏、推荐/关注时间线、评论区软广及发现页商业热搜"
+    default_value: "true"
+    options: ["true", "false"]
+  clean_ui:
+    name: "精简我的页"
+    description: "在「我的」页额外隐藏钱包、借钱、游戏等营销服务卡片"
+    default_value: "false"
+    options: ["true", "false"]
+
+rules:
+  - and:
+      match:
+        - domain_suffix:
+            match: "weibo.cn"
+        - protocol:
+            match: quic
+      policy: REJECT
+  - and:
+      match:
+        - domain_suffix:
+            match: "weibo.com"
+        - protocol:
+            match: quic
+      policy: REJECT
+  - and:
+      match:
+        - domain_suffix:
+            match: "weibocdn.com"
+        - protocol:
+            match: quic
+      policy: REJECT
+  - domain:
+      match: "ad.weibo.com"
+      policy: REJECT
+  - domain:
+      match: "adstrategy.biz.weibo.com"
+      policy: REJECT
+  - domain:
+      match: "aln.uve.weibo.com"
+      policy: REJECT
+  - domain:
+      match: "biz.weibo.com"
+      policy: REJECT
+  - domain:
+      match: "dp.im.weibo.cn"
+      policy: REJECT
+  - domain:
+      match: "game.weibo.cn"
+      policy: REJECT
+  - domain:
+      match: "game.weibo.com"
+      policy: REJECT
+  - domain:
+      match: "gw5.push.mcp.weibo.cn"
+      policy: REJECT
+  - domain:
+      match: "gw6.push.mcp.weibo.cn"
+      policy: REJECT
+  - domain:
+      match: "logmix.sina.cn"
+      policy: REJECT
+  - domain:
+      match: "pay.sc.weibo.com"
+      policy: REJECT
+  - domain:
+      match: "promote.biz.weibo.cn"
+      policy: REJECT
+  - domain:
+      match: "sdkapp.uve.weibo.com"
+      policy: REJECT
+  - domain:
+      match: "sdkclick.mobile.sina.cn"
+      policy: REJECT
+  - domain:
+      match: "trends.mobile.sina.cn"
+      policy: REJECT
+  - domain:
+      match: "u1.img.mobile.sina.cn"
+      policy: REJECT
+  - domain:
+      match: "wax.weibo.com"
+      policy: REJECT
+  - domain:
+      match: "zymo.mps.weibo.com"
+      policy: REJECT
+
+url_rewrites:
+  - match: "^https?:\\/\\/sdkapp\\.uve\\.weibo\\.com\\/"
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/(?:api|m)\\.weibo\\.cn\\/2\\/(?:ad|sdk|preload)\\/"
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/api\\.weibo\\.cn\\/2\\/statuses\\/unread_hot_timeline_ad\\b"
+    location: "http://reject-dict/"
+
+scriptings:
+  - http_response:
+      name: "weibo.clean"
+      match: "^https?:\\/\\/(?:api|m|mapi)\\.weibo\\.c(?:n|om)\\/(?:wbapplua\\/wbpullad\\.lua|2\\/(?:push\\/active|statuses\\/(?:unread_hot_timeline|friends_timeline|container_timeline|bilateral_timeline|extend)|groups\\/timeline|video\\/tiny_stream_video_list|comments\\/build_comments|search\\/(?:finder|container_timeline|container_discover)|page|cardlist|profile\\/me))(?:[/?]|$)"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/weibo/js/weibo_clean.js?v=20261123-1"
+      body_required: true
+      max_size: 8388608
+      timeout: 20
+
+mitm:
+  hostnames:
+    includes:
+      - "api.weibo.cn"
+      - "m.weibo.cn"
+      - "mapi.weibo.com"
+      - "sdkapp.uve.weibo.com"

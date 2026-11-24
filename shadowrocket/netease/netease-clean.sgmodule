@@ -1,0 +1,29 @@
+#!name=NetEase Music Clean
+#!desc=网易云音乐去开屏、首页横幅广告、搜索买榜词与评论区推广。
+#!author=xzavier-amico
+#!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/netease.png
+#!arguments=去广告:true, 精简首页模块:false
+#!arguments-desc=去广告：拦截开屏素材 CDN，并过滤首页横幅、搜索热词与评论区里的商业广告。\n精简首页模块：在首页发现流额外移除直播间、语音房、KTV、商城等泛娱乐模块。
+
+[Rule]
+AND,((DOMAIN-SUFFIX,163.com),(PROTOCOL,QUIC)),REJECT
+AND,((DOMAIN-SUFFIX,126.net),(PROTOCOL,QUIC)),REJECT
+DOMAIN,admusicpic.music.126.net,REJECT
+DOMAIN,g1.163.com,REJECT
+DOMAIN,iadmat.nosdn.127.net,REJECT
+DOMAIN,iadmatapk.nosdn.127.net,REJECT
+DOMAIN,iadmusicmat.music.126.net,REJECT
+DOMAIN,iadmusicmatvideo.music.126.net,REJECT
+DOMAIN,nex.163.com,REJECT
+DOMAIN,yt-adp.nosdn.127.net,REJECT
+DOMAIN,yt-adp.ws.126.net,REJECT
+
+[URL Rewrite]
+^https?:\/\/interface\d*\.music\.163\.com\/e?api\/(?:ad|sp\/loading\/ad|v1\/ad)\/ reject-dict
+
+[Script]
+netease.clean = type=http-response,pattern=^https?:\/\/(?:interface\d*\.music\.163\.com|music\.163\.com)\/e?api\/(?:batch|ad\/|sp\/loading|homepage\/block\/page|v\d+\/banner\/get|v\d+\/discovery\/|search\/(?:hot|default)|v\d+\/resource\/comments|comment\/),requires-body=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/netease/js/netease_clean.js?v=20261123-1,argument="{"block_ads":{{{去广告}}},"clean_ui":{{{精简首页模块}}}}"
+
+[MITM]
+hostname = %APPEND% interface.music.163.com, interface3.music.163.com, music.163.com
+h2 = true

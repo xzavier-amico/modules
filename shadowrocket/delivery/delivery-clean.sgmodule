@@ -1,67 +1,58 @@
 #!name=Delivery Clean
-#!desc=京东 / 美团 / 饿了么：拒绝广告域名，并用 MITM 把开屏、广告板、促销接口改写成空响应。
+#!desc=美团、饿了么、京东去开屏、弹窗与信息流推广卡片。
 #!author=xzavier-amico
 #!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/delivery.png
+#!arguments=去广告:true, 精简金融楼层:false
+#!arguments-desc=去广告：过滤美团、饿了么、京东的开屏、弹窗浮层与商家/商品流里的竞价推广卡片。\n精简金融楼层：在京东「我的」页额外隐藏白条、金条、借钱等金融营销楼层。
 
 [Rule]
-# ---------- 京东 ----------
-# img-x：广告素材 CDN；ccc-x：广告点击；c-nfa：曝光/效果监测；
-# dsp-x / bdsp.x：广告投放；ads-union：联盟广告；jzt：京准通；addata：广告数据。
-DOMAIN-SUFFIX,img-x.jd.com,REJECT
-DOMAIN-SUFFIX,ccc-x.jd.com,REJECT
-DOMAIN-SUFFIX,c-nfa.jd.com,REJECT
-DOMAIN-SUFFIX,dsp-x.jd.com,REJECT
-DOMAIN-SUFFIX,bdsp.x.jd.com,REJECT
-DOMAIN-SUFFIX,ads-union.jd.com,REJECT
-DOMAIN-SUFFIX,jzt.jd.com,REJECT
-DOMAIN-SUFFIX,addata.jd.com,REJECT
-DOMAIN-SUFFIX,x.jd.com,REJECT
-DOMAIN-SUFFIX,cc.m.jd.com,REJECT
-DOMAIN-SUFFIX,knicks.jd.com,REJECT
-DOMAIN-SUFFIX,mars.jd.com,REJECT
-DOMAIN-SUFFIX,orbit.jd.com,REJECT
-
-# ---------- 美团 ----------
-# impdsp 是美团 DSP；ad.e.waimai 是外卖广告接口。
-# d.meituan.net 是统计/日志域名，mads.meituan.com 用途不明，两者都不拦。
-DOMAIN-SUFFIX,impdsp.meituan.com,REJECT
-DOMAIN-SUFFIX,ad.e.waimai.sankuai.com,REJECT
-
-# ---------- 饿了么 ----------
-# adashx 是阿里妈妈系的广告曝光/点击统计（三个入口）。
-# client-api / newton-api 是业务接口，grand.ele.me 是推送，都不拦。
-DOMAIN-SUFFIX,adashx.ut.ele.me,REJECT
-DOMAIN-SUFFIX,h-adashx.ut.ele.me,REJECT
-DOMAIN-SUFFIX,v6-adashx.ut.ele.me,REJECT
-
-# ---------- 第三方广告 SDK ----------
-# 三家都会接穿山甲 / 优量汇 / 百度联盟 / 艾瑞这类 SDK，素材与曝光都走这些域名。
-# 这是全局规则，其它 App 用到同一批 SDK 时也会一起被拦。
-DOMAIN-SUFFIX,pangolin-sdk-toutiao.com,REJECT
-DOMAIN-SUFFIX,pangolin-sdk-toutiao-b.com,REJECT
-DOMAIN-SUFFIX,pglstatp-toutiao.com,REJECT
-DOMAIN-SUFFIX,pangle.io,REJECT
-DOMAIN-SUFFIX,gdt.qq.com,REJECT
-DOMAIN-SUFFIX,pgdt.gtimg.cn,REJECT
-DOMAIN-SUFFIX,mobads.baidu.com,REJECT
-DOMAIN-SUFFIX,cpro.baidu.com,REJECT
-DOMAIN-SUFFIX,cpro2.baidu.com,REJECT
-DOMAIN-SUFFIX,irs01.com,REJECT
-DOMAIN-SUFFIX,irs01.net,REJECT
+AND,((DOMAIN-SUFFIX,jd.com),(PROTOCOL,QUIC)),REJECT
+AND,((DOMAIN-SUFFIX,meituan.com),(PROTOCOL,QUIC)),REJECT
+AND,((DOMAIN-SUFFIX,sankuai.com),(PROTOCOL,QUIC)),REJECT
+AND,((DOMAIN-SUFFIX,ele.me),(PROTOCOL,QUIC)),REJECT
+DOMAIN,ad.e.waimai.sankuai.com,REJECT
+DOMAIN,ad.maoyan.com,REJECT
+DOMAIN,analytics.meituan.net,REJECT
+DOMAIN,flowplus.meituan.net,REJECT
+DOMAIN,hreport.meituan.com,REJECT
+DOMAIN,lx0.meituan.com,REJECT
+DOMAIN,metrics.meituan.com,REJECT
+DOMAIN,mtrace.meituan.com,REJECT
+DOMAIN,report.meituan.com,REJECT
+DOMAIN,wmlog.meituan.com,REJECT
+DOMAIN,ad.ele.me,REJECT
+DOMAIN,log.ele.me,REJECT
+DOMAIN,newton.ele.me,REJECT
+DOMAIN,trace.ele.me,REJECT
+DOMAIN,ad.3.cn,REJECT
+DOMAIN,ads-union.jd.com,REJECT
+DOMAIN,bdsp.x.jd.com,REJECT
+DOMAIN,cm.jd.com,REJECT
+DOMAIN,dsp-x.jd.com,REJECT
+DOMAIN,dgstatic.jd.com,REJECT
+DOMAIN,im-x.jd.com,REJECT
+DOMAIN,janapi.jd.com,REJECT
+DOMAIN,jzt.jd.com,REJECT
+DOMAIN,knicks.jd.com,REJECT
+DOMAIN,mercury.jd.com,REJECT
+DOMAIN,orbit.jd.com,REJECT
+DOMAIN,saturn.jd.com,REJECT
+DOMAIN,uranus.jd.com,REJECT
+DOMAIN,x.jd.com,REJECT
+DOMAIN,xlog.jd.com,REJECT
 
 [URL Rewrite]
-# 美团外卖开屏：startpicture 返回开屏素材，loadInfo 带开屏配置，openscreen 是曝光回调。
-# 三个都只服务开屏，改成 {} 后客户端直接跳过，不影响首页数据。
-^https?:\/\/wmapi\.meituan\.com\/api\/v\d+\/(?:startpicture|loadInfo|openscreen) reject-dict
-# 美团点餐页的广告板。
-^https?:\/\/rms\.meituan\.com\/diancan\/api\/queryAdBoard reject-dict
-# 京东首页的促销楼层网关。
-^https?:\/\/homepage-gw\.jd\.com\/npromotion reject-dict
+^https?:\/\/wmapi\.meituan\.com\/api\/v\d+\/(?:ad|loadInfo|startpicture|openscreen)(?:[/?]|$) reject-dict
+^https?:\/\/apimobile\.meituan\.com\/(?:group\/v\d+\/ad|abtest\/v\d+\/ad|appupdate\/legacy\/check)(?:[/?]|$) reject-dict
+^https?:\/\/mapi\.meituan\.com\/(?:launch\/v\d+\/ad|v\d+\/ad)(?:[/?]|$) reject-dict
+^https?:\/\/s3plus\.meituan\.net\/v1\/mss_[^/]+\/linglong\/ reject
+^https?:\/\/waimai-guide\.ele\.me\/h5\/mtop\.alsc\.waimai\.ad\. reject-dict
+^https?:\/\/api\.m\.jd\.com\/client\.action\?.*functionId=(?:deliverLayer|popupConfig|adStart|getAdList)\b reject-dict
+^https?:\/\/api\.smart\.jd\.com\/c\/service\/getLoadingLinks\b reject-dict
 
 [Script]
-# 保守过滤：只删数组里 is_ad=true / ad_type+ad_id / card_type=ad_* 的条目。
-# 三家首页信息流的广告字段名没有抓包，这个脚本不一定命中；命中才改写，否则原样放行。
-delivery.clean = type=http-response,pattern=^https?:\/\/(?:wmapi|apimobile|i)\.meituan\.com\/|^https?:\/\/(?:waimai-guide|client-api|newton-api)\.ele\.me\/|^https?:\/\/api\.m\.jd\.com\/,requires-body=1,max-size=8388608,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/delivery/js/delivery_clean.js
+delivery.clean = type=http-response,pattern=^https?:\/\/(?:api\.m\.jd\.com\/client\.action\?.*functionId=(?:start|home_launchConfig|splash|welcomeHome|personinfoBusiness|search|uniformRecommend|wareBusiness)|(?:wmapi|apimobile|mapi)\.meituan\.com\/(?:api|group)\/v\d+\/|wx\.waimai\.meituan\.com\/weapp\/v\d+\/|waimai-guide\.ele\.me\/h5\/mtop\.),requires-body=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/delivery/js/delivery_clean.js?v=20261123-1,argument="{"block_ads":{{{去广告}}},"clean_ui":{{{精简金融楼层}}}}"
 
 [MITM]
-hostname = %APPEND% wmapi.meituan.com, apimobile.meituan.com, i.meituan.com, rms.meituan.com, waimai-guide.ele.me, client-api.ele.me, newton-api.ele.me, api.m.jd.com, homepage-gw.jd.com
+hostname = %APPEND% api.m.jd.com, api.smart.jd.com, wmapi.meituan.com, apimobile.meituan.com, mapi.meituan.com, wx.waimai.meituan.com, s3plus.meituan.net, waimai-guide.ele.me
+h2 = true

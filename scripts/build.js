@@ -166,6 +166,24 @@ const TARGETS = [
     standalone: "delivery_clean.js",
   },
   {
+    module: "weibo",
+    file: "weibo_clean.js",
+    title: "Weibo Clean — 微博开屏 / 时间线 / 评论 / 热搜广告清理",
+    standalone: "weibo_clean.js",
+  },
+  {
+    module: "zhihu",
+    file: "zhihu_clean.js",
+    title: "Zhihu Clean — 知乎开屏 / 推荐流 / 回答 / 评论广告清理",
+    standalone: "zhihu_clean.js",
+  },
+  {
+    module: "netease",
+    file: "netease_clean.js",
+    title: "NetEase Music Clean — 网易云音乐开屏 / 首页横幅 / 搜索 / 评论广告清理",
+    standalone: "netease_clean.js",
+  },
+  {
     module: "emby",
     file: "emby_unlock.js",
     title: "Emby Unlock — mb3admin 授权校验 mock",

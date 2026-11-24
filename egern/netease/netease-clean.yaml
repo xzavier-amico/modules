@@ -1,0 +1,86 @@
+#=======================================================================================
+# NetEase Music Clean — Egern 模块
+#
+# 网易云音乐去开屏、首页横幅广告、搜索买榜词与评论区推广。
+#=======================================================================================
+
+name: "NetEase Music Clean"
+description: "网易云音乐去开屏、首页横幅广告、搜索买榜词与评论区推广。"
+author: "xzavier-amico"
+homepage: "https://github.com/xzavier-amico/modules"
+icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/netease.png"
+
+env_schema:
+  block_ads:
+    name: "去广告"
+    description: "拦截开屏素材 CDN，并过滤首页横幅、搜索热词与评论区里的商业广告"
+    default_value: "true"
+    options: ["true", "false"]
+  clean_ui:
+    name: "精简首页模块"
+    description: "在首页发现流额外移除直播间、语音房、KTV、商城等泛娱乐模块"
+    default_value: "false"
+    options: ["true", "false"]
+
+rules:
+  - and:
+      match:
+        - domain_suffix:
+            match: "163.com"
+        - protocol:
+            match: quic
+      policy: REJECT
+  - and:
+      match:
+        - domain_suffix:
+            match: "126.net"
+        - protocol:
+            match: quic
+      policy: REJECT
+  - domain:
+      match: "admusicpic.music.126.net"
+      policy: REJECT
+  - domain:
+      match: "g1.163.com"
+      policy: REJECT
+  - domain:
+      match: "iadmat.nosdn.127.net"
+      policy: REJECT
+  - domain:
+      match: "iadmatapk.nosdn.127.net"
+      policy: REJECT
+  - domain:
+      match: "iadmusicmat.music.126.net"
+      policy: REJECT
+  - domain:
+      match: "iadmusicmatvideo.music.126.net"
+      policy: REJECT
+  - domain:
+      match: "nex.163.com"
+      policy: REJECT
+  - domain:
+      match: "yt-adp.nosdn.127.net"
+      policy: REJECT
+  - domain:
+      match: "yt-adp.ws.126.net"
+      policy: REJECT
+
+url_rewrites:
+  - match: "^https?:\\/\\/interface\\d*\\.music\\.163\\.com\\/e?api\\/(?:ad|sp\\/loading\\/ad|v1\\/ad)\\/"
+    location: "http://reject-dict/"
+
+scriptings:
+  - http_response:
+      name: "netease.clean"
+      match: "^https?:\\/\\/(?:interface\\d*\\.music\\.163\\.com|music\\.163\\.com)\\/e?api\\/(?:batch|ad\\/|sp\\/loading|homepage\\/block\\/page|v\\d+\\/banner\\/get|v\\d+\\/discovery\\/|search\\/(?:hot|default)|v\\d+\\/resource\\/comments|comment\\/)"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/netease/js/netease_clean.js?v=20261123-1"
+      body_required: true
+      max_size: 8388608
+      timeout: 20
+
+mitm:
+  hostnames:
+    includes:
+      - "interface.music.163.com"
+      - "interface3.music.163.com"
+      - "music.163.com"

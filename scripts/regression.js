@@ -285,6 +285,9 @@ check("Module filenames and display names follow the Enhance / Clean convention"
     ["tubi", "clean", "Tubi Clean"],
     ["pluto", "clean", "Pluto TV Clean"],
     ["delivery", "clean", "Delivery Clean"],
+    ["weibo", "clean", "Weibo Clean"],
+    ["zhihu", "clean", "Zhihu Clean"],
+    ["netease", "clean", "NetEase Music Clean"],
     ["cnvideo", "clean", "CN Video Clean"],
     ["amap", "clean", "AMap Clean"],
     ["xiaohongshu", "clean", "Xiaohongshu Clean"],
@@ -3826,6 +3829,186 @@ check("Xiaohongshu modules cache-bust their scripts and enable MitM over HTTP/2"
   assert.match(read("loon/xiaohongshu/xiaohongshu-probe.plugin"), /\[MitM\][\s\S]*?^h2 = true$/m);
   assert.match(read("shadowrocket/xiaohongshu/xiaohongshu-clean.sgmodule"), /\[MITM\][\s\S]*?^h2 = true$/m);
 });
+
+check("Delivery, Weibo, Zhihu and NetEase modules reject QUIC, enable HTTP/2 MitM and cache-bust scripts", () => {
+  for (const [mod, scriptName] of [
+    ["delivery", "delivery_clean.js"],
+    ["weibo", "weibo_clean.js"],
+    ["zhihu", "zhihu_clean.js"],
+    ["netease", "netease_clean.js"],
+  ]) {
+    const loon = read("loon/" + mod + "/" + mod + "-clean.plugin");
+    const egern = read("egern/" + mod + "/" + mod + "-clean.yaml");
+    const sr = read("shadowrocket/" + mod + "/" + mod + "-clean.sgmodule");
+    const re = new RegExp(scriptName.replace(".", "\\.") + "\\?v=\\d{8}-\\d+");
+    assert.match(loon, re, mod + " loon script version");
+    assert.match(egern, re, mod + " egern script version");
+    assert.match(sr, re, mod + " shadowrocket script version");
+    assert.match(loon, /PROTOCOL,\s*QUIC/, mod + " loon QUIC reject");
+    assert.match(egern, /match:\s*quic/i, mod + " egern QUIC reject");
+    assert.match(sr, /PROTOCOL,QUIC/, mod + " shadowrocket QUIC reject");
+    assert.match(loon, /\[MitM\][\s\S]*?^h2 = true$/m, mod + " loon h2 MitM");
+    assert.match(sr, /\[MITM\][\s\S]*?^h2 = true$/m, mod + " shadowrocket h2 MITM");
+  }
+});
+
+// Delivery Clean：美团 / 京东 / 饿了么三端回归（含 16+ 位订单/SKU 大整数精度保护）。
+for (const platform of ["loon", "egern", "shadowrocket"]) {
+  const file = platform + "/delivery/js/delivery_clean.js";
+
+  check(platform + " delivery: JD welcomeHome & personinfoBusiness strip floats, ad floors and finance floors", () => {
+    const homeBody = '{"code":"0","orderId":1234567890123456789,"floatLayer":{"id":1},"xview":{"url":"x"},"searchBoxWords":{"words":[{"id":1}]},"floorList":[{"mId":"ad_banner","is_ad":true},{"mId":"normal_icons","type":"icon"}]}';
+    const homeOut = run(file, homeBody, "https://api.m.jd.com/client.action?functionId=welcomeHome&client=apple");
+    assert.ok(homeOut.body, platform + " JD welcomeHome must rewrite even with 19-digit bigint");
+    assert.ok(homeOut.body.includes("1234567890123456789"), "19-digit orderId must not lose precision");
+    const homeData = JSON.parse(homeOut.body);
+    assert.equal(homeData.floatLayer, undefined);
+    assert.equal(homeData.xview, undefined);
+    assert.deepEqual(homeData.searchBoxWords.words, []);
+    assert.deepEqual(homeData.floorList.map((f) => f.mId), ["normal_icons"]);
+
+    const profileBody = JSON.stringify({
+      floors: [
+        { mId: "my_order", floorName: "我的订单" },
+        { mId: "ad_floor", is_ad: true },
+        { mId: "baitiao_floor", floorName: "京东白条" },
+      ],
+    });
+    const pUrl = "https://api.m.jd.com/client.action?functionId=personinfoBusiness";
+    const defaultProfile = JSON.parse(run(file, profileBody, pUrl, { block_ads: true, clean_ui: false }).body);
+    assert.deepEqual(defaultProfile.floors.map((f) => f.mId), ["my_order", "baitiao_floor"]);
+    const cleanProfile = JSON.parse(run(file, profileBody, pUrl, { block_ads: true, clean_ui: true }).body);
+    assert.deepEqual(cleanProfile.floors.map((f) => f.mId), ["my_order"]);
+  });
+
+  check(platform + " delivery: Meituan & Eleme strip CPC/CPM poilist ads, banners and splash", () => {
+    const mtBody = '{"code":0,"trace_id":987654321098765432,"data":{"ad_banner":{"id":1},"floating_layer":{"id":2},"poilist":[{"id":101,"name":"正常黄焖鸡"},{"id":102,"name":"竞价广告店","charge_info":"cpc_token_123","ad_mark":true},{"id":103,"poi":{"is_ad":1}}]}}';
+    const mtOut = run(file, mtBody, "https://wmapi.meituan.com/api/v7/poi/homepage");
+    assert.ok(mtOut.body && mtOut.body.includes("987654321098765432"));
+    const mtData = JSON.parse(mtOut.body).data;
+    assert.equal(mtData.ad_banner, undefined);
+    assert.equal(mtData.floating_layer, undefined);
+    assert.deepEqual(mtData.poilist.map((p) => p.id), [101]);
+
+    const eleBody = JSON.stringify({
+      data: {
+        float_ad: { show: true },
+        items: [
+          { id: "e1", name: "正常奶茶" },
+          { id: "e2", is_p4p: true },
+          { id: "e3", brand_ad: 1 },
+        ],
+      },
+    });
+    const eleOut = run(file, eleBody, "https://waimai-guide.ele.me/h5/mtop.alsc.waimai.recommend/1.0/");
+    const eleData = JSON.parse(eleOut.body).data;
+    assert.equal(eleData.float_ad, undefined);
+    assert.deepEqual(eleData.items.map((i) => i.id), ["e1"]);
+  });
+}
+
+// Weibo Clean：微博时间线、评论区、发现热搜与开屏三端回归。
+for (const platform of ["loon", "egern", "shadowrocket"]) {
+  const file = platform + "/weibo/js/weibo_clean.js";
+
+  check(platform + " weibo: filters timeline promoted mblogs, comment ads and commercial hot-search", () => {
+    const tlBody = '{"statuses":[{"id":4987654321012345678,"text":"正常微博"},{"id":4987654321012345679,"mblogtypename":"广告","promotion":{"ad":"1"}},{"id":4987654321012345680,"readtimetype":"adMblog"}],"advertises":[{"id":1}]}';
+    const tlOut = run(file, tlBody, "https://api.weibo.cn/2/statuses/unread_hot_timeline?gsid=1");
+    assert.ok(tlOut.body && tlOut.body.includes("4987654321012345678"));
+    const tl = JSON.parse(tlOut.body);
+    assert.equal(tl.statuses.length, 1);
+    assert.deepEqual(tl.advertises, []);
+
+    const cmtBody = JSON.stringify({
+      comment_bubble: { id: 1 },
+      datas: [
+        { type: 0, data: { id: "c1", text: "正常评论" } },
+        { type: 1, adType: "推荐", data: { id: "ad1", is_ad: 1 } },
+      ],
+    });
+    const cmtOut = JSON.parse(run(file, cmtBody, "https://api.weibo.cn/2/comments/build_comments?id=1").body);
+    assert.equal(cmtOut.comment_bubble, undefined);
+    assert.equal(cmtOut.datas.length, 1);
+
+    const searchBody = JSON.stringify({
+      cards: [
+        {
+          card_type: 11,
+          card_group: [
+            { desc: "正常热搜", small_icon_desc: "热" },
+            { desc: "商业买榜热搜", small_icon_desc: "商" },
+            { desc: "品牌推广热搜", promotion: { monitor: 1 } },
+          ],
+        },
+        { card_type: 22, is_ad: 1 },
+      ],
+    });
+    const searchOut = JSON.parse(run(file, searchBody, "https://api.weibo.cn/2/search/finder").body);
+    assert.equal(searchOut.cards.length, 1);
+    assert.deepEqual(searchOut.cards[0].card_group.map((g) => g.desc), ["正常热搜"]);
+  });
+}
+
+// Zhihu Clean：知乎开屏、推荐流、回答夹层与评论区三端回归。
+for (const platform of ["loon", "egern", "shadowrocket"]) {
+  const file = platform + "/zhihu/js/zhihu_clean.js";
+
+  check(platform + " zhihu: filters topstory feed_advert, answer ad_info and KMarket cards behind clean_ui", () => {
+    const feedBody = '{"data":[{"id":1,"type":"feed","extra":{"type":"normal"}},{"id":2,"type":"feed_advert"},{"id":3,"type":"feed","adjson":"{\\"ad\\":1}"},{"id":4,"type":"feed","extra":{"type":"km_sku"}}],"paging":{"is_end":false}}';
+    const feedUrl = "https://api.zhihu.com/topstory/recommend?action=down";
+    const defaultFeed = JSON.parse(run(file, feedBody, feedUrl, { block_ads: true, clean_ui: false }).body);
+    assert.deepEqual(defaultFeed.data.map((x) => x.id), [1, 4]);
+    const cleanFeed = JSON.parse(run(file, feedBody, feedUrl, { block_ads: true, clean_ui: true }).body);
+    assert.deepEqual(cleanFeed.data.map((x) => x.id), [1]);
+
+    const ansBody = '{"ad_info":{"ad_id":999},"data":[{"id":3456789012345678901,"type":"answer","ad_info":{"x":1}},{"id":3456789012345678902,"type":"feed_advert"}]}';
+    const ansOut = run(file, ansBody, "https://api.zhihu.com/api/v4/questions/123/answers?limit=5");
+    assert.ok(ansOut.body && ansOut.body.includes("3456789012345678901"));
+    const ansData = JSON.parse(ansOut.body);
+    assert.equal(ansData.ad_info, undefined);
+    assert.equal(ansData.data.length, 1);
+    assert.equal(ansData.data[0].ad_info, undefined);
+  });
+}
+
+// NetEase Music Clean：网易云音乐 batch / 首页横幅 / 搜索热词 / 评论区三端回归。
+for (const platform of ["loon", "egern", "shadowrocket"]) {
+  const file = platform + "/netease/js/netease_clean.js";
+
+  check(platform + " netease: filters homepage ad banners, live blocks, hot search ads and comment ads", () => {
+    const batchBody = JSON.stringify({
+      code: 200,
+      "/api/ad/get": { ads: [{ id: 1 }], data: { ad: 1 } },
+      "/api/homepage/block/page": {
+        data: {
+          blocks: [
+            {
+              blockCode: "HOMEPAGE_BANNER",
+              extInfo: {
+                banners: [
+                  { bannerId: "ok1", typeTitle: "新歌首发" },
+                  { bannerId: "ad1", typeTitle: "广告", adid: 12345 },
+                ],
+              },
+            },
+            { blockCode: "HOMEPAGE_AD_CARD", isAd: true },
+            { blockCode: "HOMEPAGE_PODCAST_LIVE" },
+          ],
+        },
+      },
+    });
+    const url = "https://interface3.music.163.com/eapi/batch";
+    const outDefault = JSON.parse(run(file, batchBody, url, { block_ads: true, clean_ui: false }).body);
+    assert.deepEqual(outDefault["/api/ad/get"].ads, []);
+    const blocksDefault = outDefault["/api/homepage/block/page"].data.blocks;
+    assert.deepEqual(blocksDefault.map((b) => b.blockCode), ["HOMEPAGE_BANNER", "HOMEPAGE_PODCAST_LIVE"]);
+    assert.deepEqual(blocksDefault[0].extInfo.banners.map((b) => b.bannerId), ["ok1"]);
+
+    const outClean = JSON.parse(run(file, batchBody, url, { block_ads: true, clean_ui: true }).body);
+    const blocksClean = outClean["/api/homepage/block/page"].data.blocks;
+    assert.deepEqual(blocksClean.map((b) => b.blockCode), ["HOMEPAGE_BANNER"]);
+  });
+}
 
 // B 站 gRPC：按字段号删广告，没改动的字段连同原始编码一起保留。
 function testBilibiliGrpc() {

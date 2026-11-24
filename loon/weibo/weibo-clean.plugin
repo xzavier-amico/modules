@@ -1,0 +1,50 @@
+#!name=Weibo Clean
+#!desc=微博去开屏、时间线推广、评论区软广与商业热搜。
+#!category=Weibo
+#!author=xzavier-amico
+#!homepage=https://github.com/xzavier-amico/modules
+#!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/weibo.png
+#!tag=Weibo
+
+[Argument]
+block_ads = switch,true,type=boolean,tag=去广告,desc=过滤微博开屏、推荐/关注时间线、评论区软广及发现页商业热搜。
+clean_ui = switch,false,type=boolean,tag=精简我的页,desc=在「我的」页额外隐藏钱包、借钱、游戏等营销服务卡片。
+
+[Rule]
+# 拒绝 QUIC，强制回落 TCP：HTTP/3 走 UDP 不经过 MITM，脚本看不到请求。
+AND, ((DOMAIN-SUFFIX, weibo.cn), (PROTOCOL, QUIC)), REJECT
+AND, ((DOMAIN-SUFFIX, weibo.com), (PROTOCOL, QUIC)), REJECT
+AND, ((DOMAIN-SUFFIX, weibocdn.com), (PROTOCOL, QUIC)), REJECT
+
+# 微博广告 SDK 与投放域名
+DOMAIN, ad.weibo.com, REJECT
+DOMAIN, adstrategy.biz.weibo.com, REJECT
+DOMAIN, aln.uve.weibo.com, REJECT
+DOMAIN, biz.weibo.com, REJECT
+DOMAIN, dp.im.weibo.cn, REJECT
+DOMAIN, game.weibo.cn, REJECT
+DOMAIN, game.weibo.com, REJECT
+DOMAIN, gw5.push.mcp.weibo.cn, REJECT
+DOMAIN, gw6.push.mcp.weibo.cn, REJECT
+DOMAIN, logmix.sina.cn, REJECT
+DOMAIN, pay.sc.weibo.com, REJECT
+DOMAIN, promote.biz.weibo.cn, REJECT
+DOMAIN, sdkapp.uve.weibo.com, REJECT
+DOMAIN, sdkclick.mobile.sina.cn, REJECT
+DOMAIN, trends.mobile.sina.cn, REJECT
+DOMAIN, u1.img.mobile.sina.cn, REJECT
+DOMAIN, wax.weibo.com, REJECT
+DOMAIN, zymo.mps.weibo.com, REJECT
+
+[Rewrite]
+# 纯开屏与广告 SDK 接口直接返回空字典
+request if ${url} ~= /^https?:\/\/sdkapp\.uve\.weibo\.com\// then reject_dict(200)
+request if ${url} ~= /^https?:\/\/(?:api|m)\.weibo\.cn\/2\/(?:ad|sdk|preload)\// then reject_dict(200)
+request if ${url} ~= /^https?:\/\/api\.weibo\.cn\/2\/statuses\/unread_hot_timeline_ad\b/ then reject_dict(200)
+
+[Script]
+response if ${url} ~= /^https?:\/\/(?:api|m|mapi)\.weibo\.c(?:n|om)\/(?:wbapplua\/wbpullad\.lua|2\/(?:push\/active|statuses\/(?:unread_hot_timeline|friends_timeline|container_timeline|bilateral_timeline|extend)|groups\/timeline|video\/tiny_stream_video_list|comments\/build_comments|search\/(?:finder|container_timeline|container_discover)|page|cardlist|profile\/me))(?:[/?]|$)/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/weibo/js/weibo_clean.js?v=20261123-1", {${block_ads}, ${clean_ui}}) with requires_body=true, tag="Weibo Clean", timeout=20
+
+[MitM]
+hostname = api.weibo.cn, m.weibo.cn, mapi.weibo.com, sdkapp.uve.weibo.com
+h2 = true

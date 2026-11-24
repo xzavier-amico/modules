@@ -1,0 +1,38 @@
+#!name=NetEase Music Clean
+#!desc=网易云音乐去开屏、首页横幅广告、搜索买榜词与评论区推广。
+#!category=NetEase
+#!author=xzavier-amico
+#!homepage=https://github.com/xzavier-amico/modules
+#!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/netease.png
+#!tag=NetEase
+
+[Argument]
+block_ads = switch,true,type=boolean,tag=去广告,desc=拦截开屏素材 CDN，并过滤首页横幅、搜索热词与评论区里的商业广告。
+clean_ui = switch,false,type=boolean,tag=精简首页模块,desc=在首页发现流额外移除直播间、语音房、KTV、商城等泛娱乐模块。
+
+[Rule]
+# 拒绝 QUIC，强制回落 TCP：HTTP/3 走 UDP 不经过 MITM，脚本看不到请求。
+AND, ((DOMAIN-SUFFIX, 163.com), (PROTOCOL, QUIC)), REJECT
+AND, ((DOMAIN-SUFFIX, 126.net), (PROTOCOL, QUIC)), REJECT
+
+# 网易云广告素材 CDN 与投放域名
+DOMAIN, admusicpic.music.126.net, REJECT
+DOMAIN, g1.163.com, REJECT
+DOMAIN, iadmat.nosdn.127.net, REJECT
+DOMAIN, iadmatapk.nosdn.127.net, REJECT
+DOMAIN, iadmusicmat.music.126.net, REJECT
+DOMAIN, iadmusicmatvideo.music.126.net, REJECT
+DOMAIN, nex.163.com, REJECT
+DOMAIN, yt-adp.nosdn.127.net, REJECT
+DOMAIN, yt-adp.ws.126.net, REJECT
+
+[Rewrite]
+# 纯开屏与广告拉取接口直接返回空字典
+request if ${url} ~= /^https?:\/\/interface\d*\.music\.163\.com\/e?api\/(?:ad|sp\/loading\/ad|v1\/ad)\// then reject_dict(200)
+
+[Script]
+response if ${url} ~= /^https?:\/\/(?:interface\d*\.music\.163\.com|music\.163\.com)\/e?api\/(?:batch|ad\/|sp\/loading|homepage\/block\/page|v\d+\/banner\/get|v\d+\/discovery\/|search\/(?:hot|default)|v\d+\/resource\/comments|comment\/)/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/netease/js/netease_clean.js?v=20261123-1", {${block_ads}, ${clean_ui}}) with requires_body=true, tag="NetEase Music Clean", timeout=20
+
+[MitM]
+hostname = interface.music.163.com, interface3.music.163.com, music.163.com
+h2 = true

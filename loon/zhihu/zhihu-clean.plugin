@@ -1,0 +1,31 @@
+#!name=Zhihu Clean
+#!desc=知乎去开屏、推荐流伪装广告、回答页夹层广告与评论区推广。
+#!category=Zhihu
+#!author=xzavier-amico
+#!homepage=https://github.com/xzavier-amico/modules
+#!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/zhihu.png
+#!tag=Zhihu
+
+[Argument]
+block_ads = switch,true,type=boolean,tag=去广告,desc=过滤知乎开屏、首页推荐流 feed_advert、回答夹层 ad_info 与评论区插件广告。
+clean_ui = switch,false,type=boolean,tag=过滤盐选推广,desc=额外过滤推荐流里的盐选故事、知乎严选与训练营营销卡片，以及回答页带货卡。
+
+[Rule]
+# 拒绝 QUIC，强制回落 TCP：HTTP/3 走 UDP 不经过 MITM，脚本看不到请求。
+AND, ((DOMAIN-SUFFIX, zhihu.com), (PROTOCOL, QUIC)), REJECT
+DOMAIN, appcloud2.in.zhihu.com, REJECT
+DOMAIN, crash2.zhihu.com, REJECT
+DOMAIN, mqtt.zhihu.com, REJECT
+DOMAIN, sugar.zhihu.com, REJECT
+
+[Rewrite]
+# 纯广告与营销配置接口直接返回空字典
+request if ${url} ~= /^https?:\/\/api\.zhihu\.com\/(?:commercial_api\/(?:ad_float_layer|banners|egg_payload)|ad-style-service\/|fringe\/ad)/ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/api\.zhihu\.com\/api\/v4\/(?:PresetWords|search\/preset_words)\b/ then reject_dict(200)
+
+[Script]
+response if ${url} ~= /^https?:\/\/(?:api|www)\.zhihu\.com\/(?:commercial_api\/(?:launch_v2|real_time_launch_v2)|(?:v2\/)?topstory\/(?:recommend|hot-lists)|api\/v4\/(?:questions\/[^/]+\/answers|answers\/|comment(?:_v5|s)\/|search)|next-(?:bff|data|render))(?:[/?]|$)/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/zhihu/js/zhihu_clean.js?v=20261123-1", {${block_ads}, ${clean_ui}}) with requires_body=true, tag="Zhihu Clean", timeout=20
+
+[MitM]
+hostname = api.zhihu.com, www.zhihu.com
+h2 = true
