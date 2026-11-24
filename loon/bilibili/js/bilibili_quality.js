@@ -170,22 +170,24 @@
   function mapSub(msg, no, fn) {
     const fields = parseFields(msg, 0, msg.length);
     if (!fields) return null;
-    const parts = [];
-    let changed = false;
+    let parts = null;
+    let keepFrom = 0;
     for (let i = 0; i < fields.length; i++) {
       const f = fields[i];
       if (f.no === no && f.wt === 2) {
         const sub = msg.subarray(f.ds, f.de);
         const next = fn(sub);
         if (next) {
+          if (!parts) parts = [];
+          if (f.s > keepFrom) parts.push(msg.subarray(keepFrom, f.s));
           parts.push(encodeField(no, 2, next));
-          changed = true;
-          continue;
+          keepFrom = f.e;
         }
       }
-      parts.push(msg.subarray(f.s, f.e));
     }
-    return changed ? concat(parts) : null;
+    if (!parts) return null;
+    if (keepFrom < msg.length) parts.push(msg.subarray(keepFrom, msg.length));
+    return concat(parts);
   }
 
   // 把 qn(3) 改成 120、fourk(8) 置 1、fnval(5) 补 4K 位；qn 不像清晰度就放弃。
@@ -194,6 +196,7 @@
     if (!fields) return null;
     let qn = null;
     let fnval = null;
+    let fourk = null;
     for (let i = 0; i < fields.length; i++) {
       const f = fields[i];
       if (f.wt !== 0) continue;
@@ -201,8 +204,11 @@
       if (!r) continue;
       if (f.no === 3) qn = r[0];
       else if (f.no === 5) fnval = r[0];
+      else if (f.no === 8) fourk = r[0];
     }
     if (qn === null || QN_VALUES.indexOf(qn) < 0) return null;
+    const needFnval = fnval !== null && !(fnval & FNVAL_4K);
+    if (qn === QN && !needFnval && fourk === 1) return null;
 
     const parts = [];
     let sawFourk = false;
@@ -213,15 +219,14 @@
         parts.push(encodeField(3, 0, encodeVarint(QN)));
         continue;
       }
-      if (f.no === 5 && f.wt === 0 && fnval !== null && !(fnval & FNVAL_4K)) {
+      if (f.no === 5 && f.wt === 0 && needFnval) {
         parts.push(encodeField(5, 0, encodeVarint(fnval | FNVAL_4K)));
         changed = true;
         continue;
       }
       if (f.no === 8 && f.wt === 0) {
         sawFourk = true;
-        const r = readVarint(msg, f.ds, f.de);
-        if (r && r[0] !== 1) {
+        if (fourk !== 1) {
           parts.push(encodeField(8, 0, encodeVarint(1)));
           changed = true;
           continue;
@@ -319,7 +324,7 @@
 
   // ---- REST -------------------------------------------------------------
 
-  if (!/^https?:\/\/(?:api|app)\.bilibili\.com\//i.test(url)) {
+  if (!/^https?:\/\/(?:api|app)\.bili(?:bili\.com|api\.net)\//i.test(url)) {
     $done({});
     return;
   }

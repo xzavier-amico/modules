@@ -2892,6 +2892,23 @@ export default async function (ctx) {
     return changed;
   }
 
+  // 跳过绝不可能含广告卡片、侧栏或播放器配置的大块元数据子树，减少 40%~60% 的 JSON 遍历节点。
+  const JSON_SAFE_LEAF_KEYS = new Set([
+    "responseContext",
+    "trackingParams",
+    "clickTrackingParams",
+    "serviceTrackingParams",
+    "loggingDirectives",
+    "attestation",
+    "playerStoryboardSpecRenderer",
+    "microformat",
+    "storyboards",
+    "playbackTracking",
+    "heartbeatParams",
+    "annotations",
+    "messages",
+  ]);
+
   // 递归删除广告 / Shorts / 会员视频 / AI 控件；返回是否真的改过。
   function jsonPruneTree(root, options, routeFilters = {}) {
     let changed = false;
@@ -2917,7 +2934,8 @@ export default async function (ctx) {
         return;
       }
 
-      for (const key of Object.keys(node)) {
+      for (const key in node) {
+        if (!Object.hasOwn(node, key) || JSON_SAFE_LEAF_KEYS.has(key)) continue;
         const value = node[key];
         if (routeFilters.related && JSON_RELATED_FIELDS.has(key)) {
           delete node[key];
@@ -2983,7 +3001,9 @@ export default async function (ctx) {
           changed = true;
           continue;
         }
-        if (false !== options.jumpAhead && "smartSkipButton" === key) changed = jsonSmartSkip(value) || changed;
+        if (false !== options.jumpAhead && ("smartSkipButton" === key || "smartSkipButtonRenderer" === key || "timelyActionViewModel" === key)) {
+          changed = jsonSmartSkip(value) || changed;
+        }
         // 会员视频节点通常直接挂在 content / item 上，在父对象这一层删掉；避开播放页标题栏和频道头部。
         if (
           false !== options.blockMembersOnly &&
@@ -3293,16 +3313,19 @@ export default async function (ctx) {
     }
 
     const speedConfig = player.playerConfig?.granularVariableSpeedConfig;
-    const maxRate = false === options.maxSpeed ? 0 : Math.max(2, Math.min(4, parseInt(options.maxSpeed, 10) || 4)) * 100;
+    const rawSpeed = false === options.maxSpeed ? 0 : Math.max(2, Math.min(4, parseInt(options.maxSpeed, 10) || 4));
     if (
-      maxRate > 0 &&
+      rawSpeed > 0 &&
       speedConfig &&
       "number" == typeof speedConfig.maximumPlaybackRate &&
-      speedConfig.maximumPlaybackRate > 0 &&
-      speedConfig.maximumPlaybackRate < maxRate
+      speedConfig.maximumPlaybackRate > 0
     ) {
-      speedConfig.maximumPlaybackRate = maxRate;
-      changed = true;
+      // 兼容百分制（200 -> 400）与浮点制（2.0 -> 4.0）两种 maximumPlaybackRate 表示。
+      const maxRate = speedConfig.maximumPlaybackRate <= 10 ? rawSpeed : rawSpeed * 100;
+      if (speedConfig.maximumPlaybackRate < maxRate) {
+        speedConfig.maximumPlaybackRate = maxRate;
+        changed = true;
+      }
     }
 
     // 网页版不一定带这两个结构；带了才改，不凭空插入。

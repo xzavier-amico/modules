@@ -604,9 +604,8 @@
   }
 
   // 用 fn 的返回值替换 path 指向的消息；路径缺失或解析失败时返回 null。
-  function edit(message, path, fn) {
-    if (!path.length) return fn(message);
-    const fields = parse(message);
+  function edit(message, path, fn, fields = parse(message)) {
+    if (!path.length) return fn(message, fields);
     if (!fields || !allCanonical(fields)) return null;
     const f = first(fields, path[0]);
     if (!f || f.w !== 2) return null;
@@ -1479,8 +1478,8 @@
     return serialize(fields);
   }
 
-  const patchCustomize = (b) => edit(b, [1], patchUcs);
-  const patchBootstrap = (b) => edit(b, [2, 1, 1, 1], patchUcs);
+  const patchCustomize = (b, fields = parse(b)) => edit(b, [1], patchUcs, fields);
+  const patchBootstrap = (b, fields = parse(b)) => edit(b, [2, 1, 1, 1], patchUcs, fields);
 
   // 桌面端的 BootstrapMessage / UcsResponseWrapper 外层可能和 iOS 不一样。
   // 这里先确认目标确实像 UcsResponse（有 AccountAttributesResponse 的 map entry），
@@ -1517,9 +1516,8 @@
     return false;
   }
 
-  function editUcs(message, path) {
-    if (!path.length) return looksLikeUcs(message) ? patchUcs(message) : null;
-    const fields = parse(message);
+  function editUcs(message, path, fields = parse(message)) {
+    if (!path.length) return looksLikeUcs(message, fields) ? patchUcs(message, fields) : null;
     if (!fields || !allCanonical(fields)) return null;
     const f = first(fields, path[0]);
     if (!f || f.w !== 2) return null;
@@ -1534,8 +1532,7 @@
     return out && !same(out, buffer) ? out : null;
   }
 
-  function patchNested(buffer) {
-    const fields = parse(buffer);
+  function patchNested(buffer, fields = parse(buffer)) {
     if (!fields || !allCanonical(fields)) return null;
     const walk = (fields, depth) => {
       let changed = false;
@@ -1561,24 +1558,26 @@
     return walk(fields, 0) ? serialize(fields) : null;
   }
 
-  function patchCustomizeDesktop(buffer) {
-    if (looksLikeUcs(buffer)) {
-      const direct = patchUcsIfChanged(buffer);
+  function patchCustomizeDesktop(buffer, topFields = parse(buffer)) {
+    if (!topFields) return null;
+    if (looksLikeUcs(buffer, topFields)) {
+      const direct = patchUcsIfChanged(buffer, topFields);
       if (direct) return direct;
     }
-    const known = editUcs(buffer, [1]);
+    const known = editUcs(buffer, [1], topFields);
     if (known && !same(known, buffer)) return known;
-    return patchNested(buffer);
+    return patchNested(buffer, topFields);
   }
 
-  function patchBootstrapDesktop(buffer) {
-    if (looksLikeUcs(buffer)) {
-      const direct = patchUcsIfChanged(buffer);
+  function patchBootstrapDesktop(buffer, topFields = parse(buffer)) {
+    if (!topFields) return null;
+    if (looksLikeUcs(buffer, topFields)) {
+      const direct = patchUcsIfChanged(buffer, topFields);
       if (direct) return direct;
     }
-    const known = editUcs(buffer, [2, 1, 1, 1]);
+    const known = editUcs(buffer, [2, 1, 1, 1], topFields);
     if (known && !same(known, buffer)) return known;
-    return patchNested(buffer);
+    return patchNested(buffer, topFields);
   }
 
   // ------------------------------------------------------------------ 歌词
@@ -2228,15 +2227,17 @@
   } else if (isAttr) {
     out = patchAttributesResponse(body);
   } else if (desktop) {
+    const topFields = parse(body);
     out =
       url.indexOf("bootstrap") >= 0
-        ? patchBootstrapDesktop(body) || patchCustomizeDesktop(body)
-        : patchCustomizeDesktop(body) || patchBootstrapDesktop(body);
+        ? patchBootstrapDesktop(body, topFields) || editUcs(body, [1], topFields)
+        : patchCustomizeDesktop(body, topFields) || editUcs(body, [2, 1, 1, 1], topFields);
   } else {
+    const topFields = parse(body);
     out =
       url.indexOf("bootstrap") >= 0
-        ? patchBootstrap(body) || patchCustomize(body)
-        : patchCustomize(body) || patchBootstrap(body);
+        ? patchBootstrap(body, topFields) || patchCustomize(body, topFields)
+        : patchCustomize(body, topFields) || patchBootstrap(body, topFields);
   }
 
   function headerValue(headers, name) {

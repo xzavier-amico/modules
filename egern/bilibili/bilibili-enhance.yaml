@@ -104,34 +104,34 @@ url_rewrites:
 scriptings:
   - http_response:
       name: "bilibili.enhance"
-      match: "^https?:\\/\\/(?:app\\.bilibili\\.com|api\\.bilibili\\.com|api\\.live\\.bilibili\\.com)\\/(?:x\\/v2\\/splash\\/|x\\/v2\\/feed\\/index|x\\/v2\\/search\\/square|x\\/web-interface\\/(?:view|archive\\/related|wbi\\/(?:index\\/top\\/feed\\/rcmd|search\\/(?:type|square)|view\\/detail))|x\\/polymer\\/web-dynamic\\/v1\\/feed\\/all|x\\/vip\\/ads\\/materials|pgc\\/view\\/(?:v2\\/app|web)\\/season|pgc\\/page\\/|pgc\\/activity\\/deliver\\/material\\/receive|x\\/resource\\/show\\/tab|x\\/v2\\/account\\/mine|xlive\\/(?:app-interface\\/v2\\/(?:index\\/feed|room\\/recList)|(?:app|web)-room\\/v1\\/index\\/getInfoByRoom|web-interface\\/v1\\/index\\/getList))"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_clean.js?v=20261114-1"
+      match: "^https?:\\/\\/(?:app\\.bilibili\\.com|app\\.biliapi\\.net|api\\.bilibili\\.com|api\\.live\\.bilibili\\.com)\\/(?:x\\/v2\\/splash\\/|x\\/v2\\/feed\\/index|x\\/v2\\/search\\/square|x\\/web-interface\\/(?:view|archive\\/related|wbi\\/(?:index\\/top\\/feed\\/rcmd|search\\/(?:type|square)|view\\/detail))|x\\/polymer\\/web-dynamic\\/v1\\/feed\\/all|x\\/vip\\/ads\\/materials|pgc\\/view\\/(?:v2\\/app|web)\\/season|pgc\\/page\\/|pgc\\/activity\\/deliver\\/material\\/receive|x\\/resource\\/show\\/tab|x\\/v2\\/account\\/mine|xlive\\/(?:app-interface\\/v2\\/(?:index\\/feed|room\\/recList)|(?:app|web)-room\\/v1\\/index\\/getInfoByRoom|web-interface\\/v1\\/index\\/getList))"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_clean.js?v=20261123-1"
       body_required: true
       max_size: 16777216
       timeout: 20
 
   - http_request:
       name: "bilibili.quality"
-      match: "^https?:\\/\\/(?:api|app)\\.bilibili\\.com\\/(?:x|pgc)\\/.*playurl"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_quality.js?v=20261114-1"
+      match: "^https?:\\/\\/(?:api\\.bilibili\\.com|app\\.bilibili\\.com|app\\.biliapi\\.net)\\/(?:x|pgc)\\/.*playurl"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_quality.js?v=20261123-1"
       timeout: 10
 
   # gRPC 的播放请求体里也有 qn，改完再放行。
   - http_request:
       name: "bilibili.quality.grpc"
       match: "^https?:\\/\\/(?:app|grpc)\\.bili(?:bili\\.com|api\\.net)\\/bilibili\\.(?:app\\.playurl\\.v1\\.PlayURL|pgc\\.gateway\\.player\\.v2\\.PlayURL|app\\.playerunite\\.v1\\.Player)\\/(?:PlayView|PlayViewUnite)$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_quality.js?v=20261114-1"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_quality.js?v=20261123-1"
       body_required: true
       binary_body: true
       max_size: 1048576
       timeout: 10
 
-  # 详情页 / 评论区 / 播放器走 gRPC（protobuf over HTTP/2），不是 JSON，
+  # 详情页 / 评论区 / 播放器 / 动态 / 搜索走 gRPC（protobuf over HTTP/2），不是 JSON，
   # 用单独的脚本按字段号删，需要二进制 body。
   - http_response:
       name: "bilibili.grpc"
-      match: "^https?:\\/\\/(?:grpc\\.biliapi\\.net|grpc\\.bilibili\\.com|app\\.biliapi\\.net|app\\.bilibili\\.com)\\/bilibili\\.(?:app\\.(?:view\\.v1\\.View\\/(?:View|RelatesFeed|PlayerRelates|ViewProgress|TFInfo)|viewunite\\.v1\\.View\\/(?:View|AIRelateAsync|RelatesFeed|ViewProgress|PlayPause|ViewEndPage)|dynamic\\.v2\\.Dynamic\\/(?:DynAll|DynVideo))|main\\.community\\.reply\\.v1\\.Reply\\/MainList)$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_grpc.js?v=20261114-3"
+      match: "^https?:\\/\\/(?:grpc\\.biliapi\\.net|grpc\\.bilibili\\.com|app\\.biliapi\\.net|app\\.bilibili\\.com)\\/bilibili\\.(?:app\\.(?:view\\.v1\\.View\\/(?:View|RelatesFeed|PlayerRelates|ViewProgress|TFInfo)|viewunite\\.v1\\.View\\/(?:View|AIRelateAsync|RelatesFeed|ViewProgress|PlayPause|ViewEndPage)|dynamic\\.v2\\.Dynamic\\/(?:DynAll|DynVideo|DynAllPersonal|DynVideoPersonal))|main\\.community\\.reply\\.v1\\.Reply\\/MainList|polymer\\.app\\.search\\.v1\\.Search\\/SearchAll)$"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_grpc.js?v=20261123-1"
       body_required: true
       binary_body: true
       max_size: 16777216

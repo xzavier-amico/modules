@@ -604,9 +604,8 @@
   }
 
   // 用 fn 的返回值替换 path 指向的消息；路径缺失或解析失败时返回 null。
-  function edit(message, path, fn) {
-    if (!path.length) return fn(message);
-    const fields = parse(message);
+  function edit(message, path, fn, fields = parse(message)) {
+    if (!path.length) return fn(message, fields);
     if (!fields || !allCanonical(fields)) return null;
     const f = first(fields, path[0]);
     if (!f || f.w !== 2) return null;
@@ -779,16 +778,20 @@
       prefetch_lyrics: value.prefetch_lyrics,
       sync_plain_lyrics: value.sync_plain_lyrics,
       lyrics_isrc: value.lyrics_isrc,
+      lyrics_script: value.lyrics_script,
+      ignore_han_variants: value.ignore_han_variants,
     });
     if (Array.isArray(raw)) {
       // Loon 位置参数：spoof, ads, unlock, enable_lyrics, desktop, lyrics_source,
-      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc。
+      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc（可选追加 lyrics_script, ignore_han_variants）。
       return {
         enable_lyrics: raw[3],
         lyrics_source: raw[5],
         prefetch_lyrics: raw[6],
         sync_plain_lyrics: raw[7],
         lyrics_isrc: raw[8],
+        lyrics_script: raw[9],
+        ignore_han_variants: raw[10],
       };
     }
     if (typeof raw === "string") {
@@ -1368,9 +1371,10 @@
   };
 
   if (HELPER) {
-    // 辅助模式：feed 脚本只复用缓存查询与补卡判断，不发起歌词查询。
+    // 辅助模式：feed 脚本只复用缓存查询与补卡判断，不发起主响应歌词查询。
     // 曲目元数据回填：feed 从 scrollsita 里抄到的曲名 / 歌手写进同一份缓存。
     globalThis.__spotifyRememberTrackMeta = rememberTrackMeta;
+    globalThis.__spotifyHasTrackMeta = (id) => !!cachedTrackMeta(id);
 
     // 最近确认没有歌词的曲目不再补空卡；已经查到歌词、或有歌词请求在路上时
     // 以实际进度为准，避免旧的 miss 标记把这次可能成功的歌词挡掉。
@@ -1406,20 +1410,21 @@
     globalThis.__spotifyPrefetch = (id) => {
       const target = id ? String(id) : "";
       if (!target || !prefetchNextOn || !flag(opt.enable_lyrics, true)) return false;
-      if (readLyricsCache(lyricsCacheKey(target), target)) return false;
+      const targetCacheKey = lyricsCacheKey(target);
+      if (hasLyricsCache(targetCacheKey, target)) return false;
       if (prefetchMark(target)) return false;
       // 没有曲名 / 歌手时要先请求 open.spotify.com，预取就没意义了：等元数据到了再说。
       const meta = cachedTrackMeta(target);
       if (!meta || !meta.title) return false;
       rememberPrefetch(target);
-      // 辅助模式下没有主链路在跑，这里的模块级状态可以安全改写。
+      // 闭包绑定当前预取的目标 key，避免并发预取时模块级变量互相覆盖导致串歌。
       prefetching = true;
       trackId = target;
-      cacheKey = lyricsCacheKey(target);
+      cacheKey = targetCacheKey;
       plainFallback = null;
       plainFallbackPseudo = false;
       resolveLyrics((payload) => {
-        if (payload) writeLyricsCache(cacheKey, payload);
+        if (payload) writeLyricsCache(targetCacheKey, payload);
       });
       return true;
     };
@@ -1919,10 +1924,12 @@
     }
     let remaining = order.length;
     let finished = false;
+    let localPlain = null;
+    let localPlainPseudo = false;
     const checkAllDone = () => {
       if (!remaining && !finished) {
         finished = true;
-        done(plainFallback);
+        done(localPlain || plainFallback);
       }
     };
     for (const name of order) {
@@ -1954,24 +1961,33 @@
             plainTimer = undefined;
           }
           if (pseudo) {
+            localPlain = payload;
+            localPlainPseudo = true;
             plainFallback = payload;
             plainFallbackPseudo = true;
           }
           done(payload);
           return;
         }
-        if (payload && (!plainFallback || (!plainFallbackPseudo && pseudo))) {
+        if (payload && (!localPlain || (!localPlainPseudo && pseudo))) {
+          localPlain = payload;
+          localPlainPseudo = pseudo;
           plainFallback = payload;
           plainFallbackPseudo = pseudo;
           // 有纯文本但同步歌词还在路上时，先把纯文本发出去，后续结果不再覆盖。
           // 仅在主链路未结束且非预取模式下调度，避免重复创建定时器或覆盖真同步缓存。
+          // 注意：在 Loon 请求阶段 race 模式下（onPlainFallback 存在），不能在官方响应未回来前
+          // 直接写缓存，否则慢速官方歌词随后胜出时缓存已被第三方纯文本污染；由 onPlainFallback 在确认官方 miss 后再写。
           if (!prefetching && !settled && plainTimer === undefined && typeof setTimeout === "function") {
             plainTimer = setTimeout(() => {
               plainTimer = undefined;
               if (finished || settled || prefetching || officialWon || !plainFallback) return;
-              writeLyricsCache(cacheKey, plainFallback);
-              if (onPlainFallback) onPlainFallback();
-              else emit(plainFallback);
+              if (onPlainFallback) {
+                onPlainFallback();
+              } else {
+                writeLyricsCache(cacheKey, plainFallback);
+                emit(plainFallback);
+              }
             }, PLAIN_FALLBACK_MS);
           }
         }
@@ -3561,6 +3577,8 @@
   function rememberScrollMeta(bytes, trackId) {
     const remember = typeof globalThis !== "undefined" ? globalThis.__spotifyRememberTrackMeta : null;
     if (typeof remember !== "function" || !trackId) return;
+    const hasMeta = typeof globalThis !== "undefined" ? globalThis.__spotifyHasTrackMeta : null;
+    if (typeof hasMeta === "function" && hasMeta(trackId)) return;
     const found = { title: "", artist: "" };
     collectMetaPairs(bytes, found, 0, { left: META_WALK_LIMIT });
     if (!found.title) return;
@@ -3594,6 +3612,7 @@
     const kept = [];
     let removed = 0;
     let hasLyrics = false;
+    let sawTrackRef = false;
     // 认出来的卡片数量：section 里带 section id（23）/ 曲目引用（5）/ 广告内容（30）
     // 才算一列卡片。形状对不上说明这不是滚动页的卡片列表（或者客户端换了结构），
     // 这时插一个 section 进去会把整包结构写坏 —— 客户端解析失败后整页空白，
@@ -3625,6 +3644,7 @@
       if (!ad && hasTrack && hasSectionId) hasLyrics = true;
       // 当前曲目的 section 里通常带 track_title / artist_name，抄进元数据缓存。
       if (trackRef && hasTrack && containsBytes(section.data, trackRef)) {
+        sawTrackRef = true;
         rememberScrollMeta(section.data, trackId);
       }
       if (wantAds && ad) {
@@ -3639,7 +3659,7 @@
     // 判定条件放宽到「认出了任意一列卡片」或者「body 里确实有当前曲目的引用」，
     // 后者能兜住客户端换 section 结构、但列表确实属于这首歌的情况。
     const canAdd = !!trackId && !hasLyrics
-      && (recognized > 0 || (trackRef && containsBytes(buffer, trackRef)));
+      && (recognized > 0 || sawTrackRef || (trackRef && containsBytes(buffer, trackRef)));
     const addCard = canAdd && (typeof wantCard === "function" ? !!wantCard() : !!wantCard);
     if (!removed && !addCard) return null;
     if (addCard) kept.unshift(wireEncodeField(1, 2, lyricsSection(trackId)));

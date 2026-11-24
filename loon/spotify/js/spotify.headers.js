@@ -18,7 +18,7 @@
   "use strict";
 
   const req = typeof $request !== "undefined" && $request ? $request : null;
-  if (!req || !req.url) {
+  if (!req || !req.url || !/[?&]timezone=/i.test(req.url)) {
     $done({});
     return;
   }

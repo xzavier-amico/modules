@@ -2036,6 +2036,21 @@ check("Bilibili web endpoints strip ads behind the web toggle", () => {
       },
     },
     {
+      path: "/x/web-interface/wbi/view/detail?bvid=BV1",
+      body: {
+        code: 0,
+        data: {
+          View: { aid: 1, cm_config: { ads: [] }, cm_under_player: { id: 1 } },
+          Related: [{ aid: 10 }, { aid: 11, is_ad: true }, { aid: 12, goto: "ad" }],
+        },
+      },
+      check: (data) => {
+        assert.equal(data.data.View.cm_config, undefined);
+        assert.equal(data.data.View.cm_under_player, undefined);
+        assert.deepEqual(data.data.Related.map((item) => item.aid), [10]);
+      },
+    },
+    {
       path: "/x/polymer/web-dynamic/v1/feed/all?type=all",
       body: { code: 0, data: { items: [{ type: "DYNAMIC_TYPE_AV", id: "ok" }, { type: "DYNAMIC_TYPE_AD", id: "ad" }] } },
       check: (data) => assert.deepEqual(data.data.items.map((item) => item.id), ["ok"]),
@@ -2070,6 +2085,21 @@ check("Bilibili web endpoints strip ads behind the web toggle", () => {
       const off = run(file, JSON.stringify(item.body), url, { block_ads: true, hide_vip: true, clean_ui: true, web: false });
       assert.deepEqual(Object.keys(off), [], platform + " " + item.path + " must pass through when web is off");
     }
+
+    // 64 位大整数 ID 在 JSON 改写后不能丢失精度
+    const bigDynamic = '{"code":0,"data":{"items":[{"type":"DYNAMIC_TYPE_AV","id":9876543210123456789},{"type":"DYNAMIC_TYPE_AD","id":1}]}}';
+    const bigOut = run(file, bigDynamic, base + "/x/polymer/web-dynamic/v1/feed/all?type=all", { block_ads: true, web: true });
+    assert.ok(bigOut.body && bigOut.body.includes("9876543210123456789") && !bigOut.body.includes("DYNAMIC_TYPE_AD"));
+
+    // 开屏与弹窗广告受 block_ads 开关控制
+    const splashUrl = "https://app.biliapi.net/x/v2/splash/list";
+    const splashBody = JSON.stringify({ code: 0, data: { list: [{ id: 1 }] } });
+    assert.deepEqual(Object.keys(run(file, splashBody, splashUrl, { block_ads: false, hide_vip: true, clean_ui: true })), []);
+    assert.deepEqual(JSON.parse(run(file, splashBody, splashUrl, { block_ads: true }).body).data.list, []);
+
+    const popupUrl = "https://api.bilibili.com/pgc/activity/deliver/material/receive";
+    assert.deepEqual(Object.keys(run(file, "{}", popupUrl, { block_ads: false, hide_vip: true })), []);
+    assert.equal(JSON.parse(run(file, "{}", popupUrl, { block_ads: true }).body).data.closeType, "close_win");
   }
 });
 
@@ -3831,17 +3861,29 @@ function testBilibiliGrpc() {
       assert.deepEqual(send("/bilibili.app.viewunite.v1.View/View", serialize([v(7, 1n), v(3, 42n)])), frame(serialize([v(3, 42n)])));
 
       const promo = serialize([v(1, 18n)]);
+      const vipPromo = serialize([v(1, 29n)]);
       const normal = serialize([v(1, 28n)]);
-      const tab = serialize([b(1, serialize([b(2, serialize([b(2, promo), b(2, normal)]))]))]);
-      assert.deepEqual(send("/bilibili.app.viewunite.v1.View/View", serialize([b(5, tab)])),
+      const tab = serialize([b(1, serialize([b(2, serialize([b(2, promo), b(2, vipPromo), b(2, normal)]))]))]);
+      assert.deepEqual(send("/bilibili.app.viewunite.v1.View/View", serialize([b(5, tab)]), { block_ads: true, hide_vip: true }),
         frame(serialize([b(5, serialize([b(1, serialize([b(2, serialize([b(2, normal)]))]))]))])));
+      assert.deepEqual(send("/bilibili.app.viewunite.v1.View/View", serialize([b(5, tab)]), { block_ads: true, hide_vip: false }),
+        frame(serialize([b(5, serialize([b(1, serialize([b(2, serialize([b(2, vipPromo), b(2, normal)]))]))]))])));
+      assert.deepEqual(send("/bilibili.app.viewunite.v1.View/View", serialize([b(5, tab)]), { block_ads: false, hide_vip: true }),
+        frame(serialize([b(5, serialize([b(1, serialize([b(2, serialize([b(2, promo), b(2, normal)]))]))]))])));
     });
 
-    check(platform + " bilibili grpc strips dynamic ads and reply ads", () => {
+    check(platform + " bilibili grpc strips dynamic ads, search ads and reply ads", () => {
       const ad = serialize([v(1, 15n), s(2, "ad")]);
       const ok = serialize([v(1, 1n), s(2, "normal")]);
       assert.deepEqual(send("/bilibili.app.dynamic.v2.Dynamic/DynAll", serialize([b(1, serialize([b(1, ad), b(1, ok)]))])),
         frame(serialize([b(1, serialize([b(1, ok)]))])));
+      assert.deepEqual(send("/bilibili.app.dynamic.v2.Dynamic/DynAllPersonal", serialize([b(1, serialize([b(1, ad), b(1, ok)]))])),
+        frame(serialize([b(1, serialize([b(1, ok)]))])));
+
+      const searchAd = serialize([s(3, "ad"), b(10, serialize([s(1, "cm")]))]);
+      const searchOk = serialize([s(3, "av"), s(4, "normal video")]);
+      assert.deepEqual(send("/bilibili.polymer.app.search.v1.Search/SearchAll", serialize([b(4, searchAd), b(4, searchOk)])),
+        frame(serialize([b(4, searchOk)])));
 
       const msg = serialize([s(11, "x"), b(28, serialize([v(1, 3n)])), b(28, serialize([v(1, 1n)])),
         s(4, "看这个 b23.tv/cm/abc"), s(4, "普通评论")]);

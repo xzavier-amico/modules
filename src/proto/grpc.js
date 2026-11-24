@@ -135,10 +135,11 @@
 
   // drop 里的字段号整条删；filters 里的字段号按条件删（只处理 length-delimited）；
   // maps 里的字段号改写载荷（只处理 length-delimited）。
-  // 单次扫描完成，不建完整字段列表；没有改动返回 null，调用方据此原样放行。
+  // 单次扫描完成，不建完整字段列表；采用懒切片（Lazy slice），未改动时 0 子数组分配；
+  // 没有改动返回 null，调用方据此原样放行。
   function rewrite(msg, drop, filters, maps) {
-    const parts = [];
-    let changed = false;
+    let parts = null;
+    let keepFrom = 0;
     const state = { i: 0 };
     try {
       while (state.i < msg.length) {
@@ -170,28 +171,35 @@
         if (state.i > msg.length) throw new Error("Truncated protobuf field");
         const end = state.i;
         if (drop && drop.indexOf(no) >= 0) {
-          changed = true;
+          if (!parts) parts = [];
+          if (start > keepFrom) parts.push(msg.subarray(keepFrom, start));
+          keepFrom = end;
           continue;
         }
         if (filters && wt === 2 && filters[no] && filters[no](msg, ds, de)) {
-          changed = true;
+          if (!parts) parts = [];
+          if (start > keepFrom) parts.push(msg.subarray(keepFrom, start));
+          keepFrom = end;
           continue;
         }
         if (maps && wt === 2 && maps[no]) {
           const sub = msg.subarray(ds, de);
           const next = maps[no](sub);
           if (next && !same(next, sub)) {
+            if (!parts) parts = [];
+            if (start > keepFrom) parts.push(msg.subarray(keepFrom, start));
             parts.push(encodeField(no, 2, next));
-            changed = true;
+            keepFrom = end;
             continue;
           }
         }
-        parts.push(msg.subarray(start, end));
       }
     } catch (e) {
       return null;
     }
-    return changed ? concat(parts) : null;
+    if (!parts) return null;
+    if (keepFrom < msg.length) parts.push(msg.subarray(keepFrom, msg.length));
+    return concat(parts);
   }
 
   // 读某个 varint 字段的值；没有就返回 null。
@@ -276,10 +284,10 @@
   }
 
   // 对 no 字段的每个 length-delimited 载荷调用 fn，fn 返回新字节或 null（不改）。
-  // 单次扫描，不建完整字段列表。
+  // 单次扫描 + 懒切片，未改动时 0 子数组分配。
   function mapSub(msg, no, fn) {
-    const parts = [];
-    let changed = false;
+    let parts = null;
+    let keepFrom = 0;
     const state = { i: 0 };
     try {
       while (state.i < msg.length) {
@@ -314,23 +322,26 @@
           const sub = msg.subarray(ds, de);
           const next = fn(sub);
           if (next && !same(next, sub)) {
+            if (!parts) parts = [];
+            if (start > keepFrom) parts.push(msg.subarray(keepFrom, start));
             parts.push(encodeField(no, 2, next));
-            changed = true;
+            keepFrom = end;
             continue;
           }
         }
-        parts.push(msg.subarray(start, end));
       }
     } catch (e) {
       return null;
     }
-    return changed ? concat(parts) : null;
+    if (!parts) return null;
+    if (keepFrom < msg.length) parts.push(msg.subarray(keepFrom, msg.length));
+    return concat(parts);
   }
 
-  // 过滤重复字段：keep 返回 false 的整条删掉。单次扫描，不建完整字段列表。
+  // 过滤重复字段：keep 返回 false 的整条删掉。单次扫描 + 懒切片，未改动时 0 子数组分配。
   function filterRepeated(msg, no, keep) {
-    const parts = [];
-    let changed = false;
+    let parts = null;
+    let keepFrom = 0;
     const state = { i: 0 };
     try {
       while (state.i < msg.length) {
@@ -362,22 +373,25 @@
         if (state.i > msg.length) throw new Error("Truncated protobuf field");
         const end = state.i;
         if (fieldNo === no && wt === 2 && !keep(msg.subarray(ds, de))) {
-          changed = true;
+          if (!parts) parts = [];
+          if (start > keepFrom) parts.push(msg.subarray(keepFrom, start));
+          keepFrom = end;
           continue;
         }
-        parts.push(msg.subarray(start, end));
       }
     } catch (e) {
       return null;
     }
-    return changed ? concat(parts) : null;
+    if (!parts) return null;
+    if (keepFrom < msg.length) parts.push(msg.subarray(keepFrom, msg.length));
+    return concat(parts);
   }
 
   // 一次扫描同时做 filter + map：keep 返回 false 的删掉，
-  // keep 返回 true 的再调 mapFn（可返回 null 表示不改）。
+  // keep 返回 true 的再调 mapFn（可返回 null 表示不改）。懒切片避免无改动时的子数组分配。
   function filterAndMap(msg, no, keep, mapFn) {
-    const parts = [];
-    let changed = false;
+    let parts = null;
+    let keepFrom = 0;
     const state = { i: 0 };
     try {
       while (state.i < msg.length) {
@@ -411,24 +425,29 @@
         if (fieldNo === no && wt === 2) {
           const sub = msg.subarray(ds, de);
           if (!keep(sub)) {
-            changed = true;
+            if (!parts) parts = [];
+            if (start > keepFrom) parts.push(msg.subarray(keepFrom, start));
+            keepFrom = end;
             continue;
           }
           if (mapFn) {
             const next = mapFn(sub);
             if (next && !same(next, sub)) {
+              if (!parts) parts = [];
+              if (start > keepFrom) parts.push(msg.subarray(keepFrom, start));
               parts.push(encodeField(no, 2, next));
-              changed = true;
+              keepFrom = end;
               continue;
             }
           }
         }
-        parts.push(msg.subarray(start, end));
       }
     } catch (e) {
       return null;
     }
-    return changed ? concat(parts) : null;
+    if (!parts) return null;
+    if (keepFrom < msg.length) parts.push(msg.subarray(keepFrom, msg.length));
+    return concat(parts);
   }
 
   // ---- gRPC 帧 ----------------------------------------------------------

@@ -604,9 +604,8 @@ function buildPatcher($argument) {
   }
 
   // 用 fn 的返回值替换 path 指向的消息；路径缺失或解析失败时返回 null。
-  function edit(message, path, fn) {
-    if (!path.length) return fn(message);
-    const fields = parse(message);
+  function edit(message, path, fn, fields = parse(message)) {
+    if (!path.length) return fn(message, fields);
     if (!fields || !allCanonical(fields)) return null;
     const f = first(fields, path[0]);
     if (!f || f.w !== 2) return null;
@@ -1479,8 +1478,8 @@ function buildPatcher($argument) {
     return serialize(fields);
   }
 
-  const patchCustomize = (b) => edit(b, [1], patchUcs);
-  const patchBootstrap = (b) => edit(b, [2, 1, 1, 1], patchUcs);
+  const patchCustomize = (b, fields = parse(b)) => edit(b, [1], patchUcs, fields);
+  const patchBootstrap = (b, fields = parse(b)) => edit(b, [2, 1, 1, 1], patchUcs, fields);
 
   // 桌面端的 BootstrapMessage / UcsResponseWrapper 外层可能和 iOS 不一样。
   // 这里先确认目标确实像 UcsResponse（有 AccountAttributesResponse 的 map entry），
@@ -1517,9 +1516,8 @@ function buildPatcher($argument) {
     return false;
   }
 
-  function editUcs(message, path) {
-    if (!path.length) return looksLikeUcs(message) ? patchUcs(message) : null;
-    const fields = parse(message);
+  function editUcs(message, path, fields = parse(message)) {
+    if (!path.length) return looksLikeUcs(message, fields) ? patchUcs(message, fields) : null;
     if (!fields || !allCanonical(fields)) return null;
     const f = first(fields, path[0]);
     if (!f || f.w !== 2) return null;
@@ -1534,8 +1532,7 @@ function buildPatcher($argument) {
     return out && !same(out, buffer) ? out : null;
   }
 
-  function patchNested(buffer) {
-    const fields = parse(buffer);
+  function patchNested(buffer, fields = parse(buffer)) {
     if (!fields || !allCanonical(fields)) return null;
     const walk = (fields, depth) => {
       let changed = false;
@@ -1561,24 +1558,26 @@ function buildPatcher($argument) {
     return walk(fields, 0) ? serialize(fields) : null;
   }
 
-  function patchCustomizeDesktop(buffer) {
-    if (looksLikeUcs(buffer)) {
-      const direct = patchUcsIfChanged(buffer);
+  function patchCustomizeDesktop(buffer, topFields = parse(buffer)) {
+    if (!topFields) return null;
+    if (looksLikeUcs(buffer, topFields)) {
+      const direct = patchUcsIfChanged(buffer, topFields);
       if (direct) return direct;
     }
-    const known = editUcs(buffer, [1]);
+    const known = editUcs(buffer, [1], topFields);
     if (known && !same(known, buffer)) return known;
-    return patchNested(buffer);
+    return patchNested(buffer, topFields);
   }
 
-  function patchBootstrapDesktop(buffer) {
-    if (looksLikeUcs(buffer)) {
-      const direct = patchUcsIfChanged(buffer);
+  function patchBootstrapDesktop(buffer, topFields = parse(buffer)) {
+    if (!topFields) return null;
+    if (looksLikeUcs(buffer, topFields)) {
+      const direct = patchUcsIfChanged(buffer, topFields);
       if (direct) return direct;
     }
-    const known = editUcs(buffer, [2, 1, 1, 1]);
+    const known = editUcs(buffer, [2, 1, 1, 1], topFields);
     if (known && !same(known, buffer)) return known;
-    return patchNested(buffer);
+    return patchNested(buffer, topFields);
   }
 
   // ------------------------------------------------------------------ 歌词
@@ -2425,6 +2424,8 @@ function buildPatcher($argument) {
   function rememberScrollMeta(bytes, trackId) {
     const remember = typeof globalThis !== "undefined" ? globalThis.__spotifyRememberTrackMeta : null;
     if (typeof remember !== "function" || !trackId) return;
+    const hasMeta = typeof globalThis !== "undefined" ? globalThis.__spotifyHasTrackMeta : null;
+    if (typeof hasMeta === "function" && hasMeta(trackId)) return;
     const found = { title: "", artist: "" };
     collectMetaPairs(bytes, found, 0, { left: META_WALK_LIMIT });
     if (!found.title) return;
@@ -2458,6 +2459,7 @@ function buildPatcher($argument) {
     const kept = [];
     let removed = 0;
     let hasLyrics = false;
+    let sawTrackRef = false;
     // 认出来的卡片数量：section 里带 section id（23）/ 曲目引用（5）/ 广告内容（30）
     // 才算一列卡片。形状对不上说明这不是滚动页的卡片列表（或者客户端换了结构），
     // 这时插一个 section 进去会把整包结构写坏 —— 客户端解析失败后整页空白，
@@ -2489,6 +2491,7 @@ function buildPatcher($argument) {
       if (!ad && hasTrack && hasSectionId) hasLyrics = true;
       // 当前曲目的 section 里通常带 track_title / artist_name，抄进元数据缓存。
       if (trackRef && hasTrack && containsBytes(section.data, trackRef)) {
+        sawTrackRef = true;
         rememberScrollMeta(section.data, trackId);
       }
       if (wantAds && ad) {
@@ -2503,7 +2506,7 @@ function buildPatcher($argument) {
     // 判定条件放宽到「认出了任意一列卡片」或者「body 里确实有当前曲目的引用」，
     // 后者能兜住客户端换 section 结构、但列表确实属于这首歌的情况。
     const canAdd = !!trackId && !hasLyrics
-      && (recognized > 0 || (trackRef && containsBytes(buffer, trackRef)));
+      && (recognized > 0 || sawTrackRef || (trackRef && containsBytes(buffer, trackRef)));
     const addCard = canAdd && (typeof wantCard === "function" ? !!wantCard() : !!wantCard);
     if (!removed && !addCard) return null;
     if (addCard) kept.unshift(wireEncodeField(1, 2, lyricsSection(trackId)));

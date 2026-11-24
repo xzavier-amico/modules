@@ -62,15 +62,17 @@
   } else if (isAttr) {
     out = patchAttributesResponse(body);
   } else if (desktop) {
+    const topFields = parse(body);
     out =
       url.indexOf("bootstrap") >= 0
-        ? patchBootstrapDesktop(body) || patchCustomizeDesktop(body)
-        : patchCustomizeDesktop(body) || patchBootstrapDesktop(body);
+        ? patchBootstrapDesktop(body, topFields) || editUcs(body, [1], topFields)
+        : patchCustomizeDesktop(body, topFields) || editUcs(body, [2, 1, 1, 1], topFields);
   } else {
+    const topFields = parse(body);
     out =
       url.indexOf("bootstrap") >= 0
-        ? patchBootstrap(body) || patchCustomize(body)
-        : patchCustomize(body) || patchBootstrap(body);
+        ? patchBootstrap(body, topFields) || patchCustomize(body, topFields)
+        : patchCustomize(body, topFields) || patchBootstrap(body, topFields);
   }
 
   function headerValue(headers, name) {

@@ -845,7 +845,8 @@ export default async function (ctx) {
     try {
       const route = $request.url.split("?")[0].split("/youtubei/v1/")[1];
       const body = toBytes($response.body);
-      if (("config" !== route && "log_event" !== route) || !body?.length || body.length > MAX_RESPONSE_BYTES) {
+      // UMP 密钥路径深达 5 层且含 32+16 字节密钥，总长至少 56 字节；JSON 响应（0x7b '{'）或短响应直接跳过。
+      if (("config" !== route && "log_event" !== route) || !body || body.length < 56 || body.length > MAX_RESPONSE_BYTES || 123 === body[0]) {
         $done({});
         return;
       }

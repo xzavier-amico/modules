@@ -174,14 +174,14 @@ scriptings:
   - http_request:
       name: "youtube.request.log"
       match: "^https://(?:youtubei\\.googleapis\\.com|(?:www|m)\\.youtube\\.com|music\\.youtube\\.com)/youtubei/v1/log_event(?:\\?.*)?$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.request.js?v=20261121-1"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.request.js?v=20261123-1"
       timeout: 10
 
   # 请求阶段：initplayback / videoplayback 需要请求体。
   - http_request:
       name: "youtube.request.playback"
       match: "^https?://[\\w-]+\\.googlevideo\\.com/(?:initplayback|videoplayback)(?:\\?.*)?$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.request.js?v=20261121-1"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.request.js?v=20261123-1"
       body_required: true
       binary_body: true
       max_size: 8388608
@@ -191,7 +191,7 @@ scriptings:
   - http_response:
       name: "youtube.key"
       match: "^https://(?:youtubei\\.googleapis\\.com|music\\.youtube\\.com)/youtubei/v1/(?:config|log_event)(?:\\?.*)?$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.key.js?v=20261121-1"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.key.js?v=20261123-1"
       body_required: true
       binary_body: true
       max_size: 8388608
@@ -201,7 +201,7 @@ scriptings:
   - http_response:
       name: "youtube.response"
       match: "^https://(?:youtubei\\.googleapis\\.com|(?:www|m)\\.youtube\\.com|music\\.youtube\\.com)/youtubei/v1/(?:navigation/resolve_url|browse|next|player|search|reel/reel_watch_sequence|guide|account/get_setting|get_watch)(?:\\?.*)?$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.response.js?v=20261121-1"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.response.js?v=20261123-1"
       body_required: true
       binary_body: true
       max_size: 8388608
@@ -211,7 +211,7 @@ scriptings:
   - http_response:
       name: "youtube.ump"
       match: "^https?://[\\w-]+\\.googlevideo\\.com/initplayback(?:\\?.*)?$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.response.js?v=20261121-1"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/youtube/js/youtube.response.js?v=20261123-1"
       body_required: true
       binary_body: true
       max_size: 5242880

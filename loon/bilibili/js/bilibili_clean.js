@@ -59,15 +59,106 @@
   const cleanUi = flag(opt.clean_ui, true);
   const web = flag(opt.web, true);
 
+  if (!blockAds && !hideVip && !cleanUi) {
+    $done({});
+    return;
+  }
+
+  const path = url.split("?")[0];
+
+  // 番剧弹窗广告：不需要解析原响应，直接给一个「关闭」的合法响应。
+  if (path.indexOf("/pgc/activity/deliver/material/receive") >= 0) {
+    if (!blockAds) {
+      $done({});
+      return;
+    }
+    const out = JSON.stringify({
+      code: 0,
+      data: { closeType: "close_win", container: [], showTime: "" },
+      message: "success",
+    });
+    $done({ body: out });
+    return;
+  }
+
+  const isWebEndpoint =
+    path.indexOf("/x/web-interface/") >= 0 ||
+    path.indexOf("/x/polymer/web-dynamic/v1/feed/all") >= 0 ||
+    path.indexOf("/pgc/view/web/season") >= 0 ||
+    path.indexOf("/xlive/web-interface/") >= 0 ||
+    path.indexOf("/xlive/web-room/") >= 0;
+  if (isWebEndpoint && !web) {
+    $done({});
+    return;
+  }
+
+  // 只处理下面这些接口；模块正则之外万一命中，或者对应开关已关闭，在 JSON.parse 之前直接放行。
+  const isSplash = path.indexOf("/x/v2/splash/") >= 0;
+  const isFeed = path.indexOf("/x/v2/feed/index") >= 0;
+  const isSearchSquare = path.indexOf("/x/v2/search/square") >= 0;
+  const isWebRcmd = path.indexOf("/x/web-interface/wbi/index/top/feed/rcmd") >= 0;
+  const isWebSearch =
+    path.indexOf("/x/web-interface/wbi/search/type") >= 0 ||
+    path.indexOf("/x/web-interface/wbi/search/square") >= 0;
+  const isWebRelated = path.indexOf("/x/web-interface/archive/related") >= 0;
+  const isWebViewDetail = path.indexOf("/x/web-interface/wbi/view/detail") >= 0;
+  const isWebView = !isWebViewDetail && path.indexOf("/x/web-interface/view") >= 0;
+  const isWebDynamic = path.indexOf("/x/polymer/web-dynamic/v1/feed/all") >= 0;
+  const isVipMaterials = path.indexOf("/x/vip/ads/materials") >= 0;
+  const isPgcSeason = path.indexOf("/pgc/view/v2/app/season") >= 0 || path.indexOf("/pgc/view/web/season") >= 0;
+  const isPgcPage = path.indexOf("/pgc/page/") >= 0;
+  const isShowTab = path.indexOf("/x/resource/show/tab") >= 0;
+  const isMine = path.indexOf("/x/v2/account/mine") >= 0;
+  const isLive = path.indexOf("/xlive/") >= 0;
+
+  const handled =
+    ((isSplash || isFeed || isSearchSquare || isWebRcmd || isWebSearch || isWebRelated || isWebView || isWebViewDetail || isWebDynamic || isPgcPage || isLive) && blockAds) ||
+    (isVipMaterials && (blockAds || hideVip)) ||
+    (isPgcSeason && hideVip) ||
+    (isShowTab && cleanUi) ||
+    (isMine && (hideVip || cleanUi));
+  if (!handled) {
+    $done({});
+    return;
+  }
+
   const body = res.body;
   if (typeof body !== "string" || !body) {
     $done({});
     return;
   }
 
+  // 快速字符串预检：大 JSON 响应如果没有任何目标广告标记，直接跳过 JSON.parse。
+  if (isWebDynamic && body.indexOf("DYNAMIC_TYPE_AD") < 0) {
+    $done({});
+    return;
+  }
+  if ((isWebRcmd || isWebSearch || isWebRelated || isSearchSquare) && !/cm_|ad_|"ad"|"is_ad"\s*:\s*true/.test(body)) {
+    $done({});
+    return;
+  }
+  if ((isWebView || isWebViewDetail) && !/cm_config|cm_ipad|cm_under_player|cm_|ad_|"ad"|"is_ad"\s*:\s*true/.test(body)) {
+    $done({});
+    return;
+  }
+  if (isPgcSeason && body.indexOf('"payment"') < 0) {
+    $done({});
+    return;
+  }
+
+  // B 站动态流等接口可能含超过 2^53-1 的 64 位整数 ID，JSON.parse 会丢低位精度；
+  // 先用占位对象保护字符串外的 16+ 位数字，JSON.stringify 后原样还原。
+  const BIGINT_MARK = "__bili_bigint_";
+  let hasBigInt = false;
+  const safeBody = body.replace(/"(?:\\.|[^"\\])*"|(-?\d{16,})/g, (m, num) => {
+    if (!num) return m;
+    hasBigInt = true;
+    return '"' + BIGINT_MARK + num + '"';
+  });
+
   let data;
   try {
-    data = JSON.parse(body);
+    data = JSON.parse(safeBody);
   } catch (e) {
     $done({});
     return;
@@ -77,32 +168,7 @@
     return;
   }
 
-  const path = url.split("?")[0];
   let changed = false;
-
-  // 只处理下面这些接口；模块正则之外万一命中，也原样放行。
-  const handled =
-    path.indexOf("/x/v2/splash/") >= 0 ||
-    path.indexOf("/x/v2/feed/index") >= 0 ||
-    path.indexOf("/x/v2/search/square") >= 0 ||
-    path.indexOf("/x/web-interface/wbi/index/top/feed/rcmd") >= 0 ||
-    path.indexOf("/x/web-interface/wbi/search/type") >= 0 ||
-    path.indexOf("/x/web-interface/wbi/search/square") >= 0 ||
-    path.indexOf("/x/web-interface/archive/related") >= 0 ||
-    path.indexOf("/x/web-interface/view") >= 0 ||
-    path.indexOf("/x/vip/ads/materials") >= 0 ||
-    path.indexOf("/pgc/view/v2/app/season") >= 0 ||
-    path.indexOf("/pgc/view/web/season") >= 0 ||
-    path.indexOf("/pgc/page/") >= 0 ||
-    path.indexOf("/pgc/activity/deliver/material/receive") >= 0 ||
-    path.indexOf("/x/resource/show/tab") >= 0 ||
-    path.indexOf("/x/v2/account/mine") >= 0 ||
-    path.indexOf("/x/polymer/web-dynamic/v1/feed/all") >= 0 ||
-    path.indexOf("/xlive/") >= 0;
-  if (!handled) {
-    $done({});
-    return;
-  }
 
   const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
   const str = (v) => (typeof v === "string" ? v.toLowerCase() : "");
@@ -149,19 +215,8 @@
     }
   };
 
-  // 番剧弹窗广告：直接给一个「关闭」的合法响应。
-  if (path.indexOf("/pgc/activity/deliver/material/receive") >= 0) {
-    const out = JSON.stringify({
-      code: 0,
-      data: { closeType: "close_win", container: [], showTime: "" },
-      message: "success",
-    });
-    $done({ body: out });
-    return;
-  }
-
   // 开屏：把几个已知数组清空。
-  if (path.indexOf("/x/v2/splash/") >= 0) {
+  if (isSplash && blockAds) {
     const d = data.data;
     if (isObj(d)) {
       ["list", "event_list", "brand_list", "show"].forEach((k) => clearArray(d, k));
@@ -172,7 +227,7 @@
   }
 
   // 大会员广告素材。
-  if (path.indexOf("/x/vip/ads/materials") >= 0) {
+  if (isVipMaterials && (blockAds || hideVip)) {
     const d = data.data;
     if (isObj(d)) {
       ["materials", "list", "items"].forEach((k) => clearArray(d, k));
@@ -183,9 +238,9 @@
   }
 
   // 番剧页的会员付费块：App 在 data，网页版在 result。
-  if (path.indexOf("/pgc/view/v2/app/season") >= 0 || (web && path.indexOf("/pgc/view/web/season") >= 0)) {
+  if (isPgcSeason && hideVip) {
     [data.data, data.result].forEach((d) => {
-      if (!isObj(d) || !hideVip || !d.payment) return;
+      if (!isObj(d) || !d.payment) return;
       delete d.payment;
       changed = true;
     });
@@ -193,7 +248,6 @@
 
   // 直播：只处理这三个接口。通用 walk 会顺着对象树把
   // room_info / playurl_info 里带广告字段的正常对象也删掉，导致直播打不开。
-  const isLive = path.indexOf("/xlive/") >= 0;
   if (isLive && blockAds) {
     const d = isObj(data.data) ? data.data : {};
     if (path.indexOf("/xlive/app-interface/v2/index/feed") >= 0 && Array.isArray(d.card_list)) {
@@ -236,22 +290,33 @@
     }
   }
 
-  // 首页 / 推荐：只过滤 data.items；大图 banner 只删其中的广告项。
-  if (blockAds && path.indexOf("/x/v2/feed/index") >= 0) {
+  // 首页 / 推荐：只过滤 data.items；大图 banner 只删其中的广告项；
+  // 竖屏短视频流额外剥掉卡片上的商业推广按钮（如「助TA必火」）。
+  if (blockAds && isFeed) {
     const items = data.data?.items;
     if (Array.isArray(items)) {
       const story = path.indexOf("/story") >= 0;
       for (const item of items) {
-        if (!isObj(item) || !Array.isArray(item.banner_item)) continue;
-        const kept = item.banner_item.filter((b) => !(isObj(b) && (b.type === "ad" || b.type === "ad_inline")));
-        if (kept.length !== item.banner_item.length) {
-          item.banner_item = kept;
-          changed = true;
+        if (!isObj(item)) continue;
+        if (Array.isArray(item.banner_item)) {
+          const kept = item.banner_item.filter((b) => !(isObj(b) && (b.type === "ad" || b.type === "ad_inline")));
+          if (kept.length !== item.banner_item.length) {
+            item.banner_item = kept;
+            changed = true;
+          }
+        }
+        if (story) {
+          for (const key of ["story_cart_icon", "commercial_button", "ad_info", "cm_info"]) {
+            if (key in item) {
+              delete item[key];
+              changed = true;
+            }
+          }
         }
       }
       const kept = items.filter((item) => {
         if (!isObj(item)) return true;
-        if (story) return STORY_AD_GOTOS.indexOf(item.card_goto) < 0;
+        if (story) return STORY_AD_GOTOS.indexOf(item.card_goto) < 0 && !isFeedAd(item);
         return !isFeedAd(item);
       });
       if (kept.length !== items.length) {
@@ -262,7 +327,7 @@
   }
 
   // 网页版推荐流：只过滤 data.item 里 goto=ad 的条目。
-  if (web && blockAds && path.indexOf("/x/web-interface/wbi/index/top/feed/rcmd") >= 0) {
+  if (web && blockAds && isWebRcmd) {
     const kept = keepNotAd(data.data?.item);
     if (kept) {
       data.data.item = kept;
@@ -272,7 +337,7 @@
 
   // 网页版搜索：/wbi/search/type 的 data.result 是视频数组；部分聚合接口
   // 会再包一层 { result_type, data: [...] }，两种都按同样的广告标记过滤。
-  if (web && blockAds && (path.indexOf("/x/web-interface/wbi/search/type") >= 0 || path.indexOf("/x/web-interface/wbi/search/square") >= 0)) {
+  if (web && blockAds && isWebSearch) {
     const d = data.data;
     if (Array.isArray(d)) {
       const kept = keepNotAd(d);
@@ -303,7 +368,7 @@
   }
 
   // 网页版相关推荐：data 本身就是数组，只过滤广告项。
-  if (web && blockAds && path.indexOf("/x/web-interface/archive/related") >= 0) {
+  if (web && blockAds && isWebRelated) {
     const kept = keepNotAd(data.data);
     if (kept) {
       data.data = kept;
@@ -311,27 +376,33 @@
     }
   }
 
-  // 网页版视频详情：cm_config 是播放器广告配置；relates / relates 里的广告卡
-  // 只在存在时过滤，不碰播放地址和分 P。
-  if (web && path.indexOf("/x/web-interface/view") >= 0 && isObj(data.data)) {
+  // 网页版视频详情（/x/web-interface/view 与 /x/web-interface/wbi/view/detail）：
+  // cm_config 是播放器广告配置；relates / Related 里的广告卡只在存在时过滤，不碰播放地址和分 P。
+  if (web && blockAds && (isWebView || isWebViewDetail) && isObj(data.data)) {
     const d = data.data;
-    if (blockAds) {
+    const viewTargets = isObj(d.View) ? [d, d.View] : [d];
+    for (const target of viewTargets) {
       ["cm_config", "cm_ipad", "cm_under_player"].forEach((key) => {
-        if (key in d) {
-          delete d[key];
+        if (key in target) {
+          delete target[key];
           changed = true;
         }
       });
-      const kept = keepNotAd(d.relates);
+      const kept = keepNotAd(target.relates);
       if (kept) {
-        d.relates = kept;
+        target.relates = kept;
         changed = true;
       }
+    }
+    const keptRelated = keepNotAd(d.Related);
+    if (keptRelated) {
+      d.Related = keptRelated;
+      changed = true;
     }
   }
 
   // 网页版动态流：广告条目是 DYNAMIC_TYPE_AD，部分版本放在 module_dynamic 里。
-  if (web && blockAds && path.indexOf("/x/polymer/web-dynamic/v1/feed/all") >= 0 && isObj(data.data) && Array.isArray(data.data.items)) {
+  if (web && blockAds && isWebDynamic && isObj(data.data) && Array.isArray(data.data.items)) {
     const items = data.data.items;
     const kept = items.filter((item) => {
       if (!isObj(item)) return true;
@@ -346,7 +417,7 @@
   }
 
   // 搜索广场：data 本身就是数组，只过滤广告项。
-  if (blockAds && path.indexOf("/x/v2/search/square") >= 0) {
+  if (blockAds && isSearchSquare) {
     const kept = keepNotAd(data.data);
     if (kept) {
       data.data = kept;
@@ -356,7 +427,7 @@
 
   // 番剧页的广告模块（module_style / module_type / type 为 ad）。
   // App 在 data.modules，网页版在 result.modules。
-  if (blockAds && path.indexOf("/pgc/page/") >= 0) {
+  if (blockAds && isPgcPage) {
     (web ? [data.data, data.result] : [data.data]).forEach((d) => {
       if (!isObj(d) || !Array.isArray(d.modules)) return;
       const modules = d.modules;
@@ -374,7 +445,7 @@
 
   // 底部 tab：去掉中间的「发布」按钮和「会员购」入口；顶部去掉「游戏中心」。
   // 删完要按新顺序重排 pos，否则客户端会按旧位置留空位。
-  if (cleanUi && path.indexOf("/x/resource/show/tab") >= 0) {
+  if (cleanUi && isShowTab) {
     const d = data.data;
     if (isObj(d)) {
       const dropTab = (t) => {
@@ -397,35 +468,33 @@
     }
   }
 
-  // 我的页：大会员推广块和「我的服务」分区。
-  if (path.indexOf("/x/v2/account/mine") >= 0) {
+  // 我的页（含 iPad 版 /x/v2/account/mine/ipad）：大会员推广块和「我的服务」分区。
+  if (isMine) {
     const d = data.data;
     if (isObj(d)) {
       if (hideVip) {
-        ["vip_section", "vip_section_v2"].forEach((k) => {
+        ["vip_section", "vip_section_v2", "vip_section_right"].forEach((k) => {
           if (k in d) {
             delete d[k];
             changed = true;
           }
         });
       }
-      if (Array.isArray(d.sections_v2) || Array.isArray(d.sections)) {
-        ["sections_v2", "sections"].forEach((key) => {
-          const list = d[key];
-          if (!Array.isArray(list)) return;
-          const kept = list.filter((s) => {
-            if (!isObj(s)) return true;
-            const title = typeof s.title === "string" ? s.title : "";
-            if (hideVip && /大会员|会员购/.test(title)) return false;
-            if (cleanUi && /我的服务/.test(title)) return false;
-            return true;
-          });
-          if (kept.length !== list.length) {
-            d[key] = kept;
-            changed = true;
-          }
+      ["sections_v2", "sections", "pad_sections", "ipad_more_sections", "ipad_recommend_sections"].forEach((key) => {
+        const list = d[key];
+        if (!Array.isArray(list)) return;
+        const kept = list.filter((s) => {
+          if (!isObj(s)) return true;
+          const title = typeof s.title === "string" ? s.title : "";
+          if (hideVip && /大会员|会员购/.test(title)) return false;
+          if (cleanUi && /我的服务|更多服务|推荐服务/.test(title)) return false;
+          return true;
         });
-      }
+        if (kept.length !== list.length) {
+          d[key] = kept;
+          changed = true;
+        }
+      });
     }
   }
 
@@ -434,10 +503,9 @@
     return;
   }
 
-  const out = JSON.stringify(data);
-  if (out === body) {
-    $done({});
-    return;
+  let out = JSON.stringify(data);
+  if (hasBigInt) {
+    out = out.replace(new RegExp('"' + BIGINT_MARK + '(-?\\d+)"', "g"), "$1");
   }
   $done({ body: out });
 })();

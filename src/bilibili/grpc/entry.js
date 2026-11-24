@@ -17,11 +17,12 @@
 
   // ---- gRPC 状态头 ------------------------------------------------------
 
-  function headerValue(headers, name) {
+  function headerValue(headers, lowerName, capName) {
     if (!headers) return undefined;
-    const key = name.toLowerCase();
+    if (headers[lowerName] !== undefined) return headers[lowerName];
+    if (capName && headers[capName] !== undefined) return headers[capName];
     for (const k in headers) {
-      if (k.toLowerCase() === key) return headers[k];
+      if (k.toLowerCase() === lowerName) return headers[k];
     }
     return undefined;
   }
@@ -33,16 +34,17 @@
   // 还可能丢失，表现就是详情页 / 评论区一直转圈。蓝版同理。国际版相反，响应头里
   // 不能带 grpc-status: 0。已有非零状态保持原值，避免把服务端错误改成成功。
   function fixHeaders(reqHeaders, resHeaders, h2Trailers) {
-    const ua = String(headerValue(reqHeaders, "user-agent") || "");
+    const ua = String(headerValue(reqHeaders, "user-agent", "User-Agent") || "");
     const universal =
       ua.indexOf("bili-universal/") >= 0 ||
       ua.indexOf("bili-hd2/") >= 0 ||
       ua.indexOf("bili-overseas/") >= 0;
     const blue = ua.indexOf("bili-blue/") >= 0;
     const inter = ua.indexOf("bili-inter/") >= 0;
-    const status = headerValue(resHeaders, "grpc-status");
+    if (!universal && !blue && !inter) return null;
+    const status = headerValue(resHeaders, "grpc-status", "Grpc-Status");
     // trailers 里已经是错误码时不能补 0，否则客户端会把失败当成功。
-    const trailerStatus = headerValue(h2Trailers, "grpc-status");
+    const trailerStatus = headerValue(h2Trailers, "grpc-status", "Grpc-Status");
     const ok = trailerStatus === undefined || String(trailerStatus) === "0";
     let out = null;
     const edit = () => out || (out = Object.assign({}, resHeaders || {}));

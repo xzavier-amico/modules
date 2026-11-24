@@ -62,7 +62,7 @@
       opt = {};
     }
   } else if (Array.isArray(arg)) {
-    opt = { block_ads: arg[0]};
+    opt = { block_ads: arg[0], hide_vip: arg[1] };
   } else if (arg && typeof arg === "object") {
     opt = arg;
   }
@@ -70,8 +70,9 @@
   const flag = (v, d) =>
     v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0");
   const blockAds = flag(opt.block_ads, true);
+  const hideVip = flag(opt.hide_vip, true);
 
-  if (!blockAds) {
+  if (!blockAds && !hideVip) {
     $done({});
     return;
   }

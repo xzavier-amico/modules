@@ -196,7 +196,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       opt = {};
     }
   } else if (Array.isArray(arg)) {
-    opt = { block_ads: arg[0]};
+    opt = { block_ads: arg[0], hide_vip: arg[1] };
   } else if (arg && typeof arg === "object") {
     opt = arg;
   }
@@ -204,8 +204,9 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   const flag = (v, d) =>
     v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0");
   const blockAds = flag(opt.block_ads, true);
+  const hideVip = flag(opt.hide_vip, true);
 
-  if (!blockAds) {
+  if (!blockAds && !hideVip) {
     $done({});
     return;
   }
@@ -608,10 +609,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
   // drop 里的字段号整条删；filters 里的字段号按条件删（只处理 length-delimited）；
   // maps 里的字段号改写载荷（只处理 length-delimited）。
-  // 单次扫描完成，不建完整字段列表；没有改动返回 null，调用方据此原样放行。
+  // 单次扫描完成，不建完整字段列表；采用懒切片（Lazy slice），未改动时 0 子数组分配；
+  // 没有改动返回 null，调用方据此原样放行。
   function rewrite(msg, drop, filters, maps) {
-    const parts = [];
-    let changed = false;
+    let parts = null;
+    let keepFrom = 0;
     const state = { i: 0 };
     try {
       while (state.i < msg.length) {
@@ -643,28 +645,35 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         if (state.i > msg.length) throw new Error("Truncated protobuf field");
         const end = state.i;
         if (drop && drop.indexOf(no) >= 0) {
-          changed = true;
+          if (!parts) parts = [];
+          if (start > keepFrom) parts.push(msg.subarray(keepFrom, start));
+          keepFrom = end;
           continue;
         }
         if (filters && wt === 2 && filters[no] && filters[no](msg, ds, de)) {
-          changed = true;
+          if (!parts) parts = [];
+          if (start > keepFrom) parts.push(msg.subarray(keepFrom, start));
+          keepFrom = end;
           continue;
         }
         if (maps && wt === 2 && maps[no]) {
           const sub = msg.subarray(ds, de);
           const next = maps[no](sub);
           if (next && !same(next, sub)) {
+            if (!parts) parts = [];
+            if (start > keepFrom) parts.push(msg.subarray(keepFrom, start));
             parts.push(encodeField(no, 2, next));
-            changed = true;
+            keepFrom = end;
             continue;
           }
         }
-        parts.push(msg.subarray(start, end));
       }
     } catch (e) {
       return null;
     }
-    return changed ? concat(parts) : null;
+    if (!parts) return null;
+    if (keepFrom < msg.length) parts.push(msg.subarray(keepFrom, msg.length));
+    return concat(parts);
   }
 
   // 读某个 varint 字段的值；没有就返回 null。
@@ -749,10 +758,10 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   // 对 no 字段的每个 length-delimited 载荷调用 fn，fn 返回新字节或 null（不改）。
-  // 单次扫描，不建完整字段列表。
+  // 单次扫描 + 懒切片，未改动时 0 子数组分配。
   function mapSub(msg, no, fn) {
-    const parts = [];
-    let changed = false;
+    let parts = null;
+    let keepFrom = 0;
     const state = { i: 0 };
     try {
       while (state.i < msg.length) {
@@ -787,23 +796,26 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
           const sub = msg.subarray(ds, de);
           const next = fn(sub);
           if (next && !same(next, sub)) {
+            if (!parts) parts = [];
+            if (start > keepFrom) parts.push(msg.subarray(keepFrom, start));
             parts.push(encodeField(no, 2, next));
-            changed = true;
+            keepFrom = end;
             continue;
           }
         }
-        parts.push(msg.subarray(start, end));
       }
     } catch (e) {
       return null;
     }
-    return changed ? concat(parts) : null;
+    if (!parts) return null;
+    if (keepFrom < msg.length) parts.push(msg.subarray(keepFrom, msg.length));
+    return concat(parts);
   }
 
-  // 过滤重复字段：keep 返回 false 的整条删掉。单次扫描，不建完整字段列表。
+  // 过滤重复字段：keep 返回 false 的整条删掉。单次扫描 + 懒切片，未改动时 0 子数组分配。
   function filterRepeated(msg, no, keep) {
-    const parts = [];
-    let changed = false;
+    let parts = null;
+    let keepFrom = 0;
     const state = { i: 0 };
     try {
       while (state.i < msg.length) {
@@ -835,22 +847,25 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         if (state.i > msg.length) throw new Error("Truncated protobuf field");
         const end = state.i;
         if (fieldNo === no && wt === 2 && !keep(msg.subarray(ds, de))) {
-          changed = true;
+          if (!parts) parts = [];
+          if (start > keepFrom) parts.push(msg.subarray(keepFrom, start));
+          keepFrom = end;
           continue;
         }
-        parts.push(msg.subarray(start, end));
       }
     } catch (e) {
       return null;
     }
-    return changed ? concat(parts) : null;
+    if (!parts) return null;
+    if (keepFrom < msg.length) parts.push(msg.subarray(keepFrom, msg.length));
+    return concat(parts);
   }
 
   // 一次扫描同时做 filter + map：keep 返回 false 的删掉，
-  // keep 返回 true 的再调 mapFn（可返回 null 表示不改）。
+  // keep 返回 true 的再调 mapFn（可返回 null 表示不改）。懒切片避免无改动时的子数组分配。
   function filterAndMap(msg, no, keep, mapFn) {
-    const parts = [];
-    let changed = false;
+    let parts = null;
+    let keepFrom = 0;
     const state = { i: 0 };
     try {
       while (state.i < msg.length) {
@@ -884,24 +899,29 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         if (fieldNo === no && wt === 2) {
           const sub = msg.subarray(ds, de);
           if (!keep(sub)) {
-            changed = true;
+            if (!parts) parts = [];
+            if (start > keepFrom) parts.push(msg.subarray(keepFrom, start));
+            keepFrom = end;
             continue;
           }
           if (mapFn) {
             const next = mapFn(sub);
             if (next && !same(next, sub)) {
+              if (!parts) parts = [];
+              if (start > keepFrom) parts.push(msg.subarray(keepFrom, start));
               parts.push(encodeField(no, 2, next));
-              changed = true;
+              keepFrom = end;
               continue;
             }
           }
         }
-        parts.push(msg.subarray(start, end));
       }
     } catch (e) {
       return null;
     }
-    return changed ? concat(parts) : null;
+    if (!parts) return null;
+    if (keepFrom < msg.length) parts.push(msg.subarray(keepFrom, msg.length));
+    return concat(parts);
   }
 
   // ---- gRPC 帧 ----------------------------------------------------------
@@ -1035,12 +1055,19 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // ---- 详情页模块（viewunite）------------------------------------------
 
   // ModuleType：18 番剧活动横幅 / 29 番剧标题下大会员横幅 / 55 up 主分享好物。
-  const PROMO_MODULES = [18, 29, 55];
+  // 29 归 hideVip 管，18 与 55 归 blockAds 管。
   const RELATED_RECOMMEND = 28;
+
+  function isDroppedPromoModule(type) {
+    if (blockAds && (type === 18 || type === 55)) return true;
+    if (hideVip && type === 29) return true;
+    return false;
+  }
 
   // Module.relates = 22，Relates.cards = 1。只处理推荐模块里的广告卡。
   // 先用 fieldVarintFast 判模块类型（不建字段列表），不是推荐模块就跳过。
   function cleanModule(mod) {
+    if (!blockAds) return null;
     if (fieldVarintFast(mod, 0, mod.length, 1) !== RELATED_RECOMMEND) return null;
     return mapSub(mod, 22, (relates) => filterRepeated(relates, 1, (card) => !unifiedRelateAd(card, 0, card.length)));
   }
@@ -1052,8 +1079,8 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return filterAndMap(
       container,
       no,
-      (mod) => PROMO_MODULES.indexOf(fieldVarintFast(mod, 0, mod.length, 1)) < 0,
-      cleanModule
+      (mod) => !isDroppedPromoModule(fieldVarintFast(mod, 0, mod.length, 1)),
+      blockAds ? cleanModule : null
     );
   }
 
@@ -1078,47 +1105,95 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     return filterRepeated(list, 1, (item) => fieldVarintFast(item, 0, item.length, 1) !== DYNAMIC_AD_TYPE);
   }
 
+  // ---- 搜索页（polymer.app.search.v1）----------------------------------
+
+  // SearchAllResponse.item = 4；Item 里 card_item oneof：
+  // cm(10) / brand_ad(24) / game(13) / special_guide(25) / brand_star_ad(45) / cm_ad(49) 是广告推广卡。
+  function isSearchAdItem(item) {
+    try {
+      const state = { i: 0 };
+      while (state.i < item.length) {
+        const tag = wireReadCount(item, state);
+        const fn = tag >>> 3;
+        const wire = tag & 7;
+        if (!fn) throw new Error("Invalid protobuf field");
+        if (wire === 2) {
+          const length = wireReadCount(item, state);
+          if (length > item.length - state.i) throw new Error("Truncated protobuf field");
+          const ds = state.i;
+          state.i += length;
+          if (fn === 10 || fn === 24 || fn === 25 || fn === 45 || fn === 49) return true;
+          if (fn === 3) {
+            const goto = ascii(item, ds, state.i);
+            if (goto === "ad" || goto === "cm" || goto === "banner_ad") return true;
+          }
+        } else if (wire === 0) {
+          wireSkipVarint(item, state);
+        } else if (wire === 1) {
+          state.i += 8;
+        } else if (wire === 5) {
+          state.i += 4;
+        } else {
+          throw new Error("Unsupported protobuf wire type " + wire);
+        }
+        if (state.i > item.length) throw new Error("Truncated protobuf field");
+      }
+    } catch (e) {
+      return false;
+    }
+    return false;
+  }
+
   // ---- 接口表 -----------------------------------------------------------
 
   const VIEW = "/bilibili.app.view.v1.View/";
   const UNITE = "/bilibili.app.viewunite.v1.View/";
   const REPLY = "/bilibili.main.community.reply.v1.Reply/";
   const DYNAMIC = "/bilibili.app.dynamic.v2.Dynamic/";
+  const SEARCH = "/bilibili.polymer.app.search.v1.Search/";
 
   const RULES = {};
 
-  // 旧版详情页：删广告字段，过滤相关推荐与定制 Tab。
-  // rewrite 单次扫描，没有目标字段或没有改动时返回 null。
-  RULES[VIEW + "View"] = (m) => rewrite(m, [30, 31, 34, 41, 48], { 10: legacyRelateAd, 32: adTab });
-  RULES[VIEW + "RelatesFeed"] = (m) => rewrite(m, null, { 1: legacyRelateAd });
-  RULES[VIEW + "PlayerRelates"] = (m) => rewrite(m, null, { 1: legacyRelateAd });
-  RULES[VIEW + "ViewProgress"] = (m) => rewrite(m, [1]);
-  RULES[VIEW + "TFInfo"] = (m) => rewrite(m, [2, 3]);
+  if (blockAds) {
+    // 旧版详情页：删广告字段，过滤相关推荐与定制 Tab。
+    // rewrite 单次扫描，没有目标字段或没有改动时返回 null。
+    RULES[VIEW + "View"] = (m) => rewrite(m, [30, 31, 34, 41, 48], { 10: legacyRelateAd, 32: adTab });
+    RULES[VIEW + "RelatesFeed"] = (m) => rewrite(m, null, { 1: legacyRelateAd });
+    RULES[VIEW + "PlayerRelates"] = (m) => rewrite(m, null, { 1: legacyRelateAd });
+    RULES[VIEW + "ViewProgress"] = (m) => rewrite(m, [1]);
+    RULES[VIEW + "TFInfo"] = (m) => rewrite(m, [2, 3]);
 
-  // 新版详情页：顶层 cm(7) + 详情 Tab(5) 里的推广模块与推荐广告卡。
+    RULES[UNITE + "RelatesFeed"] = (m) => rewrite(m, null, { 1: unifiedRelateAd });
+    RULES[UNITE + "ViewProgress"] = (m) => rewrite(m, [1]);
+    RULES[UNITE + "PlayPause"] = () => EMPTY;
+    RULES[UNITE + "ViewEndPage"] = () => EMPTY;
+
+    // 评论区：删广告字段，过滤置顶带货评论与顶部带货卡。
+    // 普通评论页没有目标字段时，单次扫描直接返回 null。
+    RULES[REPLY + "MainList"] = (m) =>
+      rewrite(m, [11], {
+        4: commercialReply,
+        5: commercialReply,
+        6: commercialReply,
+        14: commercialReply,
+        28: commercialTopCard,
+      });
+
+    // 动态页：综合页、视频页及个人筛选流的 dynamic_list(1) 里删广告卡。
+    RULES[DYNAMIC + "DynAll"] = (m) => mapSub(m, 1, cleanDynamicList);
+    RULES[DYNAMIC + "DynVideo"] = (m) => mapSub(m, 1, cleanDynamicList);
+    RULES[DYNAMIC + "DynAllPersonal"] = (m) => mapSub(m, 1, cleanDynamicList);
+    RULES[DYNAMIC + "DynVideoPersonal"] = (m) => mapSub(m, 1, cleanDynamicList);
+
+    // 综合搜索结果：删 item(4) 里的广告条目。
+    RULES[SEARCH + "SearchAll"] = (m) => filterRepeated(m, 4, (item) => !isSearchAdItem(item));
+  }
+
+  // 新版详情页：顶层 cm(7)（blockAds） + 详情 Tab(5) 里的推广模块（blockAds / hideVip）与推荐广告卡（blockAds）。
   // 删除与改写一次扫描完成。
-  RULES[UNITE + "View"] = (m) => rewrite(m, [7], null, { 5: cleanTab });
+  RULES[UNITE + "View"] = (m) => rewrite(m, blockAds ? [7] : null, null, { 5: cleanTab });
   // 异步补充的详情页：cm(1) + tab(2) 里的模块（AIRelateTab.modules = 1）
-  RULES[UNITE + "AIRelateAsync"] = (m) => rewrite(m, [1], null, { 2: (tab) => cleanModules(tab, 1) });
-  RULES[UNITE + "RelatesFeed"] = (m) => rewrite(m, null, { 1: unifiedRelateAd });
-  RULES[UNITE + "ViewProgress"] = (m) => rewrite(m, [1]);
-  RULES[UNITE + "PlayPause"] = () => EMPTY;
-  RULES[UNITE + "ViewEndPage"] = () => EMPTY;
-
-  // 评论区：删广告字段，过滤置顶带货评论与顶部带货卡。
-  // 普通评论页没有目标字段时，单次扫描直接返回 null。
-  RULES[REPLY + "MainList"] = (m) =>
-    rewrite(m, [11], {
-      4: commercialReply,
-      5: commercialReply,
-      6: commercialReply,
-      14: commercialReply,
-      28: commercialTopCard,
-    });
-
-  // 动态页：综合页和视频页的 dynamic_list(1) 里删广告卡。
-  RULES[DYNAMIC + "DynAll"] = (m) => mapSub(m, 1, cleanDynamicList);
-  RULES[DYNAMIC + "DynVideo"] = (m) => mapSub(m, 1, cleanDynamicList);
+  RULES[UNITE + "AIRelateAsync"] = (m) => rewrite(m, blockAds ? [1] : null, null, { 2: (tab) => cleanModules(tab, 1) });
 
   // ---- 解压 -------------------------------------------------------------
 
@@ -1139,11 +1214,12 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
   // ---- gRPC 状态头 ------------------------------------------------------
 
-  function headerValue(headers, name) {
+  function headerValue(headers, lowerName, capName) {
     if (!headers) return undefined;
-    const key = name.toLowerCase();
+    if (headers[lowerName] !== undefined) return headers[lowerName];
+    if (capName && headers[capName] !== undefined) return headers[capName];
     for (const k in headers) {
-      if (k.toLowerCase() === key) return headers[k];
+      if (k.toLowerCase() === lowerName) return headers[k];
     }
     return undefined;
   }
@@ -1155,16 +1231,17 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // 还可能丢失，表现就是详情页 / 评论区一直转圈。蓝版同理。国际版相反，响应头里
   // 不能带 grpc-status: 0。已有非零状态保持原值，避免把服务端错误改成成功。
   function fixHeaders(reqHeaders, resHeaders, h2Trailers) {
-    const ua = String(headerValue(reqHeaders, "user-agent") || "");
+    const ua = String(headerValue(reqHeaders, "user-agent", "User-Agent") || "");
     const universal =
       ua.indexOf("bili-universal/") >= 0 ||
       ua.indexOf("bili-hd2/") >= 0 ||
       ua.indexOf("bili-overseas/") >= 0;
     const blue = ua.indexOf("bili-blue/") >= 0;
     const inter = ua.indexOf("bili-inter/") >= 0;
-    const status = headerValue(resHeaders, "grpc-status");
+    if (!universal && !blue && !inter) return null;
+    const status = headerValue(resHeaders, "grpc-status", "Grpc-Status");
     // trailers 里已经是错误码时不能补 0，否则客户端会把失败当成功。
-    const trailerStatus = headerValue(h2Trailers, "grpc-status");
+    const trailerStatus = headerValue(h2Trailers, "grpc-status", "Grpc-Status");
     const ok = trailerStatus === undefined || String(trailerStatus) === "0";
     let out = null;
     const edit = () => out || (out = Object.assign({}, resHeaders || {}));

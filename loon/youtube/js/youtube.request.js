@@ -1339,7 +1339,8 @@
 
     try {
       // 无请求体的 videoplayback（如常规 GET 媒体分片）最频繁，直接早退省去参数解析。
-      if (path.endsWith("/videoplayback") && !request.body) {
+      // Egern 适配层对空请求体也会给一个 length=0 的 Uint8Array，因此要按 byteLength / length 判空。
+      if (path.endsWith("/videoplayback") && !(request.body && (request.body.byteLength > 0 || request.body.length > 0))) {
         const contentLength = Object.entries(request.headers ?? {}).find(([key]) => "content-length" === key.toLowerCase())?.[1];
         if (!(Number(contentLength) > 0)) {
           $done(undefined);

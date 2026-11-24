@@ -87,6 +87,8 @@
   function rememberScrollMeta(bytes, trackId) {
     const remember = typeof globalThis !== "undefined" ? globalThis.__spotifyRememberTrackMeta : null;
     if (typeof remember !== "function" || !trackId) return;
+    const hasMeta = typeof globalThis !== "undefined" ? globalThis.__spotifyHasTrackMeta : null;
+    if (typeof hasMeta === "function" && hasMeta(trackId)) return;
     const found = { title: "", artist: "" };
     collectMetaPairs(bytes, found, 0, { left: META_WALK_LIMIT });
     if (!found.title) return;
@@ -120,6 +122,7 @@
     const kept = [];
     let removed = 0;
     let hasLyrics = false;
+    let sawTrackRef = false;
     // 认出来的卡片数量：section 里带 section id（23）/ 曲目引用（5）/ 广告内容（30）
     // 才算一列卡片。形状对不上说明这不是滚动页的卡片列表（或者客户端换了结构），
     // 这时插一个 section 进去会把整包结构写坏 —— 客户端解析失败后整页空白，
@@ -151,6 +154,7 @@
       if (!ad && hasTrack && hasSectionId) hasLyrics = true;
       // 当前曲目的 section 里通常带 track_title / artist_name，抄进元数据缓存。
       if (trackRef && hasTrack && containsBytes(section.data, trackRef)) {
+        sawTrackRef = true;
         rememberScrollMeta(section.data, trackId);
       }
       if (wantAds && ad) {
@@ -165,7 +169,7 @@
     // 判定条件放宽到「认出了任意一列卡片」或者「body 里确实有当前曲目的引用」，
     // 后者能兜住客户端换 section 结构、但列表确实属于这首歌的情况。
     const canAdd = !!trackId && !hasLyrics
-      && (recognized > 0 || (trackRef && containsBytes(buffer, trackRef)));
+      && (recognized > 0 || sawTrackRef || (trackRef && containsBytes(buffer, trackRef)));
     const addCard = canAdd && (typeof wantCard === "function" ? !!wantCard() : !!wantCard);
     if (!removed && !addCard) return null;
     if (addCard) kept.unshift(wireEncodeField(1, 2, lyricsSection(trackId)));

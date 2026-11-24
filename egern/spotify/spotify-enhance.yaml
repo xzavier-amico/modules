@@ -110,10 +110,10 @@ rules:
             match: quic
       policy: REJECT
 
-# 桌面端广告接口；iOS 不请求这些路径，保留不影响。
+# 桌面端广告与推广接口；iOS 不请求这些路径，保留不影响。
 # Loon 插件里对应的是 request reject(404)，Egern 用 url_rewrites 的 reject 特殊值。
 url_rewrites:
-  - match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/ads\\/v[12]\\/"
+  - match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?(?:\\/ads\\/|\\/ad-|\\/premium-marketing\\/|[^?#]*\\/ad-on-app-open)"
     location: "http://reject/"
 
 # 删除 if-none-match，避免 304 空响应导致脚本拿不到 body。
@@ -145,14 +145,14 @@ scriptings:
   - http_request:
       name: "spotify.headers"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.headers.js?v=20261114-26"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.headers.js?v=20261123-1"
       timeout: 5
 
   # 删除 extended-metadata 请求体里的 etag，避免服务端回空数组。
   - http_request:
       name: "spotify.meta.req"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/extended-metadata\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-41"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-42"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -162,7 +162,7 @@ scriptings:
   - http_response:
       name: "spotify.enhance"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:bootstrap|user-customization-service)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-41"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-42"
       body_required: true
       binary_body: true
       max_size: 41943040
@@ -172,7 +172,7 @@ scriptings:
   - http_response:
       name: "spotify.meta"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:extended-metadata|context-resolve|connect-state|metadata\\/4\\/track)\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-41"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-42"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -182,7 +182,7 @@ scriptings:
   - http_response:
       name: "spotify.config"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:remote-config-resolver|nebula)\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-41"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-42"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -194,7 +194,7 @@ scriptings:
   - http_response:
       name: "spotify.feed"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:casita\\/v\\d+\\/home|browsita\\/v\\d+\\/browse|scrollsita\\/v\\d+\\/scroll)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.feed.js?v=20261123-4"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.feed.js?v=20261123-5"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -204,7 +204,7 @@ scriptings:
   - http_request:
       name: "spotify.lyrics.req"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261123-3"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261123-4"
       binary_body: true
       max_size: 2097152
       timeout: 10
@@ -217,7 +217,7 @@ scriptings:
   - http_response:
       name: "spotify.lyrics"
       match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261123-3"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261123-4"
       body_required: true
       binary_body: true
       max_size: 2097152

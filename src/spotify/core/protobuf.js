@@ -265,9 +265,8 @@
   }
 
   // 用 fn 的返回值替换 path 指向的消息；路径缺失或解析失败时返回 null。
-  function edit(message, path, fn) {
-    if (!path.length) return fn(message);
-    const fields = parse(message);
+  function edit(message, path, fn, fields = parse(message)) {
+    if (!path.length) return fn(message, fields);
     if (!fields || !allCanonical(fields)) return null;
     const f = first(fields, path[0]);
     if (!f || f.w !== 2) return null;

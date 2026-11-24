@@ -34,9 +34,10 @@
 
 只按结构删数组元素，不改对象键；形状对不上就原样放行。
 
-详情页、评论区、动态页走的是 gRPC（protobuf over HTTP/2），由 `bilibili_grpc.js` 按字段号删：
+详情页、评论区、动态页、搜索结果走的是 gRPC（protobuf over HTTP/2），由 `bilibili_grpc.js` 按字段号删：
 `view.v1.View` 的 `cms` / 广告配置 / 广告 Tab、`viewunite.v1.View` 的 `cm` 与详情 Tab 里的推广模块、
-`Reply/MainList` 的评论广告与带货置顶、`Dynamic/DynAll`、`DynVideo` 的广告卡（`card_type=15`）。
+`Reply/MainList` 的评论广告与带货置顶、`Dynamic/DynAll`、`DynVideo`、`DynAllPersonal`、`DynVideoPersonal` 的广告卡（`card_type=15`）、
+`Search/SearchAll` 的搜索广告卡。
 完整字段表见 [`egern/bilibili/README.md`](../../egern/bilibili/README.md)。
 
 ## 遥测

@@ -1301,9 +1301,10 @@ const SPOTIFY_HAN_VARIANTS = (() => {
   };
 
   if (HELPER) {
-    // 辅助模式：feed 脚本只复用缓存查询与补卡判断，不发起歌词查询。
+    // 辅助模式：feed 脚本只复用缓存查询与补卡判断，不发起主响应歌词查询。
     // 曲目元数据回填：feed 从 scrollsita 里抄到的曲名 / 歌手写进同一份缓存。
     globalThis.__spotifyRememberTrackMeta = rememberTrackMeta;
+    globalThis.__spotifyHasTrackMeta = (id) => !!cachedTrackMeta(id);
 
     // 最近确认没有歌词的曲目不再补空卡；已经查到歌词、或有歌词请求在路上时
     // 以实际进度为准，避免旧的 miss 标记把这次可能成功的歌词挡掉。
@@ -1339,20 +1340,21 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     globalThis.__spotifyPrefetch = (id) => {
       const target = id ? String(id) : "";
       if (!target || !prefetchNextOn || !flag(opt.enable_lyrics, true)) return false;
-      if (readLyricsCache(lyricsCacheKey(target), target)) return false;
+      const targetCacheKey = lyricsCacheKey(target);
+      if (hasLyricsCache(targetCacheKey, target)) return false;
       if (prefetchMark(target)) return false;
       // 没有曲名 / 歌手时要先请求 open.spotify.com，预取就没意义了：等元数据到了再说。
       const meta = cachedTrackMeta(target);
       if (!meta || !meta.title) return false;
       rememberPrefetch(target);
-      // 辅助模式下没有主链路在跑，这里的模块级状态可以安全改写。
+      // 闭包绑定当前预取的目标 key，避免并发预取时模块级变量互相覆盖导致串歌。
       prefetching = true;
       trackId = target;
-      cacheKey = lyricsCacheKey(target);
+      cacheKey = targetCacheKey;
       plainFallback = null;
       plainFallbackPseudo = false;
       resolveLyrics((payload) => {
-        if (payload) writeLyricsCache(cacheKey, payload);
+        if (payload) writeLyricsCache(targetCacheKey, payload);
       });
       return true;
     };
@@ -1852,10 +1854,12 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     }
     let remaining = order.length;
     let finished = false;
+    let localPlain = null;
+    let localPlainPseudo = false;
     const checkAllDone = () => {
       if (!remaining && !finished) {
         finished = true;
-        done(plainFallback);
+        done(localPlain || plainFallback);
       }
     };
     for (const name of order) {
@@ -1887,24 +1891,33 @@ const SPOTIFY_HAN_VARIANTS = (() => {
             plainTimer = undefined;
           }
           if (pseudo) {
+            localPlain = payload;
+            localPlainPseudo = true;
             plainFallback = payload;
             plainFallbackPseudo = true;
           }
           done(payload);
           return;
         }
-        if (payload && (!plainFallback || (!plainFallbackPseudo && pseudo))) {
+        if (payload && (!localPlain || (!localPlainPseudo && pseudo))) {
+          localPlain = payload;
+          localPlainPseudo = pseudo;
           plainFallback = payload;
           plainFallbackPseudo = pseudo;
           // 有纯文本但同步歌词还在路上时，先把纯文本发出去，后续结果不再覆盖。
           // 仅在主链路未结束且非预取模式下调度，避免重复创建定时器或覆盖真同步缓存。
+          // 注意：在 Loon 请求阶段 race 模式下（onPlainFallback 存在），不能在官方响应未回来前
+          // 直接写缓存，否则慢速官方歌词随后胜出时缓存已被第三方纯文本污染；由 onPlainFallback 在确认官方 miss 后再写。
           if (!prefetching && !settled && plainTimer === undefined && typeof setTimeout === "function") {
             plainTimer = setTimeout(() => {
               plainTimer = undefined;
               if (finished || settled || prefetching || officialWon || !plainFallback) return;
-              writeLyricsCache(cacheKey, plainFallback);
-              if (onPlainFallback) onPlainFallback();
-              else emit(plainFallback);
+              if (onPlainFallback) {
+                onPlainFallback();
+              } else {
+                writeLyricsCache(cacheKey, plainFallback);
+                emit(plainFallback);
+              }
             }, PLAIN_FALLBACK_MS);
           }
         }

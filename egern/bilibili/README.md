@@ -45,14 +45,15 @@
 | `bilibili.app.view.v1.View/RelatesFeed`、`PlayerRelates` | 相关推荐里的广告条目 |
 | `bilibili.app.view.v1.View/ViewProgress` | 删过程引导卡 `video_guide` |
 | `bilibili.app.view.v1.View/TFInfo` | 删办卡免流推广 `tf_toast` / `tf_panel_customized` |
-| `bilibili.app.viewunite.v1.View/View` | 删视频下方广告 `cm`(7)；详情 Tab 里模块 `18`（番剧活动横幅）/ `29`（大会员横幅）/ `55`（up 主分享好物）整块删，模块 `28` 的推荐卡按广告规则过滤 |
+| `bilibili.app.viewunite.v1.View/View` | 删视频下方广告 `cm`(7)；详情 Tab 里模块 `18`（番剧活动横幅）/ `29`（大会员横幅，随 `hide_vip`）/ `55`（up 主分享好物）整块删，模块 `28` 的推荐卡按广告规则过滤 |
 | `bilibili.app.viewunite.v1.View/AIRelateAsync` | 删 `cm`(1)；异步 Tab 里的推广模块与推荐广告卡同 `View/View` |
 | `bilibili.app.viewunite.v1.View/RelatesFeed` | 推荐卡里广告类型（4/5/11）或带 `cm`/`cm_stock` 的删掉 |
 | `bilibili.app.viewunite.v1.View/ViewProgress` | 删 `video_guide`(1) |
 | `bilibili.app.viewunite.v1.View/PlayPause` | 暂停广告：整条返回空消息 |
 | `bilibili.app.viewunite.v1.View/ViewEndPage` | 播放结束页广告：整条返回空消息 |
 | `bilibili.main.community.reply.v1.Reply/MainList` | 删评论列表广告 `cm`(11)；删带 `b23.tv/cm`、`b23.tv/mall`、商品页链接的置顶评论；删 `type=3` 的评论区顶部带货卡 |
-| `bilibili.app.dynamic.v2.Dynamic/DynAll`、`DynVideo` | 删 `dynamic_list` 里 `card_type=15`（广告卡）的条目 |
+| `bilibili.app.dynamic.v2.Dynamic/DynAll`、`DynVideo`、`DynAllPersonal`、`DynVideoPersonal` | 删 `dynamic_list` 里 `card_type=15`（广告卡）的条目 |
+| `bilibili.polymer.app.search.v1.Search/SearchAll` | 删综合搜索结果 `item`(4) 里的品牌广告 / 推广卡 |
 
 gRPC 帧的 flag 是 1 表示消息体 gzip（帧级压缩，不是 `Content-Encoding`），脚本会
 先解压再按未压缩回写；解压不了就整条放行，不做半截修改。
