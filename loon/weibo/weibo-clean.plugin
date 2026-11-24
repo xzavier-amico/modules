@@ -1,5 +1,5 @@
 #!name=Weibo Clean
-#!desc=微博去开屏、时间线推广、评论区软广、商业热搜与「我的」页营销卡片。
+#!desc=微博去开屏、时间线推广、评论区软广、商业热搜与「我的」页任务中心/钱包营销卡片。
 #!category=Weibo
 #!author=xzavier-amico
 #!homepage=https://github.com/xzavier-amico/modules
@@ -8,15 +8,17 @@
 
 [Argument]
 block_ads = switch,true,type=boolean,tag=去广告,desc=过滤微博开屏、推荐/关注时间线、评论区软广、发现页商业热搜及活动横幅。
-clean_ui = switch,true,type=boolean,tag=净化我的页,desc=在「我的」页隐藏我的钱包、借钱、微贷、游戏、直播、免费小说、商城等杂乱营销卡片（保留相册/赞/收藏/历史记录/创作中心）。
+clean_ui = switch,true,type=boolean,tag=净化我的页,desc=在「我的」页采用核心功能白名单，彻底隐藏任务中心、红包签到、我的钱包、借钱、游戏、直播、免费小说、商城等杂乱卡片（仅保留头像资料、我的相册/赞/收藏/历史记录、创作中心/草稿箱、客服与设置）。
 
 [Rule]
 # 拒绝 QUIC，强制回落 TCP：HTTP/3 走 UDP 不经过 MITM，脚本看不到请求。
 AND, ((DOMAIN-SUFFIX, weibo.cn), (PROTOCOL, QUIC)), REJECT
 AND, ((DOMAIN-SUFFIX, weibo.com), (PROTOCOL, QUIC)), REJECT
 AND, ((DOMAIN-SUFFIX, weibocdn.com), (PROTOCOL, QUIC)), REJECT
+AND, ((DOMAIN-SUFFIX, sinaimg.cn), (PROTOCOL, QUIC)), REJECT
 
 # 微博广告 SDK 与投放域名
+DOMAIN-SUFFIX, uve.weibo.com, REJECT
 DOMAIN, ad.weibo.com, REJECT
 DOMAIN, adstrategy.biz.weibo.com, REJECT
 DOMAIN, aln.uve.weibo.com, REJECT
@@ -37,16 +39,18 @@ DOMAIN, wax.weibo.com, REJECT
 DOMAIN, zymo.mps.weibo.com, REJECT
 
 [Rewrite]
-# 纯开屏与广告 SDK 接口直接返回空字典
-request if ${url} ~= /^https?:\/\/sdkapp\.uve\.weibo\.com\// then reject_dict(200)
-request if ${url} ~= /^https?:\/\/(?:api|m)\.weibo\.cn\/2\/(?:ad|sdk|preload)\// then reject_dict(200)
-request if ${url} ~= /^https?:\/\/api\.weibo\.cn\/2\/statuses\/unread_hot_timeline_ad\b/ then reject_dict(200)
+# 纯开屏、签到任务弹窗与广告 SDK 接口直接返回空字典
+request if ${url} ~= /^https?:\/\/[^/]*uve\.weibo\.com\// then reject_dict(200)
+request if ${url} ~= /^https?:\/\/[^/]*weibo\.c(?:n|om)\/2\/(?:ad|sdk|preload|checkin|floater|pullad)\// then reject_dict(200)
+request if ${url} ~= /^https?:\/\/[^/]*weibo\.c(?:n|om)\/2\/statuses\/unread_hot_timeline_ad\b/ then reject_dict(200)
 
 [Script]
-# 删除 If-None-Match 防止「我的」页与发现页返回 304 导致继续使用本地旧缓存的广告卡片
-request if ${url} ~= /^https?:\/\/(?:api|m|mapi)\.weibo\.c(?:n|om)\/2\/(?:profile\/|search\/|page|cardlist)/ then request.header.del("if-none-match")
-response if ${url} ~= /^https?:\/\/(?:api|m|mapi)\.weibo\.c(?:n|om)\/(?:wbapplua\/wbpullad\.lua|2\/(?:push\/active|client\/|checkin\/|statuses\/|groups\/timeline|video\/|comments\/build_comments|search\/|page|cardlist|profile\/))/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/weibo/js/weibo_clean.js?v=20261123-2", {${block_ads}, ${clean_ui}}) with requires_body=true, tag="Weibo Clean", timeout=20
+# 删除 If-None-Match / If-Modified-Since，防止「我的」页与发现页返回 304 导致继续使用本地缓存的旧广告卡片
+request if ${url} ~= /^https?:\/\/[^/]*weibo\.c(?:n|om)\/2\/(?:profile\/|users\/|search\/|page|cardlist|container\/)/ then request.header.del("if-none-match")
+request if ${url} ~= /^https?:\/\/[^/]*weibo\.c(?:n|om)\/2\/(?:profile\/|users\/|search\/|page|cardlist|container\/)/ then request.header.del("if-modified-since")
+# 匹配所有 *.api.weibo.cn (含 v6.api.weibo.cn / h5.api.weibo.cn / weibointl.api.weibo.cn) 与 mapi.weibo.com
+response if ${url} ~= /^https?:\/\/(?:[\w-]+\.)?(?:api|m|mapi)\.weibo\.c(?:n|om)\/(?:wbapplua\/wbpullad\.lua|2\/(?:push\/active|client\/|checkin\/|statuses\/|groups\/timeline|video\/|comments\/build_comments|search\/|container\/|page|cardlist|profile\/|users\/show))/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/weibo/js/weibo_clean.js?v=20261123-3", {${block_ads}, ${clean_ui}}) with requires_body=true, tag="Weibo Clean", timeout=20
 
 [MitM]
-hostname = api.weibo.cn, m.weibo.cn, mapi.weibo.com, sdkapp.uve.weibo.com
+hostname = api.weibo.cn, *.api.weibo.cn, m.weibo.cn, mapi.weibo.com, *.uve.weibo.com, sdkapp.uve.weibo.com
 h2 = true

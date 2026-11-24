@@ -4018,11 +4018,11 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.equal(searchOut.cards.length, 1);
     assert.deepEqual(searchOut.cards[0].card_group.map((g) => g.desc), ["正常热搜"]);
 
-    // 微博「我的」页默认净化：删掉轮播 banner、我的钱包、借钱、游戏，只留头像和我的相册/赞/收藏
+    // 微博「我的」页默认核心白名单净化：删掉轮播 banner、任务中心、我的钱包、借钱、游戏，只留头像和我的相册/赞/收藏/创作中心
     const profileBody = JSON.stringify({
       vip_center: { id: 1 },
       items: [
-        { itemId: "profile_mine_header", data: { card_type: 1, title: "个人头像" } },
+        { itemId: "profile_mine_header", data: { card_type: 1, title: "个人头像", checkin_info: { show: 1 } } },
         {
           itemId: "mine_grid",
           data: {
@@ -4030,18 +4030,22 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
             elements: [
               { title_sub: "我的相册", scheme: "sinaweibo://album" },
               { title_sub: "我的赞", scheme: "sinaweibo://like" },
+              { title_sub: "任务中心", scheme: "sinaweibo://task" },
               { title_sub: "借钱", scheme: "sinaweibo://finance" },
               { title_sub: "游戏中心", scheme: "sinaweibo://game" },
+              { title_sub: "未知花哨入口", scheme: "sinaweibo://fancy" },
             ],
           },
         },
+        { itemId: "mine_task_card", data: { card_type: 216, title: "任务中心" } },
         { itemId: "mine_banner_ad", data: { card_type: 118, title: "活动轮播图" } },
         { itemId: "mine_wallet", data: { card_type: 11, title: "我的钱包" } },
         { itemId: "mine_hot_service", data: { card_type: 11, title: "推荐服务" } },
       ],
     });
-    const profOut = JSON.parse(run(file, profileBody, "https://api.weibo.cn/2/profile/me").body);
+    const profOut = JSON.parse(run(file, profileBody, "https://v6.api.weibo.cn/2/profile/me").body);
     assert.equal(profOut.vip_center, undefined);
+    assert.equal(profOut.items[0].data.checkin_info, undefined);
     assert.deepEqual(profOut.items.map((x) => x.itemId), ["profile_mine_header", "mine_grid"]);
     assert.deepEqual(profOut.items[1].data.elements.map((e) => e.title_sub), ["我的相册", "我的赞"]);
   });
