@@ -284,7 +284,7 @@ check("Module filenames and display names follow the Enhance / Clean convention"
     ["spotify", "enhance", "Spotify Enhance"],
     ["tubi", "clean", "Tubi Clean"],
     ["pluto", "clean", "Pluto TV Clean"],
-    ["delivery", "clean", "Delivery Clean"],
+    ["delivery", "clean", "Shopping Clean"],
     ["weibo", "clean", "Weibo Clean"],
     ["zhihu", "clean", "Zhihu Clean"],
     ["netease", "clean", "NetEase Music Clean"],
@@ -3852,20 +3852,22 @@ check("Delivery, Weibo, Zhihu and NetEase modules reject QUIC, enable HTTP/2 Mit
   }
 });
 
-// Delivery Clean：美团 / 京东 / 饿了么三端回归（含 16+ 位订单/SKU 大整数精度保护）。
+// Shopping Clean（原 Delivery Clean）：京东 / 淘宝 / 拼多多 / 美团 / 饿了么三端回归（含 16+ 位订单/SKU 大整数精度保护）。
 for (const platform of ["loon", "egern", "shadowrocket"]) {
   const file = platform + "/delivery/js/delivery_clean.js";
 
-  check(platform + " delivery: JD welcomeHome & personinfoBusiness strip floats, ad floors and finance floors", () => {
-    const homeBody = '{"code":"0","orderId":1234567890123456789,"floatLayer":{"id":1},"xview":{"url":"x"},"searchBoxWords":{"words":[{"id":1}]},"floorList":[{"mId":"ad_banner","is_ad":true},{"mId":"normal_icons","type":"icon"}]}';
-    const homeOut = run(file, homeBody, "https://api.m.jd.com/client.action?functionId=welcomeHome&client=apple");
-    assert.ok(homeOut.body, platform + " JD welcomeHome must rewrite even with 19-digit bigint");
+  check(platform + " shopping: JD welcomeHome (POST without query functionId) & personinfoBusiness strip floats, ad floors and finance floors", () => {
+    const homeBody = '{"code":"0","orderId":1234567890123456789,"floatLayer":{"id":1},"xview":{"url":"x"},"searchBoxWords":{"words":[{"id":1}]},"floorList":[{"mId":"ad_banner","is_ad":true},{"mId":"normal_icons","type":"icon","subFloors":[{"mId":"sub_ad","isAd":1},{"mId":"sub_ok"}]}]}';
+    // 真实京东 POST 请求往往只访问 /client.action，functionId 藏在 body 里，响应靠结构特征同样能清理
+    const homeOut = run(file, homeBody, "https://api.m.jd.com/client.action?client=apple");
+    assert.ok(homeOut.body, platform + " JD welcomeHome must rewrite even without functionId in URL and with 19-digit bigint");
     assert.ok(homeOut.body.includes("1234567890123456789"), "19-digit orderId must not lose precision");
     const homeData = JSON.parse(homeOut.body);
     assert.equal(homeData.floatLayer, undefined);
     assert.equal(homeData.xview, undefined);
     assert.deepEqual(homeData.searchBoxWords.words, []);
     assert.deepEqual(homeData.floorList.map((f) => f.mId), ["normal_icons"]);
+    assert.deepEqual(homeData.floorList[0].subFloors.map((f) => f.mId), ["sub_ok"]);
 
     const profileBody = JSON.stringify({
       floors: [
@@ -3874,21 +3876,55 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
         { mId: "baitiao_floor", floorName: "京东白条" },
       ],
     });
-    const pUrl = "https://api.m.jd.com/client.action?functionId=personinfoBusiness";
+    const pUrl = "https://api.m.jd.com/client.action";
     const defaultProfile = JSON.parse(run(file, profileBody, pUrl, { block_ads: true, clean_ui: false }).body);
     assert.deepEqual(defaultProfile.floors.map((f) => f.mId), ["my_order", "baitiao_floor"]);
     const cleanProfile = JSON.parse(run(file, profileBody, pUrl, { block_ads: true, clean_ui: true }).body);
     assert.deepEqual(cleanProfile.floors.map((f) => f.mId), ["my_order"]);
   });
 
-  check(platform + " delivery: Meituan & Eleme strip CPC/CPM poilist ads, banners and splash", () => {
-    const mtBody = '{"code":0,"trace_id":987654321098765432,"data":{"ad_banner":{"id":1},"floating_layer":{"id":2},"poilist":[{"id":101,"name":"正常黄焖鸡"},{"id":102,"name":"竞价广告店","charge_info":"cpc_token_123","ad_mark":true},{"id":103,"poi":{"is_ad":1}}]}}';
+  check(platform + " shopping: Taobao MTOP (JSON & JSONP) and Pinduoduo strip P4P cards, popups and video tabs", () => {
+    const tbJsonp = 'mtopjsonp2({"api":"mtop.taobao.wireless.home.newface.awesome.get","data":{"poplayer":{"id":1},"containers":{"main":{"sections":[{"sectionBizCode":"ok_item","item":{"0":{"id":"1"}}},{"sectionBizCode":"p4p_ad","ext":{"is_p4p":true}}]}},"itemsArray":[{"title":"正常商品"},{"title":"直通车广告","p4p":1}]}})';
+    const tbOut = run(file, tbJsonp, "https://guide-acs.m.taobao.com/gw/mtop.taobao.wireless.home.newface.awesome.get/1.0/");
+    assert.ok(tbOut.body && tbOut.body.startsWith("mtopjsonp2(") && tbOut.body.endsWith(")"));
+    const tbData = JSON.parse(tbOut.body.slice("mtopjsonp2(".length, -1)).data;
+    assert.equal(tbData.poplayer, undefined);
+    assert.deepEqual(tbData.containers.main.sections.map((s) => s.sectionBizCode), ["ok_item"]);
+    assert.deepEqual(tbData.itemsArray.map((i) => i.title), ["正常商品"]);
+
+    const pddBody = JSON.stringify({
+      activity_integration_popup: { id: 1 },
+      goods_list: [
+        { goods_id: 1001, goods_name: "正常百亿补贴" },
+        { goods_id: 1002, goods_name: "竞价推广商品", p_search: { is_ad: 1 } },
+        { goods_id: 1003, goods_name: "直投广告", ad: { ad_id: 99 } },
+      ],
+      bottom_tabs: [
+        { title: "首页" },
+        { title: "多多视频" },
+        { title: "个人中心" },
+      ],
+    });
+    const pddUrl = "https://api.pinduoduo.com/api/oak/integration/render";
+    const pddDefault = JSON.parse(run(file, pddBody, pddUrl, { block_ads: true, clean_ui: false }).body);
+    assert.equal(pddDefault.activity_integration_popup, undefined);
+    assert.deepEqual(pddDefault.goods_list.map((g) => g.goods_id), [1001]);
+    assert.equal(pddDefault.bottom_tabs.length, 3);
+
+    const pddClean = JSON.parse(run(file, pddBody, pddUrl, { block_ads: true, clean_ui: true }).body);
+    assert.deepEqual(pddClean.bottom_tabs.map((t) => t.title), ["首页", "个人中心"]);
+  });
+
+  check(platform + " shopping: Meituan (including string_data JSON) & Eleme strip CPC/CPM poilist ads, banners and splash", () => {
+    const innerStr = JSON.stringify({ poilist: [{ id: 201, name: "正常店" }, { id: 202, name: "内嵌广告店", charge_info: "cpm_1" }] });
+    const mtBody = '{"code":0,"trace_id":987654321098765432,"data":{"ad_banner":{"id":1},"floating_layer":{"id":2},"poilist":[{"id":101,"name":"正常黄焖鸡"},{"id":102,"name":"竞价广告店","charge_info":"cpc_token_123","ad_mark":true},{"id":103,"poi":{"is_ad":1}}],"module_list":[{"module_id":"poi_mod","string_data":' + JSON.stringify(innerStr) + '}]}}';
     const mtOut = run(file, mtBody, "https://wmapi.meituan.com/api/v7/poi/homepage");
     assert.ok(mtOut.body && mtOut.body.includes("987654321098765432"));
     const mtData = JSON.parse(mtOut.body).data;
     assert.equal(mtData.ad_banner, undefined);
     assert.equal(mtData.floating_layer, undefined);
     assert.deepEqual(mtData.poilist.map((p) => p.id), [101]);
+    assert.deepEqual(JSON.parse(mtData.module_list[0].string_data).poilist.map((p) => p.id), [201]);
 
     const eleBody = JSON.stringify({
       data: {

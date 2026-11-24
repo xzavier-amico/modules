@@ -162,7 +162,7 @@ const TARGETS = [
   {
     module: "delivery",
     file: "delivery_clean.js",
-    title: "Delivery Clean — 美团 / 京东 / 饿了么 JSON 清理",
+    title: "Shopping Clean — 京东 / 淘宝 / 拼多多 / 美团 / 饿了么 JSON 清理",
     standalone: "delivery_clean.js",
   },
   {

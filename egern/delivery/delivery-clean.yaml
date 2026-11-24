@@ -1,24 +1,24 @@
 #=======================================================================================
-# Delivery Clean — Egern 模块
+# Shopping Clean — Egern 模块
 #
-# 美团、饿了么、京东去开屏、弹窗浮层与信息流 CPC/CPM 推广卡片。
+# 京东、淘宝、拼多多、美团、饿了么去开屏、弹窗浮层与信息流竞价推广卡片。
 #=======================================================================================
 
-name: "Delivery Clean"
-description: "美团、饿了么、京东去开屏、弹窗与信息流推广卡片。"
+name: "Shopping Clean"
+description: "京东、淘宝、拼多多、美团、饿了么去开屏、弹窗浮层与信息流竞价推广卡片。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"
 icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/delivery.png"
 
 env_schema:
   block_ads:
-    name: "去广告"
-    description: "过滤美团、饿了么、京东的开屏、弹窗浮层与商家/商品流里的竞价推广卡片"
+    name: "去购物与外卖广告"
+    description: "过滤京东、淘宝、拼多多、美团、饿了么的开屏、弹窗浮层与搜索/推荐流里的 CPC/CPM/P4P 竞价广告"
     default_value: "true"
     options: ["true", "false"]
   clean_ui:
-    name: "精简金融楼层"
-    description: "在京东「我的」页额外隐藏白条、金条、借钱等金融营销楼层"
+    name: "精简金融与娱乐模块"
+    description: "额外隐藏京东白条/金条/借钱、淘宝借钱/小游戏、拼多多多多视频/大转盘等营销入口"
     default_value: "false"
     options: ["true", "false"]
 
@@ -27,6 +27,34 @@ rules:
       match:
         - domain_suffix:
             match: "jd.com"
+        - protocol:
+            match: quic
+      policy: REJECT
+  - and:
+      match:
+        - domain_suffix:
+            match: "taobao.com"
+        - protocol:
+            match: quic
+      policy: REJECT
+  - and:
+      match:
+        - domain_suffix:
+            match: "tmall.com"
+        - protocol:
+            match: quic
+      policy: REJECT
+  - and:
+      match:
+        - domain_suffix:
+            match: "pinduoduo.com"
+        - protocol:
+            match: quic
+      policy: REJECT
+  - and:
+      match:
+        - domain_suffix:
+            match: "yangkeduo.com"
         - protocol:
             match: quic
       policy: REJECT
@@ -51,7 +79,127 @@ rules:
         - protocol:
             match: quic
       policy: REJECT
+  - domain_suffix:
+      match: "img-x.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "ccc-x.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "c-nfa.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "dsp-x.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "bdsp.x.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "ads-union.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "jzt.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "addata.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "x.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "cc.m.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "knicks.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "mars.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "orbit.jd.com"
+      policy: REJECT
   - domain:
+      match: "ad.3.cn"
+      policy: REJECT
+  - domain:
+      match: "cm.jd.com"
+      policy: REJECT
+  - domain:
+      match: "dgstatic.jd.com"
+      policy: REJECT
+  - domain:
+      match: "im-x.jd.com"
+      policy: REJECT
+  - domain:
+      match: "janapi.jd.com"
+      policy: REJECT
+  - domain:
+      match: "mercury.jd.com"
+      policy: REJECT
+  - domain:
+      match: "saturn.jd.com"
+      policy: REJECT
+  - domain:
+      match: "uranus.jd.com"
+      policy: REJECT
+  - domain:
+      match: "xlog.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "atanja.tanx.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "tanx.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "alimama.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "simba.taobao.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "re.taobao.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "agoodm.m.taobao.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "adashx.m.taobao.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "h-adashx.ut.taobao.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "v6-adashx.ut.taobao.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "ut.taobao.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "tunion-api.m.taobao.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "t-dsp.pinduoduo.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "th.pinduoduo.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "ta.pinduoduo.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "meta.pinduoduo.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "log.pinduoduo.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "m-ad.pinduoduo.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "impdsp.meituan.com"
+      policy: REJECT
+  - domain_suffix:
       match: "ad.e.waimai.sankuai.com"
       policy: REJECT
   - domain:
@@ -81,6 +229,15 @@ rules:
   - domain:
       match: "wmlog.meituan.com"
       policy: REJECT
+  - domain_suffix:
+      match: "adashx.ut.ele.me"
+      policy: REJECT
+  - domain_suffix:
+      match: "h-adashx.ut.ele.me"
+      policy: REJECT
+  - domain_suffix:
+      match: "v6-adashx.ut.ele.me"
+      policy: REJECT
   - domain:
       match: "ad.ele.me"
       policy: REJECT
@@ -93,76 +250,36 @@ rules:
   - domain:
       match: "trace.ele.me"
       policy: REJECT
-  - domain:
-      match: "ad.3.cn"
-      policy: REJECT
-  - domain:
-      match: "ads-union.jd.com"
-      policy: REJECT
-  - domain:
-      match: "bdsp.x.jd.com"
-      policy: REJECT
-  - domain:
-      match: "cm.jd.com"
-      policy: REJECT
-  - domain:
-      match: "dsp-x.jd.com"
-      policy: REJECT
-  - domain:
-      match: "dgstatic.jd.com"
-      policy: REJECT
-  - domain:
-      match: "im-x.jd.com"
-      policy: REJECT
-  - domain:
-      match: "janapi.jd.com"
-      policy: REJECT
-  - domain:
-      match: "jzt.jd.com"
-      policy: REJECT
-  - domain:
-      match: "knicks.jd.com"
-      policy: REJECT
-  - domain:
-      match: "mercury.jd.com"
-      policy: REJECT
-  - domain:
-      match: "orbit.jd.com"
-      policy: REJECT
-  - domain:
-      match: "saturn.jd.com"
-      policy: REJECT
-  - domain:
-      match: "uranus.jd.com"
-      policy: REJECT
-  - domain:
-      match: "x.jd.com"
-      policy: REJECT
-  - domain:
-      match: "xlog.jd.com"
-      policy: REJECT
 
 url_rewrites:
+  - match: "^https?:\\/\\/api\\.m\\.jd\\.com\\/(?:client\\.action|api)\\?.*functionId=(?:deliverLayer|popupConfig|adStart|getAdList|start|home_launchConfig)\\b"
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/homepage-gw\\.jd\\.com\\/npromotion"
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/api\\.smart\\.jd\\.com\\/c\\/service\\/getLoadingLinks\\b"
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/(?:guide-acs|acs)\\.m\\.taobao\\.com\\/gw\\/mtop\\.(?:taobao\\.baichuan\\.smb\\.get|taobao\\.idle\\.home\\.welcome|alimama\\.etao\\.ad|taobao\\.ad)\\."
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/api\\.(?:pinduoduo|yangkeduo)\\.com\\/api\\/(?:oak\\/integration\\/render|carnival\\/image_list|cappuccino\\/splash)"
+    location: "http://reject-dict/"
   - match: "^https?:\\/\\/wmapi\\.meituan\\.com\\/api\\/v\\d+\\/(?:ad|loadInfo|startpicture|openscreen)(?:[/?]|$)"
     location: "http://reject-dict/"
   - match: "^https?:\\/\\/apimobile\\.meituan\\.com\\/(?:group\\/v\\d+\\/ad|abtest\\/v\\d+\\/ad|appupdate\\/legacy\\/check)(?:[/?]|$)"
     location: "http://reject-dict/"
   - match: "^https?:\\/\\/mapi\\.meituan\\.com\\/(?:launch\\/v\\d+\\/ad|v\\d+\\/ad)(?:[/?]|$)"
     location: "http://reject-dict/"
+  - match: "^https?:\\/\\/rms\\.meituan\\.com\\/diancan\\/api\\/queryAdBoard"
+    location: "http://reject-dict/"
   - match: "^https?:\\/\\/s3plus\\.meituan\\.net\\/v1\\/mss_[^/]+\\/linglong\\/"
     location: "http://reject/"
   - match: "^https?:\\/\\/waimai-guide\\.ele\\.me\\/h5\\/mtop\\.alsc\\.waimai\\.ad\\."
     location: "http://reject-dict/"
-  - match: "^https?:\\/\\/api\\.m\\.jd\\.com\\/client\\.action\\?.*functionId=(?:deliverLayer|popupConfig|adStart|getAdList)\\b"
-    location: "http://reject-dict/"
-  - match: "^https?:\\/\\/api\\.smart\\.jd\\.com\\/c\\/service\\/getLoadingLinks\\b"
-    location: "http://reject-dict/"
 
 scriptings:
   - http_response:
-      name: "delivery.clean"
-      match: "^https?:\\/\\/(?:api\\.m\\.jd\\.com\\/client\\.action\\?.*functionId=(?:start|home_launchConfig|splash|welcomeHome|personinfoBusiness|search|uniformRecommend|wareBusiness)|(?:wmapi|apimobile|mapi)\\.meituan\\.com\\/(?:api|group)\\/v\\d+\\/|wx\\.waimai\\.meituan\\.com\\/weapp\\/v\\d+\\/|waimai-guide\\.ele\\.me\\/h5\\/mtop\\.)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/delivery/js/delivery_clean.js?v=20261123-1"
+      name: "shopping.clean"
+      match: "^https?:\\/\\/(?:api\\.m\\.jd\\.com\\/(?:client\\.action|api)|(?:guide-acs|trade-acs|acs)\\.m\\.taobao\\.com\\/gw\\/mtop\\.|api\\.(?:pinduoduo|yangkeduo)\\.com\\/(?:api\\/|search|v\\d+\\/)|(?:wmapi|apimobile|mapi|i)\\.meituan\\.com\\/|wx\\.waimai\\.meituan\\.com\\/weapp\\/|(?:waimai-guide|client-api|newton-api)\\.ele\\.me\\/)"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/delivery/js/delivery_clean.js?v=20261123-2"
       body_required: true
       max_size: 8388608
       timeout: 20
@@ -172,9 +289,19 @@ mitm:
     includes:
       - "api.m.jd.com"
       - "api.smart.jd.com"
+      - "homepage-gw.jd.com"
+      - "guide-acs.m.taobao.com"
+      - "trade-acs.m.taobao.com"
+      - "acs.m.taobao.com"
+      - "api.pinduoduo.com"
+      - "api.yangkeduo.com"
       - "wmapi.meituan.com"
       - "apimobile.meituan.com"
       - "mapi.meituan.com"
+      - "i.meituan.com"
+      - "rms.meituan.com"
       - "wx.waimai.meituan.com"
       - "s3plus.meituan.net"
       - "waimai-guide.ele.me"
+      - "client-api.ele.me"
+      - "newton-api.ele.me"

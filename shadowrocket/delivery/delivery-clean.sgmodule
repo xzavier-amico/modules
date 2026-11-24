@@ -1,16 +1,60 @@
-#!name=Delivery Clean
-#!desc=美团、饿了么、京东去开屏、弹窗与信息流推广卡片。
+#!name=Shopping Clean
+#!desc=京东、淘宝、拼多多、美团、饿了么去开屏、弹窗浮层与信息流竞价推广卡片。
 #!author=xzavier-amico
 #!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/delivery.png
-#!arguments=去广告:true, 精简金融楼层:false
-#!arguments-desc=去广告：过滤美团、饿了么、京东的开屏、弹窗浮层与商家/商品流里的竞价推广卡片。\n精简金融楼层：在京东「我的」页额外隐藏白条、金条、借钱等金融营销楼层。
+#!arguments=去购物与外卖广告:true, 精简金融与娱乐模块:false
+#!arguments-desc=去购物与外卖广告：过滤京东、淘宝、拼多多、美团、饿了么的开屏、弹窗浮层与搜索/推荐流里的 CPC/CPM/P4P 竞价广告。\n精简金融与娱乐模块：额外隐藏京东白条/金条/借钱、淘宝借钱/小游戏、拼多多多多视频/大转盘等营销入口。
 
 [Rule]
 AND,((DOMAIN-SUFFIX,jd.com),(PROTOCOL,QUIC)),REJECT
+AND,((DOMAIN-SUFFIX,taobao.com),(PROTOCOL,QUIC)),REJECT
+AND,((DOMAIN-SUFFIX,tmall.com),(PROTOCOL,QUIC)),REJECT
+AND,((DOMAIN-SUFFIX,pinduoduo.com),(PROTOCOL,QUIC)),REJECT
+AND,((DOMAIN-SUFFIX,yangkeduo.com),(PROTOCOL,QUIC)),REJECT
 AND,((DOMAIN-SUFFIX,meituan.com),(PROTOCOL,QUIC)),REJECT
 AND,((DOMAIN-SUFFIX,sankuai.com),(PROTOCOL,QUIC)),REJECT
 AND,((DOMAIN-SUFFIX,ele.me),(PROTOCOL,QUIC)),REJECT
-DOMAIN,ad.e.waimai.sankuai.com,REJECT
+DOMAIN-SUFFIX,img-x.jd.com,REJECT
+DOMAIN-SUFFIX,ccc-x.jd.com,REJECT
+DOMAIN-SUFFIX,c-nfa.jd.com,REJECT
+DOMAIN-SUFFIX,dsp-x.jd.com,REJECT
+DOMAIN-SUFFIX,bdsp.x.jd.com,REJECT
+DOMAIN-SUFFIX,ads-union.jd.com,REJECT
+DOMAIN-SUFFIX,jzt.jd.com,REJECT
+DOMAIN-SUFFIX,addata.jd.com,REJECT
+DOMAIN-SUFFIX,x.jd.com,REJECT
+DOMAIN-SUFFIX,cc.m.jd.com,REJECT
+DOMAIN-SUFFIX,knicks.jd.com,REJECT
+DOMAIN-SUFFIX,mars.jd.com,REJECT
+DOMAIN-SUFFIX,orbit.jd.com,REJECT
+DOMAIN,ad.3.cn,REJECT
+DOMAIN,cm.jd.com,REJECT
+DOMAIN,dgstatic.jd.com,REJECT
+DOMAIN,im-x.jd.com,REJECT
+DOMAIN,janapi.jd.com,REJECT
+DOMAIN,mercury.jd.com,REJECT
+DOMAIN,saturn.jd.com,REJECT
+DOMAIN,uranus.jd.com,REJECT
+DOMAIN,xlog.jd.com,REJECT
+DOMAIN-SUFFIX,atanja.tanx.com,REJECT
+DOMAIN-SUFFIX,tanx.com,REJECT
+DOMAIN-SUFFIX,alimama.com,REJECT
+DOMAIN-SUFFIX,simba.taobao.com,REJECT
+DOMAIN-SUFFIX,re.taobao.com,REJECT
+DOMAIN-SUFFIX,agoodm.m.taobao.com,REJECT
+DOMAIN-SUFFIX,adashx.m.taobao.com,REJECT
+DOMAIN-SUFFIX,h-adashx.ut.taobao.com,REJECT
+DOMAIN-SUFFIX,v6-adashx.ut.taobao.com,REJECT
+DOMAIN-SUFFIX,ut.taobao.com,REJECT
+DOMAIN-SUFFIX,tunion-api.m.taobao.com,REJECT
+DOMAIN-SUFFIX,t-dsp.pinduoduo.com,REJECT
+DOMAIN-SUFFIX,th.pinduoduo.com,REJECT
+DOMAIN-SUFFIX,ta.pinduoduo.com,REJECT
+DOMAIN-SUFFIX,meta.pinduoduo.com,REJECT
+DOMAIN-SUFFIX,log.pinduoduo.com,REJECT
+DOMAIN-SUFFIX,m-ad.pinduoduo.com,REJECT
+DOMAIN-SUFFIX,impdsp.meituan.com,REJECT
+DOMAIN-SUFFIX,ad.e.waimai.sankuai.com,REJECT
 DOMAIN,ad.maoyan.com,REJECT
 DOMAIN,analytics.meituan.net,REJECT
 DOMAIN,flowplus.meituan.net,REJECT
@@ -20,39 +64,30 @@ DOMAIN,metrics.meituan.com,REJECT
 DOMAIN,mtrace.meituan.com,REJECT
 DOMAIN,report.meituan.com,REJECT
 DOMAIN,wmlog.meituan.com,REJECT
+DOMAIN-SUFFIX,adashx.ut.ele.me,REJECT
+DOMAIN-SUFFIX,h-adashx.ut.ele.me,REJECT
+DOMAIN-SUFFIX,v6-adashx.ut.ele.me,REJECT
 DOMAIN,ad.ele.me,REJECT
 DOMAIN,log.ele.me,REJECT
 DOMAIN,newton.ele.me,REJECT
 DOMAIN,trace.ele.me,REJECT
-DOMAIN,ad.3.cn,REJECT
-DOMAIN,ads-union.jd.com,REJECT
-DOMAIN,bdsp.x.jd.com,REJECT
-DOMAIN,cm.jd.com,REJECT
-DOMAIN,dsp-x.jd.com,REJECT
-DOMAIN,dgstatic.jd.com,REJECT
-DOMAIN,im-x.jd.com,REJECT
-DOMAIN,janapi.jd.com,REJECT
-DOMAIN,jzt.jd.com,REJECT
-DOMAIN,knicks.jd.com,REJECT
-DOMAIN,mercury.jd.com,REJECT
-DOMAIN,orbit.jd.com,REJECT
-DOMAIN,saturn.jd.com,REJECT
-DOMAIN,uranus.jd.com,REJECT
-DOMAIN,x.jd.com,REJECT
-DOMAIN,xlog.jd.com,REJECT
 
 [URL Rewrite]
+^https?:\/\/api\.m\.jd\.com\/(?:client\.action|api)\?.*functionId=(?:deliverLayer|popupConfig|adStart|getAdList|start|home_launchConfig)\b reject-dict
+^https?:\/\/homepage-gw\.jd\.com\/npromotion reject-dict
+^https?:\/\/api\.smart\.jd\.com\/c\/service\/getLoadingLinks\b reject-dict
+^https?:\/\/(?:guide-acs|acs)\.m\.taobao\.com\/gw\/mtop\.(?:taobao\.baichuan\.smb\.get|taobao\.idle\.home\.welcome|alimama\.etao\.ad|taobao\.ad)\. reject-dict
+^https?:\/\/api\.(?:pinduoduo|yangkeduo)\.com\/api\/(?:oak\/integration\/render|carnival\/image_list|cappuccino\/splash) reject-dict
 ^https?:\/\/wmapi\.meituan\.com\/api\/v\d+\/(?:ad|loadInfo|startpicture|openscreen)(?:[/?]|$) reject-dict
 ^https?:\/\/apimobile\.meituan\.com\/(?:group\/v\d+\/ad|abtest\/v\d+\/ad|appupdate\/legacy\/check)(?:[/?]|$) reject-dict
 ^https?:\/\/mapi\.meituan\.com\/(?:launch\/v\d+\/ad|v\d+\/ad)(?:[/?]|$) reject-dict
+^https?:\/\/rms\.meituan\.com\/diancan\/api\/queryAdBoard reject-dict
 ^https?:\/\/s3plus\.meituan\.net\/v1\/mss_[^/]+\/linglong\/ reject
 ^https?:\/\/waimai-guide\.ele\.me\/h5\/mtop\.alsc\.waimai\.ad\. reject-dict
-^https?:\/\/api\.m\.jd\.com\/client\.action\?.*functionId=(?:deliverLayer|popupConfig|adStart|getAdList)\b reject-dict
-^https?:\/\/api\.smart\.jd\.com\/c\/service\/getLoadingLinks\b reject-dict
 
 [Script]
-delivery.clean = type=http-response,pattern=^https?:\/\/(?:api\.m\.jd\.com\/client\.action\?.*functionId=(?:start|home_launchConfig|splash|welcomeHome|personinfoBusiness|search|uniformRecommend|wareBusiness)|(?:wmapi|apimobile|mapi)\.meituan\.com\/(?:api|group)\/v\d+\/|wx\.waimai\.meituan\.com\/weapp\/v\d+\/|waimai-guide\.ele\.me\/h5\/mtop\.),requires-body=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/delivery/js/delivery_clean.js?v=20261123-1,argument="{"block_ads":{{{去广告}}},"clean_ui":{{{精简金融楼层}}}}"
+shopping.clean = type=http-response,pattern=^https?:\/\/(?:api\.m\.jd\.com\/(?:client\.action|api)|(?:guide-acs|trade-acs|acs)\.m\.taobao\.com\/gw\/mtop\.|api\.(?:pinduoduo|yangkeduo)\.com\/(?:api\/|search|v\d+\/)|(?:wmapi|apimobile|mapi|i)\.meituan\.com\/|wx\.waimai\.meituan\.com\/weapp\/|(?:waimai-guide|client-api|newton-api)\.ele\.me\/),requires-body=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/delivery/js/delivery_clean.js?v=20261123-2,argument="{"block_ads":{{{去购物与外卖广告}}},"clean_ui":{{{精简金融与娱乐模块}}}}"
 
 [MITM]
-hostname = %APPEND% api.m.jd.com, api.smart.jd.com, wmapi.meituan.com, apimobile.meituan.com, mapi.meituan.com, wx.waimai.meituan.com, s3plus.meituan.net, waimai-guide.ele.me
+hostname = %APPEND% api.m.jd.com, api.smart.jd.com, homepage-gw.jd.com, guide-acs.m.taobao.com, trade-acs.m.taobao.com, acs.m.taobao.com, api.pinduoduo.com, api.yangkeduo.com, wmapi.meituan.com, apimobile.meituan.com, mapi.meituan.com, i.meituan.com, rms.meituan.com, wx.waimai.meituan.com, s3plus.meituan.net, waimai-guide.ele.me, client-api.ele.me, newton-api.ele.me
 h2 = true
