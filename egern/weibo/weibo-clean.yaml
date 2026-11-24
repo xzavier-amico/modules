@@ -1,11 +1,11 @@
 #=======================================================================================
 # Weibo Clean — Egern 模块
 #
-# 微博去开屏、时间线推广、评论区软广、商业热搜与「我的」页任务中心/钱包营销卡片。
+# 微博去开屏、时间线推广、评论区软广、发现/热搜/综合搜索广告与「我的」页任务中心/钱包营销卡片。
 #=======================================================================================
 
 name: "Weibo Clean"
-description: "微博去开屏、时间线推广、评论区软广、商业热搜与「我的」页任务中心/钱包营销卡片。"
+description: "微博去开屏、时间线推广、评论区软广、发现/热搜/综合搜索广告与「我的」页任务中心/钱包营销卡片。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"
 icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/weibo.png"
@@ -13,12 +13,12 @@ icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/weibo
 env_schema:
   block_ads:
     name: "去广告"
-    description: "过滤微博开屏、推荐/关注时间线、评论区软广、发现页商业热搜及活动横幅"
+    description: "过滤微博开屏、推荐/关注时间线、正文详情、评论区软广、发现页商业热搜及综合搜索广告"
     default_value: "true"
     options: ["true", "false"]
   clean_ui:
     name: "净化我的页"
-    description: "在「我的」页采用核心功能白名单，彻底隐藏任务中心、红包签到、我的钱包、借钱、游戏、直播、免费小说、商城等杂乱卡片"
+    description: "在「我的」页按真实 itemId 白名单彻底隐藏任务中心、红包签到、我的钱包、借钱、游戏、直播、小说、商城等杂乱卡片"
     default_value: "true"
     options: ["true", "false"]
 
@@ -51,8 +51,31 @@ rules:
         - protocol:
             match: quic
       policy: REJECT
-  - domain_suffix:
-      match: "uve.weibo.com"
+  - domain:
+      match: "dns.weibo.cn"
+      policy: REJECT
+  - ip_cidr:
+      match: "39.97.128.148/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "39.97.130.51/32"
+      policy: REJECT
+      no_resolve: true
+  - domain:
+      match: "aln.uve.weibo.com"
+      policy: REJECT
+  - domain:
+      match: "click.uve.weibo.com"
+      policy: REJECT
+  - domain:
+      match: "datacollection.uve.weibo.com"
+      policy: REJECT
+  - domain:
+      match: "fastimage.uve.weibo.com"
+      policy: REJECT
+  - domain:
+      match: "adimg.uve.weibo.com"
       policy: REJECT
   - domain:
       match: "ad.weibo.com"
@@ -61,10 +84,13 @@ rules:
       match: "adstrategy.biz.weibo.com"
       policy: REJECT
   - domain:
-      match: "aln.uve.weibo.com"
+      match: "alitui.weibo.com"
       policy: REJECT
   - domain:
       match: "biz.weibo.com"
+      policy: REJECT
+  - domain:
+      match: "tui.weibo.com"
       policy: REJECT
   - domain:
       match: "dp.im.weibo.cn"
@@ -91,9 +117,6 @@ rules:
       match: "promote.biz.weibo.cn"
       policy: REJECT
   - domain:
-      match: "sdkapp.uve.weibo.com"
-      policy: REJECT
-  - domain:
       match: "sdkclick.mobile.sina.cn"
       policy: REJECT
   - domain:
@@ -108,30 +131,46 @@ rules:
   - domain:
       match: "zymo.mps.weibo.com"
       policy: REJECT
+  - domain:
+      match: "adpinpai.video.weibocdn.com"
+      policy: REJECT
 
 url_rewrites:
-  - match: "^https?:\\/\\/[^/]*uve\\.weibo\\.com\\/"
+  - match: "^https?:\\/\\/[^/]*weibo\\.c(?:n|om)\\/(?:2\\/)?httpdns\\/config"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/bootrealtime\\.uve\\.weibo\\.com\\/v\\d+\\/ad\\/realtime"
     location: "http://reject-dict/"
-  - match: "^https?:\\/\\/[^/]*weibo\\.c(?:n|om)\\/2\\/(?:ad|sdk|preload|checkin|floater|pullad)\\/"
+  - match: "^https?:\\/\\/sdkapp\\.uve\\.weibo\\.com\\/interface\\/sdk\\/(?:get-lbs-cell-info|sdkconfig)\\.php"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/[^/]*weibo\\.c(?:n|om)\\/2\\/(?:ug\\/checkin\\/list|push\\/daily|push\\/info|logservice\\/service|statuses\\/unread_hot_timeline_ad|statuses\\/container_positive|statuses\\/push_info|comments\\/bullet_screens|video\\/redpacket|hot\\/hours_spotlight|search\\/container_discover|!\\/live\\/media_homelist|!\\/chaohua\\/discovery\\/home_bottom\\/switch|!\\/huati\\/(?:discovery_home_bottom_getdotinfo|mobile_discovery_searchchange)|!\\/was\\/finder\\/searchbarchange|!\\/wbox\\/\\w+\\/(?:home_bottom_modal|interest_category)|(?:ad|sdk|preload|floater|pullad)\\/)"
     location: "http://reject-dict/"
-  - match: "^https?:\\/\\/[^/]*weibo\\.c(?:n|om)\\/2\\/statuses\\/unread_hot_timeline_ad\\b"
+  - match: "^https?:\\/\\/api\\.weibo\\.cn\\/!\\/sug\\/list\\/finderchange\\b"
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/(?:card\\.weibo\\.com\\/article\\/m\\/aj|weibo\\.com\\/ttarticle\\/x\\/m\\/aj)\\/(?:reward|uvead)\\b"
     location: "http://reject-dict/"
 
 header_rewrites:
   - delete:
-      match: "^https?:\\/\\/[^/]*weibo\\.c(?:n|om)\\/2\\/(?:profile\\/|users\\/|search\\/|page|cardlist|container\\/)"
+      match: "^https?:\\/\\/[^/]*weibo\\.c(?:n|om)\\/2\\/(?:profile\\/|users\\/|search\\/|searchall|flowpage|page|cardlist|container\\/)"
       name: "if-none-match"
       type: "request"
   - delete:
-      match: "^https?:\\/\\/[^/]*weibo\\.c(?:n|om)\\/2\\/(?:profile\\/|users\\/|search\\/|page|cardlist|container\\/)"
+      match: "^https?:\\/\\/[^/]*weibo\\.c(?:n|om)\\/2\\/(?:profile\\/|users\\/|search\\/|searchall|flowpage|page|cardlist|container\\/)"
       name: "if-modified-since"
       type: "request"
 
 scriptings:
   - http_response:
+      name: "weibo.splash"
+      match: "^https?:\\/\\/(?:(?:sdk|wb)app|bootpreload)\\.uve\\.weibo\\.com\\/(?:interface\\/sdk\\/sdkad\\.php|wbapplua\\/wbpullad\\.lua|preload\\/get_ad|v\\d+\\/ad\\/preload)"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/weibo/js/weibo_clean.js?v=20261124-1"
+      body_required: true
+      max_size: 8388608
+      timeout: 20
+  - http_response:
       name: "weibo.clean"
-      match: "^https?:\\/\\/(?:[\\w-]+\\.)?(?:api|m|mapi)\\.weibo\\.c(?:n|om)\\/(?:wbapplua\\/wbpullad\\.lua|2\\/(?:push\\/active|client\\/|checkin\\/|statuses\\/|groups\\/timeline|video\\/|comments\\/build_comments|search\\/|container\\/|page|cardlist|profile\\/|users\\/show))"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/weibo/js/weibo_clean.js?v=20261123-3"
+      match: "^https?:\\/\\/(?:[\\w-]+\\.)?(?:api|m|mapi)\\.weibo\\.c(?:n|om)\\/2\\/(?:push\\/active|client\\/|checkin\\/show|statuses\\/|groups\\/(?:timeline|allgroups\\/v2)|video\\/|comments\\/(?:build_comments|mix_comments)|search\\/|searchall|flowpage|flowlist|container\\/|page|cardlist|profile\\/|users\\/show|direct_messages\\/user_list|messageflow\\/notice|!\\/huati\\/discovery_home_bottom_channels)"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/weibo/js/weibo_clean.js?v=20261124-1"
       body_required: true
       max_size: 8388608
       timeout: 20
@@ -139,9 +178,8 @@ scriptings:
 mitm:
   hostnames:
     includes:
-      - "api.weibo.cn"
+      - "*.weibo.cn"
       - "*.api.weibo.cn"
-      - "m.weibo.cn"
-      - "mapi.weibo.com"
       - "*.uve.weibo.com"
-      - "sdkapp.uve.weibo.com"
+      - "*.weibo.com"
+      - "weibo.com"

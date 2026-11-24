@@ -1,5 +1,5 @@
 #!name=NetEase Music Clean
-#!desc=网易云音乐去开屏、首页横幅广告、左滑抽屉（商城/云村有票/云推歌）、搜索买榜词与评论区推广。
+#!desc=网易云音乐去开屏、首页横幅广告、左滑抽屉（商城/云村有票/云推歌）、发现页横幅、搜索买榜词与评论区推广（支持 EAPI AES 密文实时加解密）。
 #!category=NetEase
 #!author=xzavier-amico
 #!homepage=https://github.com/xzavier-amico/modules
@@ -7,13 +7,23 @@
 #!tag=NetEase
 
 [Argument]
-block_ads = switch,true,type=boolean,tag=去广告,desc=拦截开屏素材 CDN，并过滤首页横幅、搜索热词与评论区里的商业广告。
-clean_ui = switch,true,type=boolean,tag=净化侧栏与首页,desc=移除左滑菜单里的商城、云村有票、云推歌、彩铃、游戏、免费听歌，以及首页发现流里的直播与语音房模块。
+block_ads = switch,true,type=boolean,tag=去广告,desc=拦截开屏素材 CDN 与广告接口，解密 EAPI 响应并过滤首页横幅、发现页广告、搜索热词与评论区商业广告。
+clean_ui = switch,true,type=boolean,tag=净化侧栏与首页,desc=移除左滑菜单里的商城、云村有票、云推歌、彩铃、游戏、VIP 轮播，以及首页/发现流里的直播与语音房模块。
 
 [Rule]
 # 拒绝 QUIC，强制回落 TCP：HTTP/3 走 UDP 不经过 MITM，脚本看不到请求。
 AND, ((DOMAIN-SUFFIX, 163.com), (PROTOCOL, QUIC)), REJECT
 AND, ((DOMAIN-SUFFIX, 126.net), (PROTOCOL, QUIC)), REJECT
+
+# 拦截网易云 HTTPDNS，防止客户端拿直连 IP 绕过 MITM
+DOMAIN, httpdns.n.netease.com, REJECT
+DOMAIN, httpdns-sdk.n.netease.com, REJECT
+DOMAIN, httpdns.music.163.com, REJECT
+DOMAIN, music.httpdns.c.163.com, REJECT
+IP-CIDR, 59.111.239.61/32, REJECT, no-resolve
+IP-CIDR, 59.111.239.62/32, REJECT, no-resolve
+IP-CIDR, 115.236.121.51/32, REJECT, no-resolve
+IP-CIDR, 115.236.121.195/32, REJECT, no-resolve
 
 # 网易云广告素材 CDN 与投放域名
 DOMAIN, admusicpic.music.126.net, REJECT
@@ -27,13 +37,16 @@ DOMAIN, yt-adp.nosdn.127.net, REJECT
 DOMAIN, yt-adp.ws.126.net, REJECT
 
 [Rewrite]
-# 纯开屏与广告拉取接口直接返回空字典
-request if ${url} ~= /^https?:\/\/interface\d*\.music\.163\.com\/e?api\/(?:ad|sp\/loading\/ad|v1\/ad)\// then reject_dict(200)
+# 开屏、弹窗、左滑侧栏音乐服务（商城/云村有票/云推歌/云贝）与评论区插入广告直接返回空字典
+request if ${url} ~= /^https?:\/\/(?:ipv4|interface\d*)\.music\.163\.com\/[xw]?e?api\/(?:ad\/|sp\/loading\/ad\/|sp\/flow\/popup\/query|v\d+\/ad\/|mlog\/)/ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/(?:ipv4|interface\d*)\.music\.163\.com\/[xw]?e?api\/(?:side-bar\/mini-program\/music-service\/account|delivery\/(?:batch-deliver|deliver)|yunbei\/account\/entrance\/get|vipmall\/couponcfg\/get|vipcenter\/tspopup\/get|vip\/cashier\/tspopup\/get|creator\/musician\/reminder\/message\/get)/ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/(?:ipv4|interface\d*)\.music\.163\.com\/[xw]?e?api\/(?:search\/(?:chart|default|rcmd\/keyword|specialkeyword)|resource-exposure\/|activity\/bonus\/playpage\/time\/query|content\/activity\/music\/jar\/template\/list)/ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/(?:ipv4|interface\d*)\.music\.163\.com\/[xw]?e?api\/(?:comment\/feed\/inserted|v\d+\/content\/exposure\/comment\/banner|mlivestream\/entrance\/playpage|link\/(?:position\/show\/strategy|scene\/show)|tips\/v\d+\/get|resniche\/position\/play\/new\/get|mine\/applet\/redpoint)/ then reject_dict(200)
 
 [Script]
-# 请求头带上 X-Real-IP 并覆写或者走明文响应过滤（覆盖 batch、首页、左滑侧边栏 sidebar/entrance、搜索、评论）
-response if ${url} ~= /^https?:\/\/(?:interface\d*\.music\.163\.com|music\.163\.com)\/e?api\/(?:batch|ad\/|sp\/loading|homepage\/|sidebar|music-main-sidebar|entrance|resource\/exposure|v\d+\/user\/detail|v\d+\/banner\/get|v\d+\/discovery\/|search\/(?:hot|default)|v\d+\/resource\/comments|comment\/)/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/netease/js/netease_clean.js?v=20261123-2", {${block_ads}, ${clean_ui}}) with requires_body=true, tag="NetEase Music Clean", timeout=20
+# 二进制模式解密 EAPI (AES-128-ECB + x-aeapi gzip)，清洗后重新加密返回；同时兼容明文 JSON
+response if ${url} ~= /^https?:\/\/(?:ipv4|interface\d*|music)\.music\.163\.com\/[xw]?e?api\/(?:batch|ad\/|sp\/loading|homepage\/block\/page|link\/(?:home\/framework\/tab|page\/(?:rcmd\/(?:resource\/show|block\/resource\/multi\/refresh)|discovery\/resource\/show)|position\/show\/resource)|vipnewcenter\/app\/resource\/newaccountpage|side-?bar|music-main-sidebar|entrance|v\d+\/(?:banner\/get|discovery\/|resource\/comment)|search\/(?:hot|default)|comment\/)/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/netease/js/netease_clean.js?v=20261124-1", {${block_ads}, ${clean_ui}}) with requires_body=true, binary_body_mode=true, tag="NetEase Music Clean", timeout=20
 
 [MitM]
-hostname = interface.music.163.com, interface3.music.163.com, music.163.com
+hostname = interface.music.163.com, interface3.music.163.com, interface4.music.163.com, interface5.music.163.com, interface6.music.163.com, interface9.music.163.com, ipv4.music.163.com, music.163.com
 h2 = true

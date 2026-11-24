@@ -1,11 +1,11 @@
 #=======================================================================================
 # Shopping Clean — Egern 模块
 #
-# 京东、淘宝、拼多多、美团、饿了么、菜鸟裹裹、丰巢去开屏、弹窗浮层与信息流竞价推广卡片。
+# 京东、淘宝、菜鸟裹裹、丰巢、拼多多、美团、饿了么去开屏、弹窗浮层、素材 CDN 与信息流竞价推广卡片（阻断 HTTPDNS 绕过）。
 #=======================================================================================
 
 name: "Shopping Clean"
-description: "京东、淘宝、拼多多、美团、饿了么、菜鸟裹裹、丰巢去开屏、弹窗浮层与信息流竞价推广卡片。"
+description: "京东、淘宝、菜鸟裹裹、丰巢、拼多多、美团、饿了么去开屏、弹窗浮层、素材 CDN 与信息流竞价推广卡片。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"
 icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/delivery.png"
@@ -13,12 +13,12 @@ icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/deliv
 env_schema:
   block_ads:
     name: "去购物与快递广告"
-    description: "过滤京东、淘宝、拼多多、美团、饿了么、菜鸟裹裹、丰巢的开屏、取件页弹窗浮层与搜索/推荐流里的 CPC/CPM/P4P 竞价广告"
+    description: "过滤京东、淘宝、菜鸟裹裹、丰巢、拼多多、美团、饿了么的开屏、弹窗浮层与搜索/推荐流里的 CPC/CPM/P4P 竞价广告"
     default_value: "true"
     options: ["true", "false"]
   clean_ui:
     name: "精简金融与娱乐模块"
-    description: "隐藏京东白条/金条/借钱、淘宝借钱/小游戏、拼多多多多视频/大转盘、菜鸟裹酱/果园/商品流等营销模块"
+    description: "隐藏京东大促/白条/金条/Plus 推广楼层、淘宝借钱/小游戏、拼多多多多视频/月卡入口、菜鸟裹酱/果园/非物流消息等营销模块"
     default_value: "true"
     options: ["true", "false"]
 
@@ -27,6 +27,13 @@ rules:
       match:
         - domain_suffix:
             match: "jd.com"
+        - protocol:
+            match: quic
+      policy: REJECT
+  - and:
+      match:
+        - domain_suffix:
+            match: "360buyimg.com"
         - protocol:
             match: quic
       policy: REJECT
@@ -82,6 +89,13 @@ rules:
   - and:
       match:
         - domain_suffix:
+            match: "meituan.net"
+        - protocol:
+            match: quic
+      policy: REJECT
+  - and:
+      match:
+        - domain_suffix:
             match: "sankuai.com"
         - protocol:
             match: quic
@@ -93,6 +107,77 @@ rules:
         - protocol:
             match: quic
       policy: REJECT
+  - and:
+      match:
+        - domain_suffix:
+            match: "elemecdn.com"
+        - protocol:
+            match: quic
+      policy: REJECT
+  # HTTPDNS 阻断
+  - domain:
+      match: "dns.jd.com"
+      policy: REJECT
+  - ip_cidr:
+      match: "101.124.19.122/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr6:
+      match: "2402:db40:5100:1011::5/128"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "103.224.222.208/32"
+      policy: REJECT
+      no_resolve: true
+  - domain:
+      match: "httpdns.alicdn.com"
+      policy: REJECT
+  - ip_cidr:
+      match: "203.107.1.0/24"
+      policy: REJECT
+      no_resolve: true
+  - domain:
+      match: "httpdns.meituan.com"
+      policy: REJECT
+  - domain:
+      match: "httpdnsmultiapi.meituan.com"
+      policy: REJECT
+  - domain:
+      match: "httpdnsmultiapivip.meituan.com"
+      policy: REJECT
+  - domain:
+      match: "dnspod.meituan.httpdns.qcloud.com"
+      policy: REJECT
+  - ip_cidr:
+      match: "202.90.108.13/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "202.90.110.46/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "103.37.155.60/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "101.35.204.35/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "101.35.212.35/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "114.110.96.26/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "114.110.97.97/32"
+      policy: REJECT
+      no_resolve: true
+  # 广告与统计域名
   - domain_suffix:
       match: "img-x.jd.com"
       policy: REJECT
@@ -131,6 +216,24 @@ rules:
       policy: REJECT
   - domain_suffix:
       match: "orbit.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "du.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "jddebug.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "policy.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "kepler.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "keplerapi.jd.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "mapi.m.jd.com"
       policy: REJECT
   - domain:
       match: "ad.3.cn"
@@ -229,7 +332,13 @@ rules:
       match: "impdsp.meituan.com"
       policy: REJECT
   - domain_suffix:
+      match: "mads.meituan.com"
+      policy: REJECT
+  - domain_suffix:
       match: "ad.e.waimai.sankuai.com"
+      policy: REJECT
+  - domain_suffix:
+      match: "dreport.meituan.net"
       policy: REJECT
   - domain:
       match: "ad.maoyan.com"
@@ -267,6 +376,21 @@ rules:
   - domain_suffix:
       match: "v6-adashx.ut.ele.me"
       policy: REJECT
+  - domain_suffix:
+      match: "app-monitor.ele.me"
+      policy: REJECT
+  - domain_suffix:
+      match: "client-api.ele.me"
+      policy: REJECT
+  - domain_suffix:
+      match: "grand.ele.me"
+      policy: REJECT
+  - domain_suffix:
+      match: "mobile-pubt.ele.me"
+      policy: REJECT
+  - domain_suffix:
+      match: "newton-api.ele.me"
+      policy: REJECT
   - domain:
       match: "ad.ele.me"
       policy: REJECT
@@ -281,38 +405,75 @@ rules:
       policy: REJECT
 
 url_rewrites:
-  - match: "^https?:\\/\\/api\\.m\\.jd\\.com\\/(?:client\\.action|api)\\?.*functionId=(?:deliverLayer|popupConfig|adStart|getAdList|start|home_launchConfig)\\b"
+  - match: "^https?:\\/\\/api\\.m\\.jd\\.com\\/(?:client\\.action|api)\\?.*functionId=(?:popupConfig|adStart|getAdList|home_launchConfig|searchBoxWord|xview2Config|stationPullService|getWidget|widget|jdDiscoveryRedPoint|queryMaterialAdverts|apollo_style|jdaPreDownload|uniformRecommend7)\\b"
     location: "http://reject-dict/"
   - match: "^https?:\\/\\/homepage-gw\\.jd\\.com\\/npromotion"
     location: "http://reject-dict/"
   - match: "^https?:\\/\\/api\\.smart\\.jd\\.com\\/c\\/service\\/getLoadingLinks\\b"
     location: "http://reject-dict/"
-  - match: "^https?:\\/\\/(?:guide-acs|acs)\\.m\\.taobao\\.com\\/gw\\/mtop\\.(?:taobao\\.baichuan\\.smb\\.get|taobao\\.idle\\.home\\.welcome|alimama\\.etao\\.ad|taobao\\.ad|cainiao\\.adx|cainiao\\.guoguo\\.nbnetflow\\.ads)\\."
+  - match: "^https?:\\/\\/storage\\.360buyimg\\.com\\/(?:app\\.m\\.jd\\.com\\/lottie|occupy-home\\/|xview|appcartsoa\\/client\\/cart_egg_entry)"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/storage\\.jd\\.com\\/ti-pythontask\\/JD\\/jdt_"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/acs\\.m\\.taobao\\.com\\/gw\\/mtop\\.(?:alibaba\\.advertisementservice\\.getadv|alimama\\.etao\\.config\\.query\\/.+?etao_advertise|alimusic\\.common\\.mobileservice\\.startinit|etao\\.noah\\.query\\/.+tao_splash|film\\.mtopadvertiseapi\\.queryadvertise|o2o\\.ad\\.gateway\\.get|taobao\\.idle\\.home\\.welcome|trip\\.activity\\.querytmsresources|taobao\\.baichuan\\.smb\\.get|alimama\\.etao\\.ad|taobao\\.ad)"
     location: "http://reject-dict/"
-  - match: "^https?:\\/\\/(?:acs\\.m|gw)\\.cainiao\\.com\\/gw\\/mtop\\.cainiao\\.(?:adx|ad|guoguo\\.nbnetflow\\.ads|nbmensa\\.research)\\."
+  - match: "^https?:\\/\\/guide-acs\\.m\\.taobao\\.com\\/gw\\/mtop\\.taobao\\.volvo\\.secondfloor\\.getconfig"
     location: "http://reject-dict/"
-  - match: "^https?:\\/\\/(?:app|wx|api|m)\\.fcbox\\.com\\/.*\\/(?:ad|ads|advert|splash|openScreen|popup|marketing)(?:\\/|[?]|$)"
+  - match: "^https?:\\/\\/(?:cn-acs|acs)\\.m\\.cainiao\\.com\\/gw\\/mtop\\.(?:cainiao\\.(?:adkeyword\\.get|adx|ad\\.|cncommunity\\.my\\.station\\.query|guoguo\\.nbnetflow\\.ads\\.(?:batch\\.show\\.v2|index)|nbopen\\.miniapp\\.recommend|nbmensa\\.research\\.researchservice\\.(?:acquire|event|close)|nbpresentation\\.(?:homepage\\.merge|tabbar\\.marketing)\\.get)|com\\.cainiao\\.(?:cnactivitycenter|cncreditmarket\\.hit\\.getactivityhit|longquan\\.place\\.getpageresourcecontent))"
     location: "http://reject-dict/"
-  - match: "^https?:\\/\\/api\\.(?:pinduoduo|yangkeduo)\\.com\\/api\\/(?:oak\\/integration\\/render|carnival\\/image_list|cappuccino\\/splash)"
+  - match: "^https?:\\/\\/(?:guide-acs\\.m\\.taobao\\.com|netflow-mtop\\.cainiao\\.com)\\/gw\\/mtop\\.cainiao\\.(?:adx\\.flyad\\.getad|guoguo\\.nbnetflow\\.ads)"
     location: "http://reject-dict/"
+  - match: "^https?:\\/\\/(?:consumer|app|wx|api|m)\\.fcbox\\.com\\/.*\\/(?:ad|ads|advert|splash|openScreen|popup|marketing)(?:\\/|[?]|$)"
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/api\\.(?:pinduoduo|yangkeduo)\\.com\\/api\\/(?:cappuccino\\/splash|carnival\\/image_list|aquarius\\/hungary\\/global\\/(?:app_popup|homepage)|flow\\/hungary\\/window\\/global|zaire_biz\\/chat\\/resource\\/get_list_data|brand-olay\\/goods_detail\\/bybt_guide|pdd_live_moore_main_lego)"
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/api\\.pinduoduo\\.com\\/search_hotquery\\b"
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/mobile\\.yangkeduo\\.com\\/layer\\/app_upgrade_popup"
+    location: "http://reject/"
   - match: "^https?:\\/\\/wmapi\\.meituan\\.com\\/api\\/v\\d+\\/(?:ad|loadInfo|startpicture|openscreen)(?:[/?]|$)"
     location: "http://reject-dict/"
-  - match: "^https?:\\/\\/apimobile\\.meituan\\.com\\/(?:group\\/v\\d+\\/ad|abtest\\/v\\d+\\/ad|appupdate\\/legacy\\/check)(?:[/?]|$)"
+  - match: "^https?:\\/\\/apimobile\\.meituan\\.com\\/(?:group\\/v\\d+\\/(?:ad|recommend\\/unity\\/recommends)|abtest\\/v\\d+\\/ad|appupdate)"
     location: "http://reject-dict/"
   - match: "^https?:\\/\\/mapi\\.meituan\\.com\\/(?:launch\\/v\\d+\\/ad|v\\d+\\/ad)(?:[/?]|$)"
     location: "http://reject-dict/"
   - match: "^https?:\\/\\/rms\\.meituan\\.com\\/diancan\\/api\\/queryAdBoard"
     location: "http://reject-dict/"
-  - match: "^https?:\\/\\/s3plus\\.meituan\\.net\\/v1\\/mss_[^/]+\\/linglong\\/"
+  - match: "^https?:\\/\\/portal-portm\\.meituan\\.com\\/horn_ios"
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/sqt\\.meituan\\.com\\/s\\/gateway\\/mweb\\/api\\/marketingResource\\/show"
     location: "http://reject/"
+  - match: "^https?:\\/\\/(?:s3plus|flowplus)\\.meituan\\.net\\/v\\d+\\/[^/]+\\/(?:linglong\\/|brandcpt|waimai-alita\\/|goku\\/(?:lottie|lucency))"
+    location: "http://reject-img/"
+  - match: "^https?:\\/\\/img\\.meituan\\.net\\/(?:adunion|display|midas|bizad|goodsawardpic)\\/"
+    location: "http://reject-img/"
+  - match: "^https?:\\/\\/p\\d+\\.meituan\\.net\\/(?:display|mmc|cell)\\/"
+    location: "http://reject-img/"
+  - match: "^https?:\\/\\/w\\.meituan\\.net\\/v\\d+\\/mss_\\w+\\/waimai-mach\\/\\d+\\/\\d+\\/pt-im-(?:guider|coupon-card-stateful)"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/amdc\\.m\\.ele\\.me\\/amdc\\/mobileDispatch"
+    location: "http://reject-dict/"
   - match: "^https?:\\/\\/waimai-guide\\.ele\\.me\\/h5\\/mtop\\.alsc\\.waimai\\.ad\\."
     location: "http://reject-dict/"
+  - match: "^https?:\\/\\/g\\.alicdn\\.com\\/TBTakeout\\/et-store\\/[\\d.]+\\/weex\\/store-brand-popup"
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/nr-op\\.elemecdn\\.com\\/eleme\\/transformer\\/templates\\/\\w_eleme_home_yolo_popup"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/(?:fuss10|cube|nr-op)\\.elemecdn\\.com\\/.+\\.(?:jpeg|jpg)\\?x-oss-process=image\\/resize,m_fill,w_\\d{3,4},h_\\d{3,4}\\/"
+    location: "http://reject/"
+  - match: "^https?:\\/\\/(?:fuss10|cube)\\.elemecdn\\.com\\/.*(?:\\.mp4\\?|\\/w\\/(?:640|750)\\/h\\/\\d{3,4})"
+    location: "http://reject/"
 
 scriptings:
+  - http_request:
+      name: "shopping.amdc"
+      match: "^https?:\\/\\/amdc\\.m\\.taobao\\.com\\/amdc\\/mobileDispatch$"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/delivery/js/delivery_clean.js?v=20261124-1"
+      timeout: 10
   - http_response:
       name: "shopping.clean"
-      match: "^https?:\\/\\/(?:api\\.m\\.jd\\.com\\/(?:client\\.action|api)|(?:guide-acs|trade-acs|acs)\\.m\\.taobao\\.com\\/gw\\/mtop\\.|(?:acs\\.m|gw)\\.cainiao\\.com\\/gw\\/mtop\\.|(?:app|wx|api|m)\\.fcbox\\.com\\/|api\\.(?:pinduoduo|yangkeduo)\\.com\\/(?:api\\/|search|v\\d+\\/)|(?:wmapi|apimobile|mapi|i)\\.meituan\\.com\\/|wx\\.waimai\\.meituan\\.com\\/weapp\\/|(?:waimai-guide|client-api|newton-api)\\.ele\\.me\\/)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/delivery/js/delivery_clean.js?v=20261123-3"
+      match: "^https?:\\/\\/(?:api\\.m\\.jd\\.com\\/(?:client\\.action|api)|(?:guide-acs|trade-acs|acs)\\.m\\.taobao\\.com\\/gw\\/mtop\\.|poplayer\\.template\\.alibaba\\.com\\/\\w+\\.json|(?:cn-acs|acs)\\.m\\.cainiao\\.com\\/gw\\/mtop\\.|netflow-mtop\\.cainiao\\.com\\/gw\\/mtop\\.|(?:consumer|app|wx|api|m)\\.fcbox\\.com\\/|api\\.(?:pinduoduo|yangkeduo)\\.com\\/(?:api\\/|search|v\\d+\\/)|(?:wmapi|apimobile|mapi|i)\\.meituan\\.com\\/|wx\\.waimai\\.meituan\\.com\\/(?:weapp|api\\/miniprogram)\\/|waimai-guide\\.ele\\.me\\/)"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/delivery/js/delivery_clean.js?v=20261124-1"
       body_required: true
       max_size: 8388608
       timeout: 20
@@ -323,24 +484,42 @@ mitm:
       - "api.m.jd.com"
       - "api.smart.jd.com"
       - "homepage-gw.jd.com"
+      - "storage.360buyimg.com"
+      - "storage.jd.com"
+      - "amdc.m.taobao.com"
       - "guide-acs.m.taobao.com"
       - "trade-acs.m.taobao.com"
       - "acs.m.taobao.com"
+      - "poplayer.template.alibaba.com"
+      - "cn-acs.m.cainiao.com"
       - "acs.m.cainiao.com"
-      - "gw.cainiao.com"
+      - "netflow-mtop.cainiao.com"
+      - "consumer.fcbox.com"
       - "app.fcbox.com"
       - "wx.fcbox.com"
       - "api.fcbox.com"
       - "m.fcbox.com"
       - "api.pinduoduo.com"
       - "api.yangkeduo.com"
+      - "mobile.yangkeduo.com"
       - "wmapi.meituan.com"
       - "apimobile.meituan.com"
       - "mapi.meituan.com"
       - "i.meituan.com"
       - "rms.meituan.com"
       - "wx.waimai.meituan.com"
+      - "portal-portm.meituan.com"
+      - "sqt.meituan.com"
+      - "img.meituan.net"
+      - "p0.meituan.net"
+      - "p1.meituan.net"
       - "s3plus.meituan.net"
+      - "flowplus.meituan.net"
+      - "w.meituan.net"
+      - "amdc.m.ele.me"
       - "waimai-guide.ele.me"
-      - "client-api.ele.me"
-      - "newton-api.ele.me"
+      - "g.alicdn.com"
+      - "elemecdn.com"
+      - "fuss10.elemecdn.com"
+      - "cube.elemecdn.com"
+      - "nr-op.elemecdn.com"

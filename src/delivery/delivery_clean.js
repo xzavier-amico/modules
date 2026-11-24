@@ -1,28 +1,36 @@
 //=======================================================================================
-// Shopping Clean — 京东、淘宝、拼多多、美团、饿了么、菜鸟裹裹、丰巢开屏、弹窗与信息流推广清理
+// Shopping Clean — 京东、淘宝、菜鸟裹裹、丰巢、拼多多、美团、饿了么去广告与界面净化
 //
-// 为什么之前装了完全没效果（即使本地 Loon 已全局拦截 QUIC）：
-//   1) 16 位数字无差别自杀：旧版用 /\d{16,}/.test(body) 检查整段原始响应（连引号内的字符串都算）。
-//      电商/外卖的几乎每一条响应都带 16~19 位的 skuId / orderId / traceId / 毫秒时间戳拼接串，
-//      导致脚本在 JSON.parse 之前就 99.9% 直接 $done({}) 退出了！
-//      现改为「占位符保护字符串外的 16+ 位整数」，既不早退，也不在 JSON.parse 时丢失大整数精度。
-//   2) 请求方式与字段对不上：
-//      - 京东 welcomeHome / personinfoBusiness / search 等真实调用里，functionId 往往放在 POST
-//        表单 body 或 URL path (/api?functionId=...)，且楼层结构是 floorList[].mId / bId / subFloors，
-//        并不叫 guessed 的 card_type="ad_*"；
-//      - 淘宝 / 饿了么 / 菜鸟裹裹走阿里 MTOP 网关 (guide-acs.m.taobao.com / trade-acs.m.taobao.com /
-//        waimai-guide.ele.me / acs.m.cainiao.com / gw.cainiao.com)，
-//        真实结构是 data.containers / data.sections / data.result 里的 item.bizData / ext.is_p4p / p4p / ad；
-//      - 丰巢 (fcbox.com) 走 app.fcbox.com / wx.fcbox.com / dsp.fcbox.com，取件码结果页、开屏与首页弹窗
-//        挂在 adList / bannerList / popup / floatAd / advertList；
-//      - 拼多多走 api.pinduoduo.com / api.yangkeduo.com，首页与搜索流挂在 goods_list / items / flip，
-//        推广条目带 ad / p_search.is_ad / icon_list 广告标，弹窗挂在 popup / activity_integration_popup；
-//      - 美团 / 美团外卖走 wmapi / apimobile / i.meituan.com / wx.waimai.meituan.com，
-//        竞价店带 charge_info (CPC/CPM 计费串) / ad_mark / is_ad / ad_attr。
+// 同时支持请求阶段（精准阻断菜鸟 AMDC 调度以防绕过 MITM，不误伤淘宝主站）与响应阶段 JSON/JSONP 清理：
+//   1) 京东 (api.m.jd.com)：
+//      - functionId=start 开屏清空 images & showTimesDaily
+//      - welcomeHome 过滤 floorList 广告/营销楼层、清空 webViewFloorList 下拉二楼与 promotionTabs
+//      - personinfoBusiness 过滤大促/推荐/金融楼层，并深入 basefloorinfo 清弹窗/浮层、userinfo 清 Plus 卡
+//      - deliverLayer / orderTrackBusiness 删物流页寄件横幅 bannerInfo 与 jdDeliveryBanner
+//      - getTabHomeInfo / myOrderInfo / readCustomSurfaceList 删浮窗/广告卡/冗余底栏
+//      - 搜索/猜你喜欢商品流过滤 adIcon / adword / exposalUrl 竞价商品
+//   2) 淘宝 / 天猫 (guide-acs / trade-acs / acs.m.taobao.com, poplayer.template.alibaba.com)：
+//      - mtop.taobao.wireless.home.splash.awesome.get 深入 bizData["taobao-splash"].data[] 覆写开屏有效期
+//      - mtop.taobao.cloudvideo.video.query 清空视频开屏缓存与时长
+//      - poplayer.template.alibaba.com 清空弹窗素材并置 enable=false
+//      - 首页 containers / itemsArray 过滤 P4P 直通车广告（兼容 JSON 与 MTOP JSONP）
+//   3) 菜鸟裹裹 (cn-acs.m.cainiao.com / acs.m.cainiao.com / netflow-mtop.cainiao.com)：
+//      - 请求阶段拦截 Cainiao4iPhone 的 amdc.m.taobao.com/amdc/mobileDispatch，迫使走标准域名 MITM
+//      - guoguo.nbnetflow.ads.mshow 按真实广告位数字 ID 删除横幅/商品推广
+//      - guoguo.nbnetflow.ads.show 过滤 materialContentMapper 广告与裹酱/回收营销卡
+//      - nbpresentation.protocol.homepage.get 清理 dataList 里的 banner_area / promotion 与 icons_scroll 营销图标
+//      - nbpresentation.pickup.empty.page.get 清理取件空页营销卡片
+//      - nbfriend.message.conversation.list 仅保留物流通知 (logistic_message)
+//   4) 丰巢 (consumer / app / wx / api / m.fcbox.com)：清理开屏、取件页弹窗、横幅与广告列表
+//   5) 拼多多 (api.pinduoduo.com / api.yangkeduo.com)：
+//      - /api/alexa/homepage/hub 精简多多视频/大促会场/直播底栏、清 icon_set & search_bar_hot_query
+//      - /api/philo/personal/hub 清省钱月卡入口与冗余图标
+//      - /api/oak/integration/render 删 ui.bottom_section / float_info / bottom_section_list（不误杀页面）
+//      - 商品流过滤 p_search.is_ad / ad 竞价商品
+//   6) 美团 / 美团外卖 & 饿了么：
+//      - 过滤 poilist / module_list (含 string_data 内嵌 JSON) CPC/CPM 竞价店、微信小程序推广与饿了么悬浮模板
 //
-// 参数：
-//   block_ads (默认 true) ：去开屏、首页弹窗浮层、取件页广告、搜索/推荐信息流里的 CPC/CPM/P4P 竞价广告卡
-//   clean_ui  (默认 true) ：额外精简京东/美团/淘宝/拼多多/菜鸟/丰巢的白条/金条/借钱/多多视频/小游戏/果园营销楼层
+// 保护字符串外的 16+ 位整数（订单号/SKU ID/traceId），防止 JSON.parse 丢精度。
 //=======================================================================================
 
 (() => {
@@ -31,14 +39,9 @@
   const res = (typeof $response !== "undefined" && $response) || null;
   const req = (typeof $request !== "undefined" && $request) || {};
   const url = (res && res.url) || req.url || "";
-  if (!res) {
-    $done({});
-    return;
-  }
 
   const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 
-  // Loon 传位置数组或对象，Egern 传 ctx.env 对象，Shadowrocket 传 JSON 字符串，全部兼容。
   let opt = {};
   try {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
@@ -58,6 +61,26 @@
     return;
   }
 
+  // 请求阶段：精准拦截菜鸟裹裹的 AMDC 调度（迫使其回退标准 HTTPS 域名走 MITM），放行淘宝主站避免误杀购物车/下单按钮
+  if (!res) {
+    if (/amdc\.m\.taobao\.com\/amdc\/mobileDispatch\b/i.test(url)) {
+      const headers = req.headers || {};
+      let ua = "";
+      for (const k of Object.keys(headers)) {
+        if (k.toLowerCase() === "user-agent") {
+          ua = String(headers[k] || "");
+          break;
+        }
+      }
+      if (/Cainiao4iPhone|AMapiPhone/i.test(ua)) {
+        $done({ response: { status: 404, headers: {}, body: "" } });
+        return;
+      }
+    }
+    $done({});
+    return;
+  }
+
   const status = Number(res.status || res.statusCode || 200);
   const body = res.body;
   if (status >= 300 || typeof body !== "string" || !body || body.length > 8388608) {
@@ -65,7 +88,7 @@
     return;
   }
 
-  // 支持标准 JSON，也支持 MTOP JSONP 包装 (如 mtopjsonp1({...}))
+  // 支持标准 JSON 与 MTOP JSONP (如 mtopjsonp1({...}))
   let jsonPrefix = "";
   let jsonSuffix = "";
   let rawJson = body;
@@ -81,7 +104,6 @@
     jsonSuffix = mtopMatch[3];
   }
 
-  // 保护字符串外的 16+ 位整数（订单号、SKU ID、shopId、traceId），防止 JSON.parse 丢精度。
   const BIGINT_MARK = "__shp_bigint_";
   let hasBigInt = false;
   const safeBody = rawJson.replace(/"(?:\\.|[^"\\])*"|(-?\d{16,})/g, (m, num) => {
@@ -108,7 +130,6 @@
   const nonEmptyObj = (v) => isObj(v) && Object.keys(v).length > 0;
   const nonEmptyStr = (v) => typeof v === "string" && v.trim().length > 0;
 
-  // 清空容器字段但保持原类型（数组→[]、对象→{}），避免客户端反序列化崩溃。
   const clearSlot = (holder, key) => {
     if (!isObj(holder) || !Object.prototype.hasOwnProperty.call(holder, key)) return;
     const val = holder[key];
@@ -138,7 +159,6 @@
     }
   };
 
-  // 过滤数组元素；若整页都会被删空则保留原数组（allowEmpty=true 时允许清空纯广告数组）。
   const filterArray = (holder, key, isAdFn, allowEmpty = false) => {
     if (!isObj(holder) || !Array.isArray(holder[key])) return false;
     const list = holder[key];
@@ -152,7 +172,6 @@
     return false;
   };
 
-  // 把开屏素材的投放时间推到 2040 年（秒或毫秒自适应）。
   const FUTURE_SEC = 2208960000;
   const FUTURE_MS = 2208960000000;
   const expireSplashItem = (ad) => {
@@ -186,7 +205,6 @@
   // ---------- 通用电商/外卖商品与商家卡片广告判定 ----------
   const isShoppingAdItem = (item) => {
     if (!isObj(item)) return false;
-    // 1. 显式布尔/数值广告标记（京东、淘宝、拼多多、美团、饿了么通用）
     if (
       truthy(item.is_ad) ||
       truthy(item.isAd) ||
@@ -201,7 +219,6 @@
     ) {
       return true;
     }
-    // 2. 竞价计费与推广载荷 (美团 charge_info、阿里 p4p_data/clickUrl、拼多多 ad、京东 adword)
     if (
       nonEmptyStr(item.charge_info) ||
       nonEmptyObj(item.charge_info) ||
@@ -221,24 +238,20 @@
     if (typeof item.adType === "number" && item.adType > 0) return true;
     if ((item.ad_type || item.adType) && (item.ad_id || item.adId)) return true;
 
-    // 3. 京东商品流推广字段
     if (
       nonEmptyStr(item.adIcon) ||
       nonEmptyStr(item.adword) ||
       nonEmptyStr(item.extension_id) ||
       nonEmptyStr(item.ad_click_url) ||
       nonEmptyStr(item.exposalUrl) ||
-      nonEmptyStr(item.clickUrl) && truthy(item.isJdAd)
+      (nonEmptyStr(item.clickUrl) && truthy(item.isJdAd))
     ) {
       return true;
     }
 
-    // 4. 拼多多搜索/推荐流广告标记 (p_search.is_ad / ad_sn)
     if (isObj(item.p_search) && (truthy(item.p_search.is_ad) || truthy(item.p_search.is_sink_ad))) {
       return true;
     }
-
-    // 5. 淘宝/天猫 MTOP 信息流卡片标记 (bizData / ext / args / item.utLogMap)
     if (isObj(item.ext) && (truthy(item.ext.is_p4p) || truthy(item.ext.is_ad) || item.ext.adType)) {
       return true;
     }
@@ -249,13 +262,11 @@
       return true;
     }
 
-    // 6. 卡片类型名
     const ct = String(
       item.card_type || item.cardType || item.biz_type || item.bizType || item.module_type || item.template_name || ""
     );
     if (/^(?:ad|advert|ad[_-]|p4p|commercial|brand_ad|cpm_ad|cpc_ad|one_ad)/i.test(ct)) return true;
 
-    // 7. 嵌套在 item.poi / item.data / item.item / item.content 里的广告标记
     for (const subKey of ["poi", "data", "item", "content"]) {
       const inner = item[subKey];
       if (!isObj(inner)) continue;
@@ -278,11 +289,31 @@
     return false;
   };
 
-  // 京东首页与「我的」页楼层判定（不管 URL 上有没有 functionId，按响应特征结构直接识别）
+  // ---------- 京东真实楼层常量 ----------
   const JD_AD_FLOOR_RE =
-    /^(?:ad|advert|float|xview|shimmer|popup|banner_ad|commercial|hot_ad| bottomXview|ruleFloat|topAtmosphere)/i;
+    /^(?:ad|advert|float|xview|shimmer|popup|banner_ad|commercial|hot_ad|bottomXview|ruleFloat|topAtmosphere)/i;
   const JD_FINANCE_FLOOR_RE =
     /baitiao|jintiao|jdpay_loan|borrow|credit_loan|xiaojinku|finance_loan|plus_banner|game_center|白条|金条|借钱|小金库|互动游戏/i;
+  const JD_PERSON_MID_EXCLUDE = new Set([
+    "bigSaleFloor",
+    "buyOften",
+    "newAttentionCard",
+    "newBigSaleFloor",
+    "newStyleAttentionCard",
+    "newsFloor",
+    "noticeFloor",
+    "recommendfloor",
+  ]);
+  const JD_WELCOME_TYPE_INCLUDE = new Set([
+    "topTab",
+    "searchC",
+    "dynamicIcon",
+    "locPermission",
+    "login",
+    "hybrid",
+    "recommend",
+  ]);
+  const JD_CUSTOM_SURFACE_KEEP = new Set(["index", "messagenew", "cart", "home"]);
 
   const isJdFloorAd = (floor) => {
     if (!isObj(floor)) return false;
@@ -304,9 +335,42 @@
     return false;
   };
 
+  const cleanJdPersonFloors = (floors) => {
+    if (!Array.isArray(floors) || !floors.length) return floors;
+    const out = [];
+    for (const floor of floors) {
+      if (!isObj(floor)) {
+        out.push(floor);
+        continue;
+      }
+      if (isJdFloorAd(floor)) {
+        changed = true;
+        continue;
+      }
+      if (cleanUi && JD_PERSON_MID_EXCLUDE.has(floor.mId)) {
+        changed = true;
+        continue;
+      }
+      if (blockAds && floor.mId === "basefloorinfo" && isObj(floor.data)) {
+        dropKeys(floor.data, ["commonPopup", "commonPopup_dynamic", "floatLayer"]);
+        clearSlot(floor.data, "commonTips");
+        clearSlot(floor.data, "commonWindows");
+      } else if (blockAds && floor.mId === "orderIdFloor" && isObj(floor.data?.commentRemindInfo)) {
+        clearSlot(floor.data.commentRemindInfo, "infos");
+      } else if (cleanUi && floor.mId === "userinfo" && isObj(floor.data)) {
+        dropKeys(floor.data, ["newPlusBlackCard"]);
+      }
+      if (Array.isArray(floor.subFloors)) {
+        filterArray(floor, "subFloors", isJdFloorAd);
+      }
+      out.push(floor);
+    }
+    return out;
+  };
+
   try {
     // =========================================================================
-    // 1. 京东 (*.jd.com) —— 按 URL functionId + 响应结构特征双重识别（兼容 POST body 传 functionId）
+    // 1. 京东 (*.jd.com)
     // =========================================================================
     if (/\.jd\.com/i.test(url)) {
       const fnMatch = /[?&]functionId=([^&]+)/i.exec(url);
@@ -318,8 +382,12 @@
           ? decodeURIComponent(bodyFnMatch[1])
           : "";
 
-      // (a) 开屏与启动图
+      // (a) 开屏与启动图 (functionId=start / home_launchConfig / getLoadingLinks)
       if (blockAds && (/^(?:start|home_launchConfig|splash|getLoadingLinks)/i.test(fn) || Array.isArray(root.images))) {
+        if (root.showTimesDaily) {
+          root.showTimesDaily = 0;
+          changed = true;
+        }
         for (const holder of [root, root.data]) {
           if (!isObj(holder)) continue;
           for (const k of ["images", "ads", "adList", "splashList", "show_list"]) {
@@ -331,7 +399,81 @@
         }
       }
 
-      // (b) 京东首页（welcomeHome 或带 floorList 的响应）与「我的」页（personinfoBusiness 或带 floors 的响应）
+      // (b) 京东首页 (welcomeHome)：清二楼 webViewFloorList、顶部推广 promotionTabs、广告楼层
+      if (/^welcomeHome$/i.test(fn) || Array.isArray(root.webViewFloorList) || root.promotionTabs !== undefined) {
+        if (blockAds) {
+          clearSlot(root, "webViewFloorList");
+          dropKeys(root, ["promotionTabs"]);
+        }
+        if (cleanUi && Array.isArray(root.floorList) && root.floorList.length) {
+          const looksRealWelcome = root.floorList.some((f) => isObj(f) && JD_WELCOME_TYPE_INCLUDE.has(f.type));
+          if (looksRealWelcome) {
+            const kept = root.floorList.filter((f) => !isObj(f) || JD_WELCOME_TYPE_INCLUDE.has(f.type));
+            if (kept.length && kept.length !== root.floorList.length) {
+              root.floorList = kept;
+              changed = true;
+            }
+          }
+        }
+      }
+
+      // (c) 底栏精简 (readCustomSurfaceList)
+      if (cleanUi && /^readCustomSurfaceList$/i.test(fn) && isObj(root.result?.modeMap)) {
+        for (const mode of ["dark", "normal"]) {
+          const nav = root.result.modeMap[mode]?.navigationAll;
+          if (Array.isArray(nav) && nav.length) {
+            const kept = nav.filter((i) => !isObj(i) || JD_CUSTOM_SURFACE_KEEP.has(i.functionId));
+            if (kept.length && kept.length !== nav.length) {
+              root.result.modeMap[mode].navigationAll = kept;
+              changed = true;
+            }
+          }
+        }
+      }
+
+      // (d) 物流页 (deliverLayer / orderTrackBusiness)
+      if (blockAds && (/^(?:deliverLayer|orderTrackBusiness)$/i.test(fn) || root.bannerInfo !== undefined)) {
+        dropKeys(root, ["bannerInfo"]);
+        if (Array.isArray(root.floors)) {
+          const kept = root.floors.filter((i) => !isObj(i) || (i.mId !== "banner" && i.mId !== "jdDeliveryBanner"));
+          if (kept.length !== root.floors.length) {
+            root.floors = kept;
+            changed = true;
+          }
+        }
+      }
+
+      // (e) 新品页 (getTabHomeInfo)
+      if (blockAds && /^getTabHomeInfo$/i.test(fn) && isObj(root.result)) {
+        dropKeys(root.result, ["iconInfo", "roofTop"]);
+      }
+
+      // (f) 订单页 (myOrderInfo)
+      if (blockAds && /^myOrderInfo$/i.test(fn) && Array.isArray(root.floors)) {
+        const DROP_ORDER_FLOORS = new Set(["bannerFloor", "bpDynamicFloor", "plusFloor"]);
+        const kept = [];
+        for (const floor of root.floors) {
+          if (isObj(floor) && DROP_ORDER_FLOORS.has(floor.mId)) {
+            changed = true;
+            continue;
+          }
+          if (isObj(floor) && floor.mId === "virtualServiceCenter" && Array.isArray(floor.data?.virtualServiceCenters)) {
+            for (const item of floor.data.virtualServiceCenters) {
+              if (Array.isArray(item?.serviceList)) {
+                const sKept = item.serviceList.filter((c) => !isObj(c) || c.serviceTitle !== "精选特惠");
+                if (sKept.length !== item.serviceList.length) {
+                  item.serviceList = sKept;
+                  changed = true;
+                }
+              }
+            }
+          }
+          kept.push(floor);
+        }
+        root.floors = kept;
+      }
+
+      // (g) 通用首页 / 我的页 (personinfoBusiness / floorList / floors / others.floors)
       if (blockAds) {
         for (const holder of [root, root.data]) {
           if (!isObj(holder)) continue;
@@ -357,7 +499,7 @@
         }
       }
 
-      for (const holder of [root, root.data]) {
+      for (const holder of [root, root.data, root.others]) {
         if (!isObj(holder)) continue;
         if (Array.isArray(holder.floorList)) {
           filterArray(holder, "floorList", isJdFloorAd);
@@ -368,16 +510,11 @@
           }
         }
         if (Array.isArray(holder.floors)) {
-          filterArray(holder, "floors", isJdFloorAd);
-          for (const fl of holder.floors) {
-            if (isObj(fl) && Array.isArray(fl.subFloors)) {
-              filterArray(fl, "subFloors", isJdFloorAd);
-            }
-          }
+          holder.floors = cleanJdPersonFloors(holder.floors);
         }
       }
 
-      // (c) 京东搜索、猜你喜欢、商品推荐流 (wareInfo / wareList / recommendList / feedList / paragraphs)
+      // (h) 京东搜索与商品推荐流
       if (blockAds) {
         for (const holder of [root, root.data, root.result, isObj(root.data) ? root.data.data : null]) {
           if (!isObj(holder)) continue;
@@ -398,22 +535,67 @@
     }
 
     // =========================================================================
-    // 2. 淘宝 / 天猫 / 饿了么 / 菜鸟裹裹 阿里系 MTOP (*.taobao.com / *.tmall.com / *.ele.me / *.cainiao.com)
+    // 2. 淘宝 / 天猫 / 阿里弹窗 (*.taobao.com / *.tmall.com / poplayer.template.alibaba.com)
     // =========================================================================
-    if (/\.(?:taobao|tmall|cainiao)\.com|\.ele\.me/i.test(url)) {
+    if (/\.(?:taobao|tmall)\.com|poplayer\.template\.alibaba\.com/i.test(url)) {
       const d = isObj(root.data) ? root.data : root;
 
       if (blockAds) {
-        // 菜鸟裹裹纯广告 MTOP 接口或开屏/推广块直接清空
-        if (/mtop\.cainiao\.(?:ad|guoguo\.nbnetflow\.ads|nbmensa\.research|adx)/i.test(url)) {
-          for (const k of Object.keys(d)) {
-            if (Array.isArray(d[k])) d[k] = [];
-            else if (isObj(d[k])) d[k] = {};
+        // (a) 淘宝弹窗模板 (poplayer.template.alibaba.com/*.json)
+        if (/poplayer\.template\.alibaba\.com/i.test(url)) {
+          if (isObj(root.res)) {
+            clearSlot(root.res, "images");
+            clearSlot(root.res, "videos");
           }
-          changed = true;
+          if (isObj(root.mainRes)) {
+            clearSlot(root.mainRes, "images");
+          }
+          if (root.enable) {
+            root.enable = false;
+            changed = true;
+          }
         }
 
-        // 清理开屏、弹窗、浮层与顶栏横幅
+        // (b) 淘宝视频开屏 (mtop.taobao.cloudvideo.video.query)
+        if (/mtop\.taobao\.cloudvideo\.video\.query/i.test(url) && isObj(root.data)) {
+          if (root.data.duration !== undefined) { root.data.duration = "0"; changed = true; }
+          clearSlot(root.data, "resources");
+          clearSlot(root.data, "caches");
+          if (root.data.respTimeInMs !== undefined) { root.data.respTimeInMs = "3818332800000"; changed = true; }
+        }
+
+        // (c) 淘宝开屏 (mtop.taobao.wireless.home.splash.awesome.get)
+        if (/mtop\.taobao\.wireless\.home\.splash\.awesome\.get/i.test(url)) {
+          const sections = root.data?.containers?.splash_home_base?.base?.sections;
+          if (Array.isArray(sections)) {
+            for (const sec of sections) {
+              const splashList = sec?.bizData?.["taobao-splash"]?.data;
+              if (Array.isArray(splashList) && splashList.length) {
+                for (const item of splashList) {
+                  if (!isObj(item)) continue;
+                  item.waitTime = "0";
+                  item.times = "0";
+                  item.hotStart = "false";
+                  item.coldStart = "false";
+                  item.haveVoice = "false";
+                  item.hideTBLogo = "false";
+                  item.enable4G = "false";
+                  item.startTime = "3818332800000";
+                  item.endTime = "3818419199000";
+                  item.gmtStart = "2090-12-31 00:00:00";
+                  item.gmtEnd = "2090-12-31 23:59:59";
+                  item.gmtStartMs = "3818332800000";
+                  item.gmtEndMs = "3818419199000";
+                  if (item.imgUrl) item.imgUrl = "";
+                  if (item.videoUrl) item.videoUrl = "";
+                }
+                changed = true;
+              }
+            }
+          }
+        }
+
+        // (d) 通用 MTOP 浮层与 P4P 信息流清理
         for (const holder of [root, d, isObj(d.data) ? d.data : null, isObj(d.result) ? d.result : null]) {
           if (!isObj(holder)) continue;
           dropKeys(holder, [
@@ -437,20 +619,8 @@
             "marketingList",
             "operationList",
             "homePopup",
-            "pickupAd",
           ]);
-          for (const listKey of [
-            "items",
-            "list",
-            "modules",
-            "cards",
-            "restaurants",
-            "feeds",
-            "recommend_list",
-            "resultList",
-            "itemsArray",
-            "sections",
-          ]) {
+          for (const listKey of ["items", "list", "modules", "cards", "feeds", "recommend_list", "resultList", "itemsArray", "sections"]) {
             filterArray(holder, listKey, isShoppingAdItem);
             if (Array.isArray(holder[listKey])) {
               for (const sub of holder[listKey]) {
@@ -467,7 +637,6 @@
           }
         }
 
-        // 淘宝 & 菜鸟首页 MTOP 的 containers 树结构
         if (isObj(d.containers)) {
           for (const cKey of Object.keys(d.containers)) {
             const container = d.containers[cKey];
@@ -483,20 +652,141 @@
         }
       }
 
-      // clean_ui：淘宝 & 菜鸟「我的」页与首页底部隐藏借钱/省钱卡/小游戏/裹酱积分商城/猜你喜欢商品流
       if (cleanUi) {
-        const ALI_CLUTTER_RE =
-          /借钱|网商贷|花呗分期|芭芭农场|斗地主|小游戏|省钱月卡|红包签到|裹酱|免费领水果|天天领现金|省钱专区|好物推荐|猜你喜欢/;
+        const TB_CLUTTER_RE = /借钱|网商贷|花呗分期|芭芭农场|斗地主|小游戏|省钱月卡|红包签到|免费领水果|天天领现金/;
         if (isObj(d.hierarchy) && isObj(d.data)) {
           for (const k of Object.keys(d.data)) {
             const node = d.data[k];
-            if (isObj(node) && ALI_CLUTTER_RE.test(JSON.stringify(node.fields || node))) {
+            if (isObj(node) && TB_CLUTTER_RE.test(JSON.stringify(node.fields || node))) {
               delete d.data[k];
               changed = true;
             }
           }
         }
-        // 菜鸟裹裹 modules / sections 里的营销与商品推荐块
+      }
+    }
+
+    // =========================================================================
+    // 2.2 菜鸟裹裹 (cn-acs.m.cainiao.com / acs.m.cainiao.com / netflow-mtop.cainiao.com)
+    // =========================================================================
+    if (/\.cainiao\.com/i.test(url)) {
+      const d = isObj(root.data) ? root.data : root;
+
+      // (a) 首页 / 物流页广告槽位字典 (.guoguo.nbnetflow.ads.mshow)
+      if (blockAds && /\.guoguo\.nbnetflow\.ads\.mshow\b/i.test(url) && isObj(root.data)) {
+        const DROP_SLOTS = [
+          "10", "328", "366", "369", "498", "615", "616", "727", "793", "954",
+          "1275", "1308", "1316", "1332", "1340", "1391", "1410", "1428",
+          "1524", "1525", "1638", "1910",
+        ];
+        for (const id of DROP_SLOTS) {
+          if (Object.prototype.hasOwnProperty.call(root.data, id)) {
+            delete root.data[id];
+            changed = true;
+          }
+        }
+      }
+
+      // (b) 我的页广告与裹酱营销 (.guoguo.nbnetflow.ads.show)
+      if (/\.guoguo\.nbnetflow\.ads\.show\b/i.test(url) && Array.isArray(root.data?.result)) {
+        const DROP_GROUPS = new Set(["common_header_banner", "entertainment", "interests", "kuaishou_banner"]);
+        const DROP_IDS = new Set(["29338", "29339", "32103", "33927", "36649"]);
+        const kept = root.data.result.filter((i) => {
+          if (!isObj(i)) return true;
+          const m = i.materialContentMapper;
+          if (blockAds && (m?.adItemDetail || (m?.bgImg && m?.advRecGmtModifiedTime))) return false;
+          if (cleanUi && (DROP_GROUPS.has(m?.group_id) || DROP_IDS.has(String(i.id || "")))) return false;
+          return true;
+        });
+        if (kept.length !== root.data.result.length) {
+          root.data.result = kept;
+          changed = true;
+        }
+        for (const i of root.data.result) {
+          if (i?.materialContentMapper?.show_tips_content) {
+            i.materialContentMapper.show_tips_content = "";
+            changed = true;
+          }
+        }
+      }
+
+      // (c) 菜鸟首页协议 (.nbpresentation.protocol.homepage.get)
+      if (/\.nbpresentation\.protocol\.homepage\.get\b/i.test(url) && Array.isArray(root.data?.result?.dataList)) {
+        const DROP_ICON_KEYS = new Set([
+          "618cjhb", "bgxq", "cncy", "cngy", "cngreen", "cnhs",
+          "dtxb", "gjjf", "jkymd", "ljjq", "ttlhb", "xybg",
+        ]);
+        const kept = [];
+        for (const item of root.data.result.dataList) {
+          if (!isObj(item)) { kept.push(item); continue; }
+          const t = String(item.type || "");
+          if (blockAds && (t.includes("banner_area") || t.includes("promotion"))) {
+            changed = true;
+            continue;
+          }
+          if (cleanUi && t.includes("kingkong") && Array.isArray(item.bizData?.items)) {
+            for (const sub of item.bizData.items) {
+              if (isObj(sub) && (sub.rightIcon !== null || sub.bubbleText !== null)) {
+                sub.rightIcon = null;
+                sub.bubbleText = null;
+                changed = true;
+              }
+            }
+          } else if (cleanUi && t.includes("icons_scroll") && Array.isArray(item.bizData?.items)) {
+            const subKept = item.bizData.items.filter((sub) => !isObj(sub) || !DROP_ICON_KEYS.has(sub.key));
+            if (subKept.length !== item.bizData.items.length) {
+              item.bizData.items = subKept;
+              changed = true;
+            }
+            for (const sub of item.bizData.items) {
+              if (isObj(sub) && (sub.rightIcon !== null || sub.bubbleText !== null)) {
+                sub.rightIcon = null;
+                sub.bubbleText = null;
+                changed = true;
+              }
+            }
+          }
+          kept.push(item);
+        }
+        root.data.result.dataList = kept;
+      }
+
+      // (d) 取件空页 (.nbpresentation.pickup.empty.page.get)
+      if (cleanUi && /\.nbpresentation\.pickup\.empty\.page\.get\b/i.test(url) && Array.isArray(root.data?.result?.content?.middle)) {
+        const DROP_TPL = new Set([
+          "guoguo_pickup_empty_page_relation_add",
+          "guoguo_pickup_helper_feedback",
+          "guoguo_pickup_helper_tip_view",
+        ]);
+        const mid = root.data.result.content.middle;
+        const kept = mid.filter((i) => !isObj(i) || !DROP_TPL.has(i.template?.name));
+        if (kept.length !== mid.length) {
+          root.data.result.content.middle = kept;
+          changed = true;
+        }
+      }
+
+      // (e) 消息中心 (.nbfriend.message.conversation.list)
+      if (cleanUi && /\.nbfriend\.message\.conversation\.list\b/i.test(url) && Array.isArray(root.data?.data)) {
+        const kept = root.data.data.filter((i) => !isObj(i) || String(i.conversationId || "").includes("logistic_message"));
+        if (kept.length !== root.data.data.length) {
+          root.data.data = kept;
+          changed = true;
+        }
+      }
+
+      // (f) 通用菜鸟浮层与营销模块兜底清理
+      if (blockAds) {
+        for (const holder of [root, d, isObj(d.data) ? d.data : null, isObj(d.result) ? d.result : null]) {
+          if (!isObj(holder)) continue;
+          dropKeys(holder, ["homePopup", "pickupAd", "bannerList", "adList", "ads", "marketingList", "operationList"]);
+          for (const listKey of ["modules", "sections", "cards", "items", "list"]) {
+            filterArray(holder, listKey, isShoppingAdItem);
+          }
+        }
+      }
+      if (cleanUi) {
+        const CN_CLUTTER_RE = /裹酱|免费领水果|天天领现金|省钱专区|好物推荐|猜你喜欢|借钱|小游戏/;
         for (const holder of [d, isObj(d.data) ? d.data : null, isObj(d.result) ? d.result : null]) {
           if (!isObj(holder)) continue;
           for (const arrKey of ["modules", "sections", "cards", "items", "list"]) {
@@ -505,10 +795,8 @@
               if (!isObj(m)) return true;
               const code = String(m.moduleCode || m.bizCode || m.sectionBizCode || m.type || m.name || "");
               const title = String(m.title || m.moduleName || m.desc || "");
-              if (/ad|banner|popup|recommend_mall|goods_feed|guess_like|welfare|game| orchard|farm/i.test(code)) {
-                return false;
-              }
-              if (title && ALI_CLUTTER_RE.test(title)) return false;
+              if (/ad|banner|popup|recommend_mall|goods_feed|guess_like|welfare|game|orchard|farm/i.test(code)) return false;
+              if (title && CN_CLUTTER_RE.test(title)) return false;
               return true;
             });
             if (kept.length && kept.length !== holder[arrKey].length) {
@@ -521,7 +809,7 @@
     }
 
     // =========================================================================
-    // 2.5 丰巢 (*.fcbox.com / *.fengchao.com) —— 开屏、取件结果页弹窗、首页轮播与会员营销
+    // 2.5 丰巢 (*.fcbox.com / *.fengchao.com)
     // =========================================================================
     if (/\.(?:fcbox|fengchao)\.com/i.test(url)) {
       if (blockAds) {
@@ -551,7 +839,6 @@
             filterArray(holder, listKey, isShoppingAdItem, true);
           }
         }
-        // 如果整个接口本身就是丰巢广告拉取接口（如 /ad/、/advert/、/banner/、/splash/），且 root.data 是非空数组，直接置空
         if (/\/(?:ad|ads|advert|banner|splash|popup|marketing)(?:\/|[?]|$)/i.test(url)) {
           if (Array.isArray(root.data) && root.data.length) {
             root.data = [];
@@ -565,6 +852,45 @@
     // 3. 拼多多 (*.pinduoduo.com / *.yangkeduo.com)
     // =========================================================================
     if (/\.(?:pinduoduo|yangkeduo)\.com/i.test(url)) {
+      // (a) 首页框架 (/api/alexa/homepage/hub)
+      if (/\/api\/alexa\/homepage\/hub\b/i.test(url) && isObj(root.result)) {
+        if (blockAds) {
+          dropKeys(root.result, ["search_bar_hot_query"]);
+        }
+        if (cleanUi) {
+          dropKeys(root.result, ["icon_set"]);
+          if (Array.isArray(root.result.bottom_tabs)) {
+            const kept = root.result.bottom_tabs.filter(
+              (t) => !isObj(t) || !/^(?:多多视频|大促会场|直播)$/.test(String(t.title || ""))
+            );
+            if (kept.length && kept.length !== root.result.bottom_tabs.length) {
+              root.result.bottom_tabs = kept;
+              changed = true;
+            }
+          }
+        }
+      }
+
+      // (b) 个人中心 (/api/philo/personal/hub)
+      if (/\/api\/philo\/personal\/hub\b/i.test(url) && cleanUi) {
+        dropKeys(root, ["monthly_card_entrance", "personal_center_style_v2_vo"]);
+        if (isObj(root.icon_set)) {
+          dropKeys(root.icon_set, ["icons", "top_personal_icons"]);
+        }
+      }
+
+      // (c) 商品/首页混合渲染 (/api/oak/integration/render)
+      if (/\/api\/oak\/integration\/render\b/i.test(url) && blockAds) {
+        if (isObj(root.ui)) {
+          dropKeys(root.ui, ["bottom_section"]);
+          if (isObj(root.ui.live_section)) {
+            dropKeys(root.ui.live_section, ["float_info"]);
+          }
+        }
+        dropKeys(root, ["bottom_section_list"]);
+      }
+
+      // (d) 通用弹窗与商品流竞价广告
       if (blockAds) {
         for (const holder of [root, root.result, root.data]) {
           if (!isObj(holder)) continue;
@@ -585,7 +911,6 @@
         }
       }
       if (cleanUi) {
-        // 拼多多底栏或首页顶部的多多视频 / 现金大转盘营销入口
         for (const holder of [root, root.result, root.data]) {
           if (!isObj(holder)) continue;
           for (const tabKey of ["bottom_tabs", "tabs", "icon_set", "quick_entrance"]) {
@@ -593,7 +918,7 @@
             const kept = holder[tabKey].filter((t) => {
               if (!isObj(t)) return true;
               const title = String(t.title || t.tab_name || t.name || "");
-              return !/多多视频|大转盘|领现金|多多果园|多多买菜/.test(title);
+              return !/多多视频|大转盘|领现金|多多果园|多多买菜|大促会场/.test(title);
             });
             if (kept.length && kept.length !== holder[tabKey].length) {
               holder[tabKey] = kept;
@@ -605,9 +930,22 @@
     }
 
     // =========================================================================
-    // 4. 美团 & 美团外卖 (*.meituan.com / *.sankuai.com / *.dianping.com)
+    // 4. 美团 / 美团外卖 & 饿了么 (*.meituan.com / *.sankuai.com / *.dianping.com / *.ele.me)
     // =========================================================================
     if (/\.(?:meituan|sankuai|dianping)\.com/i.test(url)) {
+      // 美团外卖微信小程序
+      if (/\/api\/miniprogram/i.test(url) && root.data !== undefined) {
+        if (cleanUi && Array.isArray(root.data)) {
+          const kept = root.data.filter((i) => isObj(i) && /^(?:首页|神券|我的)$/.test(String(i.name || "")));
+          if (kept.length && kept.length !== root.data.length) {
+            root.data = kept;
+            changed = true;
+          }
+        } else if (blockAds && isObj(root.data)) {
+          dropKeys(root.data, ["oneCentBuy"]);
+        }
+      }
+
       const isSplashUrl = /\/(?:startpicture|loadInfo|openscreen|splash|adBoard|startup)(?:[/?]|$)/i.test(url);
       if (blockAds && isSplashUrl) {
         for (const holder of [root, root.data]) {
@@ -678,6 +1016,22 @@
                 }
               }
             }
+          }
+        }
+      }
+    }
+
+    if (/\.ele\.me/i.test(url)) {
+      const d = isObj(root.data) ? root.data : root;
+      if (blockAds) {
+        if (/mtop\.alsc\.eleme\.miniapp\.homepage/i.test(url) && isObj(d.data)) {
+          dropKeys(d.data, ["miniapp_suspension_template", "frontend_suspension_template"]);
+        }
+        for (const holder of [root, d, isObj(d.data) ? d.data : null, isObj(d.result) ? d.result : null]) {
+          if (!isObj(holder)) continue;
+          dropKeys(holder, ["float_ad", "popup_ad", "banner_ad", "ad_banners", "splash_ad", "top_ad", "bottom_ad", "floatLayer"]);
+          for (const listKey of ["items", "list", "modules", "cards", "restaurants", "feeds", "recommend_list", "resultList"]) {
+            filterArray(holder, listKey, isShoppingAdItem);
           }
         }
       }

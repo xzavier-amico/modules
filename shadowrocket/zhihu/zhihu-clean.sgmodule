@@ -1,24 +1,36 @@
 #!name=Zhihu Clean
-#!desc=知乎去开屏、推荐流伪装广告、回答页夹层广告与评论区推广。
+#!desc=知乎去开屏、推荐流伪装广告、热榜合作推广、回答页夹层广告与评论区推广（阻断硬编码 IP / HTTPDNS 绕过）。
 #!author=xzavier-amico
 #!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/zhihu.png
 #!arguments=去广告:true, 过滤盐选推广:false
-#!arguments-desc=去广告：过滤知乎开屏、首页推荐流 feed_advert、回答夹层 ad_info 与评论区插件广告。\n过滤盐选推广：额外过滤推荐流里的盐选故事、知乎严选与训练营营销卡片，以及回答页带货卡。
+#!arguments-desc=去广告：过滤知乎开屏、首页推荐流 feed_advert、热榜合作推广、回答夹层 ad_info 与评论区插件广告。\n过滤盐选推广：额外过滤推荐流里的盐选故事、知乎严选、训练营与付费回答，以及首页冗余活动/直播 Tab。
 
 [Rule]
 AND,((DOMAIN-SUFFIX,zhihu.com),(PROTOCOL,QUIC)),REJECT
+IP-CIDR,118.89.204.198/32,REJECT,no-resolve
+IP-CIDR,103.41.167.237/32,REJECT,no-resolve
+IP-CIDR6,2402:4e00:1200:ed00:0:9089:6dac:96b6/128,REJECT,no-resolve
+DOMAIN,appcloud.zhihu.com,REJECT
 DOMAIN,appcloud2.in.zhihu.com,REJECT
 DOMAIN,crash2.zhihu.com,REJECT
 DOMAIN,mqtt.zhihu.com,REJECT
 DOMAIN,sugar.zhihu.com,REJECT
+DOMAIN,zxid-m.mobileservice.cn,REJECT
 
 [URL Rewrite]
-^https?:\/\/api\.zhihu\.com\/(?:commercial_api\/(?:ad_float_layer|banners|egg_payload)|ad-style-service\/|fringe\/ad) reject-dict
-^https?:\/\/api\.zhihu\.com\/api\/v4\/(?:PresetWords|search\/preset_words)\b reject-dict
+^https?:\/\/api\.zhihu\.com\/commercial_api\/(?:launch_v\d+|real_time_launch_v\d+|banners_v\d+\/app_topstory_banner|banners|egg_payload|answer\/\d+\/bottom-v2|article\/\d+\/bottom-v2) reject-dict
+^https?:\/\/api\.zhihu\.com\/(?:ad-style-service\/|fringe\/ad|content-distribution-core\/bubble\/common\/settings|root\/window|moments\/lastread|drama\/hot-drama-list|bazaar\/float_window|market\/popovers_v\d+|me\/guides) reject-dict
+^https?:\/\/api\.zhihu\.com\/(?:api\/v\d+\/)?(?:PresetWords|search\/(?:preset_words|hot_search)|feed\/render\/revisit\/current_reading) reject-dict
+^https?:\/\/api\.zhihu\.com\/(?:comment_v\d+\/(?:articles|answers)\/\d+\/list-headers|prague\/related_suggestion_native\/feed|v\d+(?:\.\d+)?\/topics\/answer\/\d+\/relation|\w+\/\d+\/comments\/featured-comment-ad|distribute\/rhea\/qa_ad_card\/h5\/recommendation) reject-dict
+^https?:\/\/api\.zhihu\.com\/unlimited\/go\/my_card reject
+^https?:\/\/appcloud2\.zhihu\.com\/v\d+\/resource\?group_name=mp reject-dict
+^https?:\/\/www\.zhihu\.com\/(?:api\/v\d+\/(?:search\/related_queries\/(?:answer|article)\/\d+|hot_recommendation|mcn\/v\d+\/linkcards|(?:answers|questions)\/\d+\/related-readings)|commercial_api\/banners_v\d+\/mobile_banner) reject-dict
+^https?:\/\/zhuanlan\.zhihu\.com\/api\/articles\/\d+\/recommendation reject
+^https?:\/\/zhstatic\.zhihu\.com\/brand-ad reject
 
 [Script]
-zhihu.clean = type=http-response,pattern=^https?:\/\/(?:api|www)\.zhihu\.com\/(?:commercial_api\/(?:launch_v2|real_time_launch_v2)|(?:v2\/)?topstory\/(?:recommend|hot-lists)|api\/v4\/(?:questions\/[^/]+\/answers|answers\/|comment(?:_v5|s)\/|search)|next-(?:bff|data|render))(?:[/?]|$),requires-body=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/zhihu/js/zhihu_clean.js?v=20261123-1,argument="{"block_ads":{{{去广告}}},"clean_ui":{{{过滤盐选推广}}}}"
+zhihu.clean = type=http-response,pattern=^https?:\/\/(?:api|www|page-info|appcloud2|m-cloud)\.zhihu\.com\/(?:v\d+\/config|api\/cloud\/config\/all|commercial_api\/app_float_layer|(?:v\d+\/)?topstory\/(?:recommend(?:_v\d+)?|hot-lists)|moments_v\d+|feed\/render\/tab\/config|root\/tab|bazaar\/vip_tab\/header|(?:api\/v\d+\/|v\d+\/)?(?:questions\/\d+\/(?:answers|feeds)|answers|articles|comment(?:_v\d+|s)|search)|next-(?:bff|data|render))(?:[/?]|$),requires-body=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/zhihu/js/zhihu_clean.js?v=20261124-1,argument="{"block_ads":{{{去广告}}},"clean_ui":{{{过滤盐选推广}}}}"
 
 [MITM]
-hostname = %APPEND% api.zhihu.com, www.zhihu.com
+hostname = %APPEND% api.zhihu.com, www.zhihu.com, page-info.zhihu.com, appcloud2.zhihu.com, m-cloud.zhihu.com, zhuanlan.zhihu.com, zhstatic.zhihu.com
 h2 = true

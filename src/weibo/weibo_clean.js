@@ -1,29 +1,24 @@
 //=======================================================================================
-// Weibo Clean — 微博开屏、时间线、评论区、热搜与「我的」页全方位广告清理
+// Weibo Clean — 微博开屏、时间线、详情/评论、发现/热搜/综合搜索与「我的」页净化
 //
-// 为什么之前微博「我的」页和部分时间线还有一堆「任务中心」和广告：
-//   1) 域名漏网之鱼：新版微博 iOS 客户端除了 `api.weibo.cn`，大量使用双栈与高防网关
-//      `v6.api.weibo.cn`、`h5.api.weibo.cn`、`b.api.weibo.cn`、`weibointl.api.weibo.cn`！
-//      之前 MitM 只写了 `api.weibo.cn`，走 `v6.api.weibo.cn` 等子域名的请求根本没进脚本！
-//   2) 「我的」页接口与结构：
-//      - 新版「我的」页走 `/2/profile/me`、`/2/profile/container_timeline`、`/2/page`、`/2/cardlist`；
-//      - 卡片结构里不仅有 `elements` / `card_group`，还有 `card_type = 216 / 208 / 17 / 19 / 118`
-//        内部的 `items`、`group`、`sub_item`、`menus`、`apps`、`title_extra_text`；
-//      - 如果采用「黑名单猜名字」，微博随便换个词（如「任务中心」「成长中心」「签到领红包」
-//        「超话社区活动」「微博小店」「今日福利」「热门服务」）就会漏出来！
-//      - 现对「我的」页改为【严格核心功能白名单 + 深度清洗】：
-//        当 `clean_ui=true`（默认开启）时，「我的」页只允许保留：
-//          ① 顶部个人资料头像卡 (`profile_mine_header` / `userInfo` / `avatar`)
-//          ② 基础四宫格 (`我的相册`、`我的赞/赞`、`收藏`、`浏览记录/历史记录`)
-//          ③ 创作与账号管理 (`创作中心`、`草稿箱`、`客服`、`设置`)
-//        其余一切「任务中心」「红包/签到」「我的钱包/借钱」「热门活动」「游戏/小说/商城/直播」
-//        「推荐关注/为你推荐」卡片统统砍掉！
-//   3) 首页信息流广告：
-//      - 覆盖 `unread_hot_timeline`、`unread_friends_timeline`、`friends_timeline`、
-//        `container_timeline`、`container_timeline_hot`、`container_timeline_unread`、`video/tiny_stream_*`；
-//      - 识别 `promotion`、`ad_state`、`mblogtypename`、`readtimetype="adMblog"`、
-//        `mblog_menus_new` 含 `ad_`、`actionlog` 含 `source="ad"` / `adid`、以及伪装成普通卡片的
-//        `category="trend" / "card" / "group"` 推广块。
+// 核心修复点：
+//   1) 开屏覆盖本地缓存：
+//      - sdkapp.uve.weibo.com/interface/sdk/sdkad.php（保留末尾 "OK" 标记，延迟时间推至 2040 年）
+//      - wbapp.uve.weibo.com/wbapplua/wbpullad.lua & preload/get_ad（推迟 cached_ad.ads 有效期）
+//      - bootpreload.uve.weibo.com/v[12]/ad/preload（推迟 ads & creatives 有效期）
+//      - /2/push/active（推迟 feed_redpacket） & /2/checkin/show（show=0）
+//   2) 「我的」页 (/2/profile/me) 按真实 itemId 白名单 + 嵌套标题对象解析：
+//      - 真实响应使用 itemId 分块：profileme_mine、100505_-_top8、100505_-_manage、100505_-_manage2、
+//        100505_-_chaohua、100505_-_recentlyuser；
+//      - 剥离 vipHeaderBgImage、profileme_mine.header 的 vipView/vipCenter/vipIcon、
+//        100505_-_manage2 的 body/footer 推广卡；
+//      - 100505_-_top8 只保留核心白名单项（相册/赞/收藏/浏览记录/草稿箱/创作中心），其余 100505_-_
+//        推广/任务中心/钱包/借钱/游戏/活动块一律删除（不再因为 title 为空或对象而漏放！）。
+//   3) 发现页 / 热搜 / 综合搜索 / 评论区补齐真实路径：
+//      - /2/search/finder（channelInfo.channels[].payload.items & loadedInfo）
+//      - /2/search/container_timeline、/2/searchall、/2/flowpage、/2/flowlist
+//      - /2/comments/build_comments、/2/comments/mix_comments、/2/statuses/container_detail_*
+//      - /2/groups/allgroups/v2、/2/statuses/container_timeline(_hot|_unread|_topic)?
 //
 // 保护字符串外的 16+ 位微博 mid / uid 整数，避免 JSON.parse 丢精度。
 //=======================================================================================
@@ -67,21 +62,30 @@
     return;
   }
 
-  // 兼容 wbpullad.lua 有时返回非纯 JSON（前导文本 + JSON）或标准 JSON
+  const path = url.split("?")[0];
+
+  // sdkad.php 响应末尾带 "OK"，需截掉解析再拼回 "OK"；wbpullad.lua 可能带前导文本
   let rawJson = body;
-  const first = body.charCodeAt(0);
-  if (first !== 0x7b && first !== 0x5b) {
-    const idx = body.indexOf("{");
-    const lastIdx = body.lastIndexOf("}");
-    if (idx >= 0 && lastIdx > idx && /wbpullad\.lua/.test(url)) {
-      rawJson = body.slice(idx, lastIdx + 1);
-    } else {
-      $done({});
-      return;
+  let trailingSuffix = "";
+  const isSdkAd = /\/interface\/sdk\/sdkad\.php$/.test(path);
+  if (isSdkAd && body.endsWith("OK")) {
+    rawJson = body.slice(0, -2);
+    trailingSuffix = "OK";
+  } else {
+    const first = body.charCodeAt(0);
+    if (first !== 0x7b && first !== 0x5b) {
+      const idx = body.indexOf("{");
+      const lastIdx = body.lastIndexOf("}");
+      if (idx >= 0 && lastIdx > idx && /wbpullad\.lua|sdkad\.php/.test(path)) {
+        rawJson = body.slice(idx, lastIdx + 1);
+      } else {
+        $done({});
+        return;
+      }
     }
   }
 
-  // 微博 mid / id 都是 16~19 位整数，用占位符保护字符串外的长整数。
+  // 保护字符串外的 16+ 位整数（mid / uid），避免 JSON.parse 丢精度。
   const BIGINT_MARK = "__wb_bigint_";
   let hasBigInt = false;
   const safeBody = rawJson.replace(/"(?:\\.|[^"\\])*"|(-?\d{16,})/g, (m, num) => {
@@ -102,17 +106,17 @@
     return;
   }
 
-  const path = url.split("?")[0];
   let changed = false;
 
   const truthy = (v) => v === true || v === 1 || v === "1" || v === "true";
   const nonEmptyObj = (v) => isObj(v) && Object.keys(v).length > 0;
   const nonEmptyStr = (v) => typeof v === "string" && v.trim().length > 0;
 
-  // ---------- 1. 微博单条状态 (mblog) 全方位广告判定 ----------
+  // ---------- 1. 单条微博 (mblog) 广告判定 ----------
   const isAdMblog = (m) => {
     if (!isObj(m)) return false;
-    if (truthy(m.is_ad) || truthy(m.ad_state) || truthy(m.isAd)) return true;
+    if (truthy(m.is_ad) || truthy(m.ad_state) || truthy(m.isAd) || truthy(m.is_ads)) return true;
+    if (m.ads_material_info && m.ads_material_info.is_ads === true) return true;
     if (
       nonEmptyObj(m.promotion) ||
       nonEmptyObj(m.ad_info) ||
@@ -123,7 +127,7 @@
     ) {
       return true;
     }
-    if (m.readtimetype === "adMblog" || m.mblogtype === 1 && m.promotion) return true;
+    if (m.readtimetype === "adMblog") return true;
     const typeName = typeof m.mblogtypename === "string" ? m.mblogtypename : "";
     const mark = typeof m.mark === "string" ? m.mark : "";
     const titleText = isObj(m.title) && typeof m.title.text === "string" ? m.title.text : "";
@@ -133,7 +137,6 @@
     if (isObj(m.content_auth_info) && /广告|热推|推广|商业/.test(String(m.content_auth_info.content_auth_title || ""))) {
       return true;
     }
-    // 右上角负反馈菜单里如果带 ad / 为什么看到此广告 (type === "ad" 或 params.crime_type === "ad")
     if (Array.isArray(m.mblog_menus_new)) {
       for (const menu of m.mblog_menus_new) {
         if (isObj(menu) && (menu.type === "ad" || menu.type === "mblog_menus_ad" || /广告/.test(String(menu.name || "")))) {
@@ -144,7 +147,7 @@
     if (isObj(m.actionlog) && (m.actionlog.source === "ad" || /(?:^|&)adid=/.test(String(m.actionlog.ext || "")))) {
       return true;
     }
-    // 顺手剥离正常微博里的商业附加挂件（同款商品、微博小店横幅、正文顶栏营销）
+    // 顺手剥离正常微博里的商业挂件与橱窗
     for (const k of ["common_struct", "ad_struct", "semantic_brand_params", "follow_data"]) {
       if (isObj(m[k]) || (Array.isArray(m[k]) && m[k].length)) {
         delete m[k];
@@ -154,7 +157,6 @@
     return false;
   };
 
-  // 容器流条目（container_timeline / items）可能是 mblog，也可能是包裹了 data.mblog 的卡片
   const isAdTimelineItem = (item) => {
     if (!isObj(item)) return false;
     if (isAdMblog(item)) return true;
@@ -165,9 +167,10 @@
     const cat = String(item.category || item.type || item.card_type_name || "");
     if (/^(?:ad|advert|feed_ad|trend_ad|hot_ad|banner_ad|recommend_ad|group_ad)$/i.test(cat)) return true;
 
-    // 信息流里夹杂的横幅 / 推荐关注 / 商业卡片块 (trend / card)
     const d = isObj(item.data) ? item.data : item;
-    if (truthy(d.is_ad) || nonEmptyObj(d.promotion) || nonEmptyObj(d.ad_data) || nonEmptyObj(d.ad_info)) return true;
+    if (truthy(d.is_ad) || truthy(d.is_ads) || nonEmptyObj(d.promotion) || nonEmptyObj(d.ad_data) || nonEmptyObj(d.ad_info)) {
+      return true;
+    }
     const itemId = String(item.itemId || item.itemid || d.itemid || d.card_id || "");
     if (/^(?:ad_|advert_|trend_ad|feed_ad|ym_ad|insert_ad|commercial)/i.test(itemId)) return true;
     if (/ad_mblog|ad_card|search_ad|banner_ad/i.test(itemId)) return true;
@@ -184,15 +187,15 @@
     return false;
   };
 
-  // ---------- 2. 发现页 / 热搜 / 通用卡片 (card / card_group) 广告判定 ----------
+  // ---------- 2. 发现页 / 热搜 / 通用卡片广告判定 ----------
   const isAdCard = (card) => {
     if (!isObj(card)) return false;
-    if (truthy(card.is_ad) || truthy(card.ad_state) || nonEmptyObj(card.promotion) || nonEmptyObj(card.ad_data)) {
+    if (truthy(card.is_ad) || truthy(card.is_ads) || truthy(card.ad_state) || nonEmptyObj(card.promotion) || nonEmptyObj(card.ad_data)) {
       return true;
     }
     if (card.card_type === 22 || (card.card_type === 118 && (card.is_ad || card.promotion))) return true;
+    if (card.card_type === 42 && (card.title_extra_text === "广告" || card.is_ads === true)) return true;
     if (isObj(card.mblog) && isAdMblog(card.mblog)) return true;
-    // 热搜词条里的「商」「广告」「热推」「品牌」商业角标
     const desc = String(card.small_icon_desc || card.icon_desc || card.flag_desc || card.card_type_name || "");
     if (/^(?:商|广告|热推|推广|品牌|买)$/.test(desc.trim())) return true;
     if (typeof card.pic === "string" && /(?:_ad_|\/ad_|commercial)/i.test(card.pic) && card.promotion) return true;
@@ -211,30 +214,65 @@
     if (truthy(c.is_ad) || truthy(c.ad_state) || nonEmptyObj(c.ad_info) || nonEmptyObj(c.promotion)) return true;
     if (typeof c.adType === "string" && c.adType.length > 0) return true;
     if (typeof c.adType === "number" && c.adType > 0) return true;
+    if (c.type === 6 || c.type === 15) return true;
     if (c.type === 1 && (c.adType || (isObj(c.data) && (c.data.is_ad || c.data.adType || c.data.promotion)))) {
       return true;
     }
     if (c.comment_type === "ad" || c.type === "ad") return true;
-    if (isObj(c.data) && isAdComment(c.data)) return true;
+    const uname = String(c.user?.name || c.data?.user?.name || "");
+    if (uname && /^(?:超话社区|微博开新年|微博热搜|微博视频)$/.test(uname)) return true;
+    if (isObj(c.data) && (isAdComment(c.data) || isAdMblog(c.data))) return true;
     return false;
   };
 
-  // ---------- 4. 「我的」页 (/2/profile/me 及 container_timeline) 白名单级深度净化 ----------
-  // 任何宫格或列表项，名字/文案命中黑名单关键词（含「任务中心」「中心」「签到」「红包」等）一律干掉；
-  // 并且当 cleanUi=true 时，宫格按钮只放行核心用户功能白名单！
+  // ---------- 4. 「我的」页 (/2/profile/me) 真实 itemId 白名单 + 通用嵌套标题清洗 ----------
   const PROFILE_TRASH_TEXT_RE =
-    /任务中心|任务|签到|红包|领钱|提现|金币|积分|福利|抽奖|夺宝|借钱|微贷|贷款|分期|白条|信用卡|办卡|理财|保险|钱包|优惠券|省钱|卡券|会员|SVIP|VIP|游戏|小游戏|游民|电竞|商城|好物|种草|潮物|小店|橱窗|直播|连麦|语聊|相亲|交友|找对象|测试|运势|星座|算命|塔罗|占卜|小说|漫画|故事|短剧|听书|免流量|王卡|流量|网盘|彩铃|壁纸|表情|装扮|皮肤|挂件|公益|推广|热推|活动|推荐服务|更多服务|热门服务|我的服务|成长|等级|勋章|超话社区|粉丝群|认证/;
+    /任务中心|任务|签到|红包|领钱|提现|金币|积分|福利|抽奖|夺宝|借钱|微贷|贷款|分期|白条|信用卡|办卡|理财|保险|钱包|优惠券|省钱|卡券|会员|SVIP|VIP|游戏|小游戏|游民|电竞|商城|好物|种草|潮物|小店|橱窗|直播|连麦|语聊|相亲|交友|找对象|测试|运势|星座|算命|塔罗|占卜|小说|漫画|故事|短剧|听书|免流量|王卡|流量|网盘|彩铃|壁纸|表情|装扮|皮肤|挂件|公益|推广|热推|活动|推荐服务|更多服务|热门服务|我的服务|成长|等级|勋章|粉丝群|认证|订单|广告中心/;
 
-  // 核心功能白名单：个人资料、我的相册/赞/收藏/历史记录、创作中心/草稿箱、客服、设置、关注/粉丝列表
   const PROFILE_CORE_WHITE_RE =
-    /^(?:我的相册|相册|我的赞|赞|我的收藏|收藏|浏览记录|历史记录|浏览历史|足迹|草稿箱|草稿|创作中心|创作者中心|客服|客服中心|帮助与反馈|设置|夜间模式|深色模式|屏蔽管理|内容管理|我的关注|关注|我的粉丝|粉丝|我的微博|微博)$/;
+    /^(?:我的相册|相册|我的赞|赞|赞\/收藏|我的收藏|收藏|浏览记录|历史记录|浏览历史|足迹|草稿箱|草稿|创作中心|创作者中心|客服|客服中心|帮助与反馈|设置|夜间模式|深色模式|屏蔽管理|内容管理|我的关注|关注|我的粉丝|粉丝|我的微博|微博)$/;
+
+  // 真实新版微博 /2/profile/me 顶层核心块白名单
+  const REAL_PROFILE_KEEP_IDS = new Set([
+    "profileme_mine",
+    "100505_-_top8",
+    "100505_-_manage",
+    "100505_-_manage2",
+    "100505_-_chaohua",
+    "100505_-_recentlyuser",
+  ]);
+  // 真实 100505_-_top8 四宫格白名单
+  const REAL_TOP8_KEEP_IDS = new Set([
+    "100505_-_album",
+    "100505_-_like",
+    "100505_-_fav",
+    "100505_-_watchhistory",
+    "100505_-_draft",
+    "100505_-_productcenter",
+  ]);
+
+  const extractStr = (v) => {
+    if (typeof v === "string" && v.trim()) return v.trim();
+    if (isObj(v)) {
+      for (const k of ["content", "text", "title", "name"]) {
+        if (typeof v[k] === "string" && v[k].trim()) return v[k].trim();
+      }
+    }
+    return "";
+  };
 
   const getEntryTitle = (obj) => {
     if (!isObj(obj)) return "";
     const d = isObj(obj.data) ? obj.data : obj;
     for (const k of ["title_sub", "title", "name", "desc", "card_type_name", "text", "main_title", "sub_title"]) {
-      if (typeof d[k] === "string" && d[k].trim()) return d[k].trim();
-      if (typeof obj[k] === "string" && obj[k].trim()) return obj[k].trim();
+      const s1 = extractStr(d[k]);
+      if (s1) return s1;
+      const s2 = extractStr(obj[k]);
+      if (s2) return s2;
+    }
+    if (isObj(obj.header)) {
+      const s3 = extractStr(obj.header.title);
+      if (s3) return s3;
     }
     return "";
   };
@@ -243,40 +281,36 @@
     if (!isObj(item)) return false;
     const d = isObj(item.data) ? item.data : item;
     const itemId = String(item.itemId || item.itemid || d.itemid || d.card_id || "");
+    if (itemId === "profileme_mine") return true;
     if (/header|userinfo|user_info|avatar|profile_top|mine_info/i.test(itemId)) return true;
     if (isObj(d.user) && (d.user.id || d.user.screen_name)) return true;
     if (d.card_type === 1 || d.card_type === 200 || d.card_type === 201) return true;
     return false;
   };
 
-  // 清洗宫格菜单数组（elements / items / menus / apps / group / entrances / sub_item）
   const cleanProfileGridList = (list) => {
     if (!Array.isArray(list) || !list.length) return list;
     return list.filter((entry) => {
       if (!isObj(entry)) return false;
       const d = isObj(entry.data) ? entry.data : entry;
       if (isAdCard(d) || isAdTimelineItem(entry)) return false;
+      const itemId = String(entry.itemId || entry.itemid || d.itemid || "");
+      if (itemId && REAL_TOP8_KEEP_IDS.has(itemId)) return true;
+      if (itemId && /^100505_-_/.test(itemId) && cleanUi) return false;
+
       const title = getEntryTitle(entry);
       const scheme = String(d.scheme || entry.scheme || "");
-      const itemId = String(entry.itemId || entry.itemid || d.itemid || "");
 
-      // 明确在核心白名单里的保留
       if (title && PROFILE_CORE_WHITE_RE.test(title)) return true;
-
-      // 命中任务中心/钱包/游戏/活动黑名单的直接杀
       if (title && PROFILE_TRASH_TEXT_RE.test(title)) return false;
       if (
-        /(?:task|checkin|sign|wallet|finance|loan|borrow|game|mall|shop|store|novel|book|comic|live|vip|welfare|lottery|redpacket|activity|ad|banner|kingcard|free_traffic)/i.test(
+        /(?:task|checkin|sign|wallet|finance|loan|borrow|game|mall|shop|store|novel|book|comic|live|vip|welfare|lottery|redpacket|activity|ad|banner|kingcard|free_traffic|ordercenter|promote)/i.test(
           scheme + " " + itemId
         )
       ) {
         return false;
       }
-
-      // cleanUi 开启时，对于带标题的宫格入口，不在核心白名单里的一律过滤（彻底杜绝换名营销入口）
-      if (cleanUi && title) {
-        return PROFILE_CORE_WHITE_RE.test(title);
-      }
+      if (cleanUi && title) return PROFILE_CORE_WHITE_RE.test(title);
       return true;
     });
   };
@@ -288,12 +322,89 @@
     const out = [];
     let modified = false;
 
+    // 检测是否是真实新版 /2/profile/me 响应（包含 profileme_mine 或 100505_-_ 前缀块）
+    const isRealMeLayout = list.some(
+      (x) => isObj(x) && (x.itemId === "profileme_mine" || /^100505_-_/.test(String(x.itemId || "")))
+    );
+
     for (const item of list) {
       if (!isObj(item)) continue;
+      const d = isObj(item.data) ? item.data : item;
+      const itemId = String(item.itemId || item.itemid || d.itemid || d.card_id || "");
 
-      // 1. 顶部个人头像与账号资料卡无条件保留（但剥离上面的 VIP 诱导角标/背景广告）
+      // 真实新版 /2/profile/me 结构精确处理
+      if (isRealMeLayout) {
+        if (itemId === "profileme_mine") {
+          if (isObj(item.header)) {
+            for (const k of ["vipView", "vipCenter", "vipIcon"]) {
+              if (item.header[k] !== undefined) {
+                delete item.header[k];
+                modified = true;
+              }
+            }
+          }
+          if (Array.isArray(item.items)) {
+            for (const sub of item.items) {
+              if (isObj(sub) && sub.itemId === "mainnums_friends" && sub.click?.modules?.[0]?.scheme) {
+                const s = sub.click.modules[0].scheme;
+                if (s.includes("231093_-_selfrecomm")) {
+                  sub.click.modules[0].scheme = s.replace("231093_-_selfrecomm", "231093_-_selffollowed");
+                  modified = true;
+                }
+              }
+            }
+          }
+          out.push(item);
+          continue;
+        }
+        if (itemId === "100505_-_top8") {
+          if (cleanUi && Array.isArray(item.items)) {
+            const kept = item.items.filter((sub) => {
+              if (!isObj(sub)) return false;
+              const sid = String(sub.itemId || sub.itemid || "");
+              if (sid && REAL_TOP8_KEEP_IDS.has(sid)) return true;
+              const t = getEntryTitle(sub);
+              return !!(t && PROFILE_CORE_WHITE_RE.test(t));
+            });
+            if (kept.length !== item.items.length) {
+              item.items = kept;
+              modified = true;
+            }
+          }
+          out.push(item);
+          continue;
+        }
+        if (itemId === "100505_-_manage") {
+          if (cleanUi) {
+            if (item.style !== undefined) { delete item.style; modified = true; }
+            if (item.images !== undefined) { delete item.images; modified = true; }
+          }
+          out.push(item);
+          continue;
+        }
+        if (itemId === "100505_-_manage2") {
+          if (cleanUi || blockAds) {
+            if (item.footer !== undefined) { delete item.footer; modified = true; }
+            if (item.body !== undefined) { delete item.body; modified = true; }
+          }
+          out.push(item);
+          continue;
+        }
+        if (itemId === "100505_-_chaohua" || itemId === "100505_-_recentlyuser") {
+          out.push(item);
+          continue;
+        }
+        // 在真实 /2/profile/me 布局里，cleanUi=true 时其余全部 100505_-_ 推广/任务中心/钱包块直接砍掉
+        if (cleanUi || isAdTimelineItem(item) || isAdCard(item) || !REAL_PROFILE_KEEP_IDS.has(itemId)) {
+          if (cleanUi) {
+            modified = true;
+            continue;
+          }
+        }
+      }
+
+      // 通用 / 旧版我的页结构处理
       if (isHeaderOrUserCard(item)) {
-        const d = isObj(item.data) ? item.data : item;
         for (const k of ["vip_center", "vip_info", "ad_info", "banner", "pendant", "checkin_info", "task_info", "right_button"]) {
           if (d[k] !== undefined) {
             delete d[k];
@@ -304,22 +415,14 @@
         continue;
       }
 
-      // 2. 广告卡片直接干掉
-      if (isAdTimelineItem(item) || isAdCard(item)) {
-        modified = true;
-        continue;
-      }
-      const d = isObj(item.data) ? item.data : item;
-      if (isAdCard(d)) {
+      if (isAdTimelineItem(item) || isAdCard(item) || isAdCard(d)) {
         modified = true;
         continue;
       }
 
-      const itemId = String(item.itemId || item.itemid || d.itemid || d.card_id || "");
       const title = getEntryTitle(item);
       const ct = Number(d.card_type || item.card_type || 0);
 
-      // 3. 轮播图 (118)、大图横幅 (22 / 208 / 196 / 89 / 216 活动卡) 或命中黑名单标题/ID 的整卡删除
       if (ct === 118 || ct === 22 || ct === 208 || ct === 196 || ct === 89) {
         modified = true;
         continue;
@@ -338,13 +441,11 @@
         continue;
       }
 
-      // 4. 递归清理容器内部的 card_group 与 item.items
       let hadChildContainer = false;
       let hasSurvivingChildren = false;
 
       if (Array.isArray(item.items) && item.items.length) {
         hadChildContainer = true;
-        // 判断 item.items 是卡片容器还是宫格按钮列表
         const looksLikeCards = item.items.some((x) => isObj(x) && (isObj(x.data) || x.card_type || Array.isArray(x.card_group)));
         const cleanedSub = looksLikeCards ? cleanProfileItems(item.items) : cleanProfileGridList(item.items);
         if (cleanedSub && cleanedSub.length !== item.items.length) {
@@ -369,7 +470,6 @@
         if (Array.isArray(d.card_group) && d.card_group.length > 0) hasSurvivingChildren = true;
       }
 
-      // 5. 清洗卡片内的宫格字段 (elements / menus / group / sub_item / apps 等)
       for (const gk of GRID_KEYS) {
         if (gk === "items" && d === item) continue;
         if (Array.isArray(d[gk]) && d[gk].length) {
@@ -383,13 +483,11 @@
         }
       }
 
-      // 如果这个卡片本来是个宫格/分组容器，里面的按钮全被删光了，就把空壳子也删掉
       if (hadChildContainer && !hasSurvivingChildren) {
         modified = true;
         continue;
       }
 
-      // 如果是单条入口卡片（既不是容器也没子项），在 cleanUi 模式下必须命中核心白名单才保留
       if (cleanUi && !hadChildContainer && title && !PROFILE_CORE_WHITE_RE.test(title)) {
         modified = true;
         continue;
@@ -401,7 +499,6 @@
     return modified ? out : null;
   };
 
-  // 过滤普通数组；若删完为空且 allowEmpty=false 则保留原数组
   const filterList = (holder, key, predicate, allowEmpty = false) => {
     if (!isObj(holder) || !Array.isArray(holder[key]) || !holder[key].length) return;
     const list = holder[key];
@@ -412,7 +509,6 @@
     }
   };
 
-  // 递归清理发现页 / 热搜 / cardlist 的 cards 及其内部的 card_group
   const cleanCardArray = (holder, key) => {
     if (!isObj(holder) || !Array.isArray(holder[key]) || !holder[key].length) return;
     const list = holder[key];
@@ -431,9 +527,7 @@
         const groupKept = card.card_group.filter((g) => !isObj(g) || (!isAdCard(g) && !isAdTimelineItem(g)));
         if (groupKept.length !== card.card_group.length) {
           localChanged = true;
-          if (!groupKept.length) {
-            continue;
-          }
+          if (!groupKept.length) continue;
           card.card_group = groupKept;
         }
       }
@@ -441,9 +535,7 @@
         const groupKept = card.data.card_group.filter((g) => !isObj(g) || (!isAdCard(g) && !isAdTimelineItem(g)));
         if (groupKept.length !== card.data.card_group.length) {
           localChanged = true;
-          if (!groupKept.length) {
-            continue;
-          }
+          if (!groupKept.length) continue;
           card.data.card_group = groupKept;
         }
       }
@@ -455,54 +547,196 @@
     }
   };
 
+  // 清洗发现页 / 搜索页新版 items[] (category: feed / card / cell / group)
+  const FINDER_DROP_CARD_TYPES = new Set([19, 118, 206, 208, 217, 236, 249, 261]);
+  const FINDER_GROUP_DROP_TYPES = new Set([118, 182, 192, 217, 247]);
+  const cleanSearchContainerItems = (holder) => {
+    if (!isObj(holder) || !Array.isArray(holder.items) || !holder.items.length) return;
+    const kept = [];
+    let localChanged = false;
+    for (const item of holder.items) {
+      if (!isObj(item)) {
+        kept.push(item);
+        continue;
+      }
+      if (item.category === "feed") {
+        if (isAdTimelineItem(item)) {
+          localChanged = true;
+          continue;
+        }
+        kept.push(item);
+      } else if (item.category === "card") {
+        const ct = item.data?.card_type;
+        if (
+          isAdCard(item) ||
+          FINDER_DROP_CARD_TYPES.has(ct) ||
+          (ct === 101 && item.data?.cate_id === "1114") ||
+          (ct === 196 && Object.prototype.hasOwnProperty.call(item.data || {}, "rank"))
+        ) {
+          localChanged = true;
+          continue;
+        }
+        kept.push(item);
+      } else if (item.category === "group") {
+        if (Array.isArray(item.items) && item.items.length) {
+          const subKept = item.items.filter(
+            (sub) => !isObj(sub) || (!isAdCard(sub) && !isAdTimelineItem(sub) && !FINDER_GROUP_DROP_TYPES.has(sub.data?.card_type))
+          );
+          if (subKept.length !== item.items.length) {
+            localChanged = true;
+            item.items = subKept;
+          }
+        }
+        kept.push(item);
+      } else if (isAdTimelineItem(item) || isAdCard(item)) {
+        localChanged = true;
+      } else {
+        kept.push(item);
+      }
+    }
+    if (localChanged && kept.length > 0) {
+      holder.items = kept;
+      changed = true;
+    }
+  };
+
   try {
-    // 1. 开屏与冷启动配置 (/wbapplua/wbpullad.lua, /2/push/active, /2/client/*, /2/checkin/*)
-    if (/\/wbapplua\/wbpullad\.lua$|\/2\/push\/active$|\/2\/client\/|\/2\/checkin\//.test(path)) {
+    // 1. 开屏广告（覆写有效期至 2040/2090 年以覆盖客户端本地开屏缓存）
+    if (isSdkAd && blockAds) {
+      if (data.needlocation) { data.needlocation = false; changed = true; }
+      if (data.show_push_splash_ad) { data.show_push_splash_ad = false; changed = true; }
+      if (data.background_delay_display_time !== undefined) { data.background_delay_display_time = 31536000; changed = true; }
+      if (data.lastAdShow_delay_display_time !== undefined) { data.lastAdShow_delay_display_time = 31536000; changed = true; }
+      if (data.realtime_ad_video_stall_time !== undefined) { data.realtime_ad_video_stall_time = 0; changed = true; }
+      if (data.realtime_ad_timeout_duration !== undefined) { data.realtime_ad_timeout_duration = 0; changed = true; }
+      if (Array.isArray(data.ads) && data.ads.length) {
+        for (const ad of data.ads) {
+          if (!isObj(ad)) continue;
+          ad.displaytime = 0;
+          ad.displayintervel = 31536000;
+          ad.allowdaydisplaynum = 0;
+          ad.begintime = "2040-01-01 00:00:00";
+          ad.endtime = "2040-01-01 23:59:59";
+        }
+        changed = true;
+      }
+    } else if (/\/v\d+\/ad\/preload$/.test(path) && blockAds) {
+      const expirePreload = (arr) => {
+        if (!Array.isArray(arr) || !arr.length) return;
+        for (const ad of arr) {
+          if (!isObj(ad)) continue;
+          ad.start_time = 3818332800;
+          ad.end_time = 3818419199;
+          ad.daily_display_cnt = 50;
+          ad.display_duration = 0;
+          if (Array.isArray(ad.creatives)) expirePreload(ad.creatives);
+        }
+        changed = true;
+      };
+      expirePreload(data.ads);
+      if (isObj(data.ads) && Array.isArray(data.ads.creatives)) expirePreload(data.ads.creatives);
+    } else if (/\/wbapplua\/wbpullad\.lua$|\/preload\/get_ad$/.test(path) && blockAds) {
+      if (isObj(data.cached_ad) && Array.isArray(data.cached_ad.ads) && data.cached_ad.ads.length) {
+        for (const ad of data.cached_ad.ads) {
+          if (!isObj(ad)) continue;
+          ad.show_count = 50;
+          ad.duration = 0;
+          ad.display_duration = 0;
+          ad.start_date = 3818332800;
+          ad.end_date = 3818419199;
+        }
+        changed = true;
+      }
+      if (Array.isArray(data.ads) && data.ads.length) {
+        for (const ad of data.ads) {
+          if (!isObj(ad)) continue;
+          ad.start_date = 3818332800;
+          ad.end_date = 3818419199;
+          ad.duration = 0;
+          ad.display_duration = 0;
+        }
+        changed = true;
+      }
+    } else if (/\/2\/push\/active$|\/2\/checkin\/show$|\/2\/client\//.test(path)) {
       if (blockAds) {
-        const FUTURE = 2208960000;
-        const holders = [data, data.cached_ad, data.data];
-        for (const h of holders) {
+        if (isObj(data.feed_redpacket)) {
+          data.feed_redpacket.starttime = "2208960000";
+          data.feed_redpacket.interval = "31536000";
+          data.feed_redpacket.endtime = "2209046399";
+          changed = true;
+        }
+        if (/\/2\/checkin\/show$/.test(path)) {
+          if (data.show) { data.show = 0; changed = true; }
+          if (data.show_time) { data.show_time = 0; changed = true; }
+        }
+        for (const h of [data, data.cached_ad, data.data]) {
           if (!isObj(h)) continue;
           for (const k of ["ads", "ad_list", "ads_list", "feed_ads", "tips", "float_ad", "popup", "checkin_info"]) {
             if (Array.isArray(h[k]) && h[k].length) {
-              for (const ad of h[k]) {
-                if (!isObj(ad)) continue;
-                ad.start_date = FUTURE;
-                ad.end_date = FUTURE + 86400;
-                ad.display_duration = 0;
-              }
               h[k] = [];
               changed = true;
-            } else if (isObj(h[k]) && Object.keys(h[k]).length) {
+            } else if (nonEmptyObj(h[k])) {
               delete h[k];
               changed = true;
             }
           }
         }
-        if (data.need_ad) {
-          data.need_ad = 0;
+        if (data.need_ad) { data.need_ad = 0; changed = true; }
+      }
+      if (cleanUi && /\/2\/client\/publisher_list$/.test(path) && Array.isArray(data.elements)) {
+        const kept = data.elements.filter((i) => isObj(i) && /^(?:写微博|图片|视频)$/.test(String(i.app_name || "")));
+        if (kept.length && kept.length !== data.elements.length) {
+          data.elements = kept;
           changed = true;
         }
       }
     }
 
-    // 2. 时间线与视频流 (/2/statuses/*, /2/groups/timeline, /2/video/*)
+    // 2. 顶部 tab 分组 (/2/groups/allgroups/v2)
+    if (cleanUi && /\/2\/groups\/allgroups\/v2$/.test(path) && Array.isArray(data.pageDatas)) {
+      const kept = data.pageDatas.filter((i) => !isObj(i) || i.pageDataType !== "homeExtend");
+      if (kept.length && kept.length !== data.pageDatas.length) {
+        data.pageDatas = kept;
+        changed = true;
+      }
+    }
+
+    // 3. 时间线、详情与视频流 (/2/statuses/*, /2/groups/timeline, /2/video/*)
     if (/\/2\/(?:statuses\/|groups\/timeline|video\/)/.test(path)) {
       if (blockAds) {
+        const isHotOrFollowContainer =
+          /\/2\/statuses\/(?:container_timeline(?:_hot|_unread)?|unread_hot_timeline)$/.test(path);
         for (const holder of [data, data.data]) {
           if (!isObj(holder)) continue;
           filterList(holder, "statuses", isAdTimelineItem);
-          filterList(holder, "items", isAdTimelineItem);
+          if (isHotOrFollowContainer && Array.isArray(holder.items) && holder.items.length) {
+            const hasCategory = holder.items.some((x) => isObj(x) && typeof x.category === "string");
+            const kept = holder.items.filter((x) => {
+              if (!isObj(x)) return true;
+              if (isAdTimelineItem(x)) return false;
+              if (hasCategory && x.category && x.category !== "feed" && x.category !== "feedBiz") return false;
+              return true;
+            });
+            if (kept.length !== holder.items.length && kept.length > 0) {
+              holder.items = kept;
+              changed = true;
+            }
+          } else {
+            filterList(holder, "items", isAdTimelineItem);
+          }
           filterList(holder, "trends", isAdTimelineItem, true);
           cleanCardArray(holder, "cards");
-          for (const k of ["advertises", "ad", "ads", "feed_ads", "top_cards", " trend"]) {
+          for (const k of ["advertises", "ad", "ads", "feed_ads", "top_cards", "trend", "headers"]) {
             if (Array.isArray(holder[k]) && holder[k].length) {
               holder[k] = [];
               changed = true;
             }
           }
+          if (isObj(holder.loadedInfo) && holder.loadedInfo.headers !== undefined) {
+            delete holder.loadedInfo.headers;
+            changed = true;
+          }
         }
-        // 详情页 extend 接口里的推广横幅与商品卡
         if (/\/2\/statuses\/extend$/.test(path)) {
           for (const k of [
             "head_cards",
@@ -513,9 +747,49 @@
             "reward_info",
             "semantic_brand_params",
             "extend_info",
+            "bubble_guide_data",
+            "button_extra_info",
+            "display_info",
+            "floating_button",
+            "highlight",
+            "interaction_extra_info",
+            "page_alerts",
+            "source_tag_struct",
           ]) {
             if (data[k] !== undefined && data[k] !== null) {
               delete data[k];
+              changed = true;
+            }
+          }
+          if (data.has_common_struct) { data.has_common_struct = false; changed = true; }
+          if (data.enable_comment_guide) { data.enable_comment_guide = false; changed = true; }
+        }
+        if (/\/2\/statuses\/container_detail(?:_comment|_mix)?$/.test(path)) {
+          filterList(data, "items", isAdComment);
+          filterList(data, "datas", isAdComment);
+        }
+      }
+    }
+
+    // 4. 评论区 (/2/comments/build_comments, /2/comments/mix_comments)
+    if (/\/2\/comments\/(?:build_comments|mix_comments)$/.test(path) && blockAds) {
+      filterList(data, "datas", isAdComment);
+      filterList(data, "root_comments", isAdComment);
+      filterList(data, "comments", isAdComment);
+      filterList(data, "items", isAdComment);
+      for (const k of ["comment_bubble", "ad_info", "header_info", "top_cards", "trend"]) {
+        if (data[k] !== undefined && data[k] !== null) {
+          if (k === "header_info" && isObj(data[k]) && !data[k].is_ad && !data[k].ad_type) continue;
+          delete data[k];
+          changed = true;
+        }
+      }
+      if (Array.isArray(data.datas)) {
+        for (const item of data.datas) {
+          if (!isObj(item) || !isObj(item.data)) continue;
+          for (const k of ["comment_bubble", "comment_bullet_screens_message", "vip_button"]) {
+            if (item.data[k] !== undefined) {
+              delete item.data[k];
               changed = true;
             }
           }
@@ -523,31 +797,24 @@
       }
     }
 
-    // 3. 评论区 (/2/comments/build_comments)
-    if (/\/2\/comments\/build_comments$/.test(path)) {
-      if (blockAds) {
-        filterList(data, "datas", isAdComment);
-        filterList(data, "root_comments", isAdComment);
-        filterList(data, "comments", isAdComment);
-        for (const k of ["comment_bubble", "ad_info", "header_info", "top_cards", "trend"]) {
-          if (data[k] !== undefined && data[k] !== null) {
-            if (k === "header_info" && isObj(data[k]) && !data[k].is_ad && !data[k].ad_type) continue;
-            delete data[k];
-            changed = true;
-          }
-        }
-      }
-    }
-
-    // 4. 「我的」页与个人页 (/2/profile/*, /2/users/show, 以及带 mine / profile / 100505 的 /2/page 与 /2/cardlist)
+    // 5. 「我的」页与个人页 (/2/profile/me, /2/profile/*, /2/users/show)
     const isProfileUrl =
       /\/2\/(?:profile\/|users\/show)/.test(path) ||
       (/\/2\/(?:page|cardlist)$/.test(path) && /(?:mine|profile|100505|user)/i.test(url)) ||
       isObj(data.vip_center) ||
-      (Array.isArray(data.items) && data.items.some((x) => isObj(x) && /profile_mine|mine_/.test(String(x.itemId || x.itemid || ""))));
+      (Array.isArray(data.items) &&
+        data.items.some((x) => isObj(x) && /^(?:profileme_mine|100505_-_|profile_mine|mine_)/.test(String(x.itemId || x.itemid || ""))));
 
     if (isProfileUrl) {
       if (blockAds || cleanUi) {
+        if (data.vipHeaderBgImage !== undefined) {
+          delete data.vipHeaderBgImage;
+          changed = true;
+        }
+        if (isObj(data.loadedInfo) && data.loadedInfo.follow_guide_info !== undefined) {
+          delete data.loadedInfo.follow_guide_info;
+          changed = true;
+        }
         for (const holder of [data, data.data]) {
           if (!isObj(holder)) continue;
           for (const dropKey of [
@@ -571,21 +838,129 @@
               changed = true;
             }
           }
-          for (const arrKey of ["items", "cards", "card_group", "service_list", "menus"]) {
-            if (Array.isArray(holder[arrKey]) && holder[arrKey].length) {
-              const cleaned = cleanProfileItems(holder[arrKey]);
-              if (cleaned) {
-                holder[arrKey] = cleaned;
-                changed = true;
+          // /2/profile/container_timeline 是个人主页微博流，不是「我的」宫格，不走宫格删除
+          if (/\/2\/profile\/container_timeline$/.test(path)) {
+            filterList(holder, "items", (x) => isAdTimelineItem(x) || /INTEREST_PEOPLE/.test(String(x.itemId || "")));
+          } else {
+            for (const arrKey of ["items", "cards", "card_group", "service_list", "menus"]) {
+              if (Array.isArray(holder[arrKey]) && holder[arrKey].length) {
+                const cleaned = cleanProfileItems(holder[arrKey]);
+                if (cleaned) {
+                  holder[arrKey] = cleaned;
+                  changed = true;
+                }
               }
             }
           }
           filterList(holder, "statuses", isAdTimelineItem);
         }
       }
-    } else if (/\/2\/(?:search\/|page$|cardlist$|container\/)/.test(path)) {
-      // 5. 发现页、热搜与通用卡片流 (/2/search/*, /2/page, /2/cardlist, /2/container/*)
+    } else if (/\/2\/(?:search\/|searchall$|flowpage$|flowlist$|page$|cardlist$|container\/)/.test(path)) {
+      // 6. 发现页、热搜榜、综合搜索与通用卡片流
       if (blockAds) {
+        // /2/search/finder 新版把内容放在 channelInfo.channels[].payload
+        if (/\/2\/search\/finder$/.test(path) && isObj(data.channelInfo) && Array.isArray(data.channelInfo.channels)) {
+          for (const ch of data.channelInfo.channels) {
+            if (!isObj(ch) || !isObj(ch.payload)) continue;
+            const pl = ch.payload;
+            if (isObj(pl.loadedInfo)) {
+              if (Array.isArray(pl.loadedInfo.searchBarContent) && pl.loadedInfo.searchBarContent.length) {
+                pl.loadedInfo.searchBarContent = [];
+                changed = true;
+              }
+              if (pl.loadedInfo.headerBack?.channelStyleMap !== undefined) {
+                delete pl.loadedInfo.headerBack.channelStyleMap;
+                changed = true;
+              }
+              if (pl.loadedInfo.searchBarStyleInfo !== undefined) {
+                delete pl.loadedInfo.searchBarStyleInfo;
+                changed = true;
+              }
+            }
+            cleanSearchContainerItems(pl);
+          }
+        }
+
+        // /2/search/container_timeline
+        if (/\/2\/search\/container_timeline$/.test(path)) {
+          cleanSearchContainerItems(data);
+          if (data.loadedInfo !== undefined) {
+            delete data.loadedInfo;
+            changed = true;
+          }
+        }
+
+        // /2/flowpage (热搜榜)
+        if (/\/2\/flowpage$/.test(path) && Array.isArray(data.items)) {
+          const kept = [];
+          let fpChanged = false;
+          for (const item of data.items) {
+            if (!isObj(item)) { kept.push(item); continue; }
+            if (item.data?.itemid === "hot-search-push-notice") { fpChanged = true; continue; }
+            if (Array.isArray(item.items) && item.items.length) {
+              const subKept = item.items.filter(
+                (s) =>
+                  !isObj(s) ||
+                  (!isAdCard(s) &&
+                    !Object.prototype.hasOwnProperty.call(s.data || {}, "promotion") &&
+                    !/_img_search_stick/.test(String(s.data?.pic || "")))
+              );
+              if (subKept.length !== item.items.length) {
+                fpChanged = true;
+                item.items = subKept;
+              }
+            }
+            kept.push(item);
+          }
+          if (fpChanged) {
+            data.items = kept;
+            changed = true;
+          }
+        }
+
+        // /2/searchall (综合搜索结果)
+        if (/\/2\/searchall$/.test(path)) {
+          if (isObj(data.header?.data)) {
+            for (const k of ["bg_img", "background_scheme", "background_url"]) {
+              if (data.header.data[k] !== undefined) {
+                delete data.header.data[k];
+                changed = true;
+              }
+            }
+          }
+          if (data.loadedInfo?.serviceMap?.layer?.pic) {
+            delete data.loadedInfo.serviceMap.layer;
+            changed = true;
+          }
+          if (Array.isArray(data.items) && data.items.length) {
+            const SEARCHALL_DROP_TYPES = new Set([3, 17, 22, 30, 42, 89, 206, 236]);
+            const kept = [];
+            let saChanged = false;
+            for (const item of data.items) {
+              if (!isObj(item)) { kept.push(item); continue; }
+              if (isAdTimelineItem(item) || isAdCard(item)) { saChanged = true; continue; }
+              if (item.category === "group" && Array.isArray(item.items)) {
+                const subKept = item.items.filter(
+                  (sub) =>
+                    !isObj(sub) ||
+                    (!isAdTimelineItem(sub) &&
+                      !isAdCard(sub) &&
+                      !SEARCHALL_DROP_TYPES.has(sub.data?.card_type))
+                );
+                if (subKept.length !== item.items.length) {
+                  saChanged = true;
+                  item.items = subKept;
+                }
+              }
+              kept.push(item);
+            }
+            if (saChanged && kept.length) {
+              data.items = kept;
+              changed = true;
+            }
+          }
+        }
+
         for (const holder of [data, data.data]) {
           if (!isObj(holder)) continue;
           cleanCardArray(holder, "cards");
@@ -609,6 +984,23 @@
         }
       }
     }
+
+    // 7. 私信列表去掉「活动通知 / 闪聊」
+    if (cleanUi && /\/2\/direct_messages\/user_list$/.test(path) && Array.isArray(data.user_list)) {
+      const kept = data.user_list.filter((i) => !isObj(i) || !/^(?:活动通知|闪聊)$/.test(String(i.user?.name || "")));
+      if (kept.length !== data.user_list.length) {
+        data.user_list = kept;
+        changed = true;
+      }
+    }
+
+    // 8. 超话底部栏去广场按钮广告配置
+    if (cleanUi && /\/2\/!\/huati\/discovery_home_bottom_channels$/.test(path)) {
+      if (data.button_configs !== undefined) {
+        delete data.button_configs;
+        changed = true;
+      }
+    }
   } catch (e) {
     $done({});
     return;
@@ -623,5 +1015,5 @@
   if (hasBigInt) {
     out = out.replace(new RegExp('"' + BIGINT_MARK + '(-?\\d+)"', "g"), "$1");
   }
-  $done({ body: out });
+  $done({ body: out + trailingSuffix });
 })();

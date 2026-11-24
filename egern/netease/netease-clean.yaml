@@ -1,11 +1,11 @@
 #=======================================================================================
 # NetEase Music Clean — Egern 模块
 #
-# 网易云音乐去开屏、首页横幅广告、左滑抽屉（商城/云村有票/云推歌）、搜索买榜词与评论区推广。
+# 网易云音乐去开屏、首页横幅广告、左滑抽屉（商城/云村有票/云推歌）、发现页横幅、搜索买榜词与评论区推广（支持 EAPI AES 密文实时加解密）。
 #=======================================================================================
 
 name: "NetEase Music Clean"
-description: "网易云音乐去开屏、首页横幅广告、左滑抽屉（商城/云村有票/云推歌）、搜索买榜词与评论区推广。"
+description: "网易云音乐去开屏、首页横幅广告、左滑抽屉（商城/云村有票/云推歌）、发现页横幅、搜索买榜词与评论区推广。"
 author: "xzavier-amico"
 homepage: "https://github.com/xzavier-amico/modules"
 icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/netease.png"
@@ -13,12 +13,12 @@ icon: "https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/netea
 env_schema:
   block_ads:
     name: "去广告"
-    description: "拦截开屏素材 CDN，并过滤首页横幅、搜索热词与评论区里的商业广告"
+    description: "拦截开屏素材 CDN 与广告接口，解密 EAPI 响应并过滤首页横幅、发现页广告、搜索热词与评论区商业广告"
     default_value: "true"
     options: ["true", "false"]
   clean_ui:
     name: "净化侧栏与首页"
-    description: "移除左滑菜单里的商城、云村有票、云推歌、彩铃、游戏、免费听歌，以及首页发现流里的直播与语音房模块"
+    description: "移除左滑菜单里的商城、云村有票、云推歌、彩铃、游戏、VIP 轮播，以及首页/发现流里的直播与语音房模块"
     default_value: "true"
     options: ["true", "false"]
 
@@ -37,6 +37,34 @@ rules:
         - protocol:
             match: quic
       policy: REJECT
+  - domain:
+      match: "httpdns.n.netease.com"
+      policy: REJECT
+  - domain:
+      match: "httpdns-sdk.n.netease.com"
+      policy: REJECT
+  - domain:
+      match: "httpdns.music.163.com"
+      policy: REJECT
+  - domain:
+      match: "music.httpdns.c.163.com"
+      policy: REJECT
+  - ip_cidr:
+      match: "59.111.239.61/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "59.111.239.62/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "115.236.121.51/32"
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr:
+      match: "115.236.121.195/32"
+      policy: REJECT
+      no_resolve: true
   - domain:
       match: "admusicpic.music.126.net"
       policy: REJECT
@@ -66,15 +94,22 @@ rules:
       policy: REJECT
 
 url_rewrites:
-  - match: "^https?:\\/\\/interface\\d*\\.music\\.163\\.com\\/e?api\\/(?:ad|sp\\/loading\\/ad|v1\\/ad)\\/"
+  - match: "^https?:\\/\\/(?:ipv4|interface\\d*)\\.music\\.163\\.com\\/[xw]?e?api\\/(?:ad\\/|sp\\/loading\\/ad\\/|sp\\/flow\\/popup\\/query|v\\d+\\/ad\\/|mlog\\/)"
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/(?:ipv4|interface\\d*)\\.music\\.163\\.com\\/[xw]?e?api\\/(?:side-bar\\/mini-program\\/music-service\\/account|delivery\\/(?:batch-deliver|deliver)|yunbei\\/account\\/entrance\\/get|vipmall\\/couponcfg\\/get|vipcenter\\/tspopup\\/get|vip\\/cashier\\/tspopup\\/get|creator\\/musician\\/reminder\\/message\\/get)"
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/(?:ipv4|interface\\d*)\\.music\\.163\\.com\\/[xw]?e?api\\/(?:search\\/(?:chart|default|rcmd\\/keyword|specialkeyword)|resource-exposure\\/|activity\\/bonus\\/playpage\\/time\\/query|content\\/activity\\/music\\/jar\\/template\\/list)"
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/(?:ipv4|interface\\d*)\\.music\\.163\\.com\\/[xw]?e?api\\/(?:comment\\/feed\\/inserted|v\\d+\\/content\\/exposure\\/comment\\/banner|mlivestream\\/entrance\\/playpage|link\\/(?:position\\/show\\/strategy|scene\\/show)|tips\\/v\\d+\\/get|resniche\\/position\\/play\\/new\\/get|mine\\/applet\\/redpoint)"
     location: "http://reject-dict/"
 
 scriptings:
   - http_response:
       name: "netease.clean"
-      match: "^https?:\\/\\/(?:interface\\d*\\.music\\.163\\.com|music\\.163\\.com)\\/e?api\\/(?:batch|ad\\/|sp\\/loading|homepage\\/|sidebar|music-main-sidebar|entrance|resource\\/exposure|v\\d+\\/user\\/detail|v\\d+\\/banner\\/get|v\\d+\\/discovery\\/|search\\/(?:hot|default)|v\\d+\\/resource\\/comments|comment\\/)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/netease/js/netease_clean.js?v=20261123-2"
+      match: "^https?:\\/\\/(?:ipv4|interface\\d*|music)\\.music\\.163\\.com\\/[xw]?e?api\\/(?:batch|ad\\/|sp\\/loading|homepage\\/block\\/page|link\\/(?:home\\/framework\\/tab|page\\/(?:rcmd\\/(?:resource\\/show|block\\/resource\\/multi\\/refresh)|discovery\\/resource\\/show)|position\\/show\\/resource)|vipnewcenter\\/app\\/resource\\/newaccountpage|side-?bar|music-main-sidebar|entrance|v\\d+\\/(?:banner\\/get|discovery\\/|resource\\/comment)|search\\/(?:hot|default)|comment\\/)"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/netease/js/netease_clean.js?v=20261124-1"
       body_required: true
+      binary_body: true
       max_size: 8388608
       timeout: 20
 
@@ -83,4 +118,9 @@ mitm:
     includes:
       - "interface.music.163.com"
       - "interface3.music.163.com"
+      - "interface4.music.163.com"
+      - "interface5.music.163.com"
+      - "interface6.music.163.com"
+      - "interface9.music.163.com"
+      - "ipv4.music.163.com"
       - "music.163.com"

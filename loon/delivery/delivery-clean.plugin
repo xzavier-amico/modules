@@ -1,5 +1,5 @@
 #!name=Shopping Clean
-#!desc=京东、淘宝、拼多多、美团、饿了么、菜鸟裹裹、丰巢去开屏、弹窗浮层与信息流竞价推广卡片。
+#!desc=京东、淘宝、菜鸟裹裹、丰巢、拼多多、美团、饿了么去开屏、弹窗浮层、素材 CDN 与信息流竞价推广卡片（阻断 HTTPDNS 绕过）。
 #!category=Shopping
 #!author=xzavier-amico
 #!homepage=https://github.com/xzavier-amico/modules
@@ -7,12 +7,13 @@
 #!tag=Shopping
 
 [Argument]
-block_ads = switch,true,type=boolean,tag=去购物与快递广告,desc=过滤京东、淘宝、拼多多、美团、饿了么、菜鸟裹裹、丰巢的开屏、取件页弹窗浮层与搜索/推荐流里的 CPC/CPM/P4P 竞价广告。
-clean_ui = switch,true,type=boolean,tag=精简金融与娱乐模块,desc=隐藏京东白条/金条/借钱、淘宝借钱/小游戏、拼多多多多视频/大转盘、菜鸟裹酱/果园/商品流等营销模块。
+block_ads = switch,true,type=boolean,tag=去购物与快递广告,desc=过滤京东、淘宝、菜鸟裹裹、丰巢、拼多多、美团、饿了么的开屏、弹窗浮层与搜索/推荐流里的 CPC/CPM/P4P 竞价广告。
+clean_ui = switch,true,type=boolean,tag=精简金融与娱乐模块,desc=隐藏京东大促/白条/金条/Plus 推广楼层、淘宝借钱/小游戏、拼多多多多视频/月卡入口、菜鸟裹酱/果园/非物流消息等营销模块。
 
 [Rule]
-# 阻止 QUIC (HTTP/3)，确保未开全局禁 QUIC 的客户端也能回退 HTTPS 走 MITM
+# 阻止 QUIC (HTTP/3)，确保回退 HTTPS 走 MITM
 AND, ((DOMAIN-SUFFIX, jd.com), (PROTOCOL, QUIC)), REJECT
+AND, ((DOMAIN-SUFFIX, 360buyimg.com), (PROTOCOL, QUIC)), REJECT
 AND, ((DOMAIN-SUFFIX, taobao.com), (PROTOCOL, QUIC)), REJECT
 AND, ((DOMAIN-SUFFIX, tmall.com), (PROTOCOL, QUIC)), REJECT
 AND, ((DOMAIN-SUFFIX, cainiao.com), (PROTOCOL, QUIC)), REJECT
@@ -20,8 +21,33 @@ AND, ((DOMAIN-SUFFIX, fcbox.com), (PROTOCOL, QUIC)), REJECT
 AND, ((DOMAIN-SUFFIX, pinduoduo.com), (PROTOCOL, QUIC)), REJECT
 AND, ((DOMAIN-SUFFIX, yangkeduo.com), (PROTOCOL, QUIC)), REJECT
 AND, ((DOMAIN-SUFFIX, meituan.com), (PROTOCOL, QUIC)), REJECT
+AND, ((DOMAIN-SUFFIX, meituan.net), (PROTOCOL, QUIC)), REJECT
 AND, ((DOMAIN-SUFFIX, sankuai.com), (PROTOCOL, QUIC)), REJECT
 AND, ((DOMAIN-SUFFIX, ele.me), (PROTOCOL, QUIC)), REJECT
+AND, ((DOMAIN-SUFFIX, elemecdn.com), (PROTOCOL, QUIC)), REJECT
+
+# ---------- HTTPDNS 阻断（防止大厂 App 拿 IP 直连绕过 MITM） ----------
+# 京东 HTTPDNS
+DOMAIN, dns.jd.com, REJECT
+IP-CIDR, 101.124.19.122/32, REJECT, no-resolve
+IP-CIDR6, 2402:db40:5100:1011::5/128, REJECT, no-resolve
+IP-CIDR, 103.224.222.208/32, REJECT, no-resolve
+# 阿里系 HTTPDNS（注意：不全域拒绝 amdc.m.taobao.com，仅脚本对菜鸟 UA 拦截以免误伤淘宝下单）
+DOMAIN, httpdns.alicdn.com, REJECT
+IP-CIDR, 203.107.1.0/24, REJECT, no-resolve
+# 美团 HTTPDNS
+DOMAIN, httpdns.meituan.com, REJECT
+DOMAIN, httpdnsmultiapi.meituan.com, REJECT
+DOMAIN, httpdnsmultiapivip.meituan.com, REJECT
+DOMAIN, dnspod.meituan.httpdns.qcloud.com, REJECT
+IP-CIDR, 202.90.108.13/32, REJECT, no-resolve
+IP-CIDR, 202.90.110.46/32, REJECT, no-resolve
+IP-CIDR, 103.37.155.60/32, REJECT, no-resolve
+# 拼多多 HTTPDNS
+IP-CIDR, 101.35.204.35/32, REJECT, no-resolve
+IP-CIDR, 101.35.212.35/32, REJECT, no-resolve
+IP-CIDR, 114.110.96.26/32, REJECT, no-resolve
+IP-CIDR, 114.110.97.97/32, REJECT, no-resolve
 
 # ---------- 京东广告与统计域名 ----------
 DOMAIN-SUFFIX, img-x.jd.com, REJECT
@@ -37,6 +63,12 @@ DOMAIN-SUFFIX, cc.m.jd.com, REJECT
 DOMAIN-SUFFIX, knicks.jd.com, REJECT
 DOMAIN-SUFFIX, mars.jd.com, REJECT
 DOMAIN-SUFFIX, orbit.jd.com, REJECT
+DOMAIN-SUFFIX, du.jd.com, REJECT
+DOMAIN-SUFFIX, jddebug.com, REJECT
+DOMAIN-SUFFIX, policy.jd.com, REJECT
+DOMAIN-SUFFIX, kepler.jd.com, REJECT
+DOMAIN-SUFFIX, keplerapi.jd.com, REJECT
+DOMAIN-SUFFIX, mapi.m.jd.com, REJECT
 DOMAIN, ad.3.cn, REJECT
 DOMAIN, cm.jd.com, REJECT
 DOMAIN, dgstatic.jd.com, REJECT
@@ -77,7 +109,9 @@ DOMAIN-SUFFIX, m-ad.pinduoduo.com, REJECT
 
 # ---------- 美团与饿了么广告与统计域名 ----------
 DOMAIN-SUFFIX, impdsp.meituan.com, REJECT
+DOMAIN-SUFFIX, mads.meituan.com, REJECT
 DOMAIN-SUFFIX, ad.e.waimai.sankuai.com, REJECT
+DOMAIN-SUFFIX, dreport.meituan.net, REJECT
 DOMAIN, ad.maoyan.com, REJECT
 DOMAIN, analytics.meituan.net, REJECT
 DOMAIN, flowplus.meituan.net, REJECT
@@ -90,39 +124,66 @@ DOMAIN, wmlog.meituan.com, REJECT
 DOMAIN-SUFFIX, adashx.ut.ele.me, REJECT
 DOMAIN-SUFFIX, h-adashx.ut.ele.me, REJECT
 DOMAIN-SUFFIX, v6-adashx.ut.ele.me, REJECT
+DOMAIN-SUFFIX, app-monitor.ele.me, REJECT
+DOMAIN-SUFFIX, client-api.ele.me, REJECT
+DOMAIN-SUFFIX, grand.ele.me, REJECT
+DOMAIN-SUFFIX, mobile-pubt.ele.me, REJECT
+DOMAIN-SUFFIX, newton-api.ele.me, REJECT
 DOMAIN, ad.ele.me, REJECT
 DOMAIN, log.ele.me, REJECT
 DOMAIN, newton.ele.me, REJECT
 DOMAIN, trace.ele.me, REJECT
 
 [Rewrite]
-# 京东开屏、促销楼层网关与浮层广告接口
-request if ${url} ~= /^https?:\/\/api\.m\.jd\.com\/(?:client\.action|api)\?.*functionId=(?:deliverLayer|popupConfig|adStart|getAdList|start|home_launchConfig)\b/ then reject_dict(200)
+# 京东：纯广告 functionId、促销网关与开屏/动图静态资源（start / deliverLayer 交由脚本精细处理）
+request if ${url} ~= /^https?:\/\/api\.m\.jd\.com\/(?:client\.action|api)\?.*functionId=(?:popupConfig|adStart|getAdList|home_launchConfig|searchBoxWord|xview2Config|stationPullService|getWidget|widget|jdDiscoveryRedPoint|queryMaterialAdverts|apollo_style|jdaPreDownload|uniformRecommend7)\b/ then reject_dict(200)
 request if ${url} ~= /^https?:\/\/homepage-gw\.jd\.com\/npromotion/ then reject_dict(200)
 request if ${url} ~= /^https?:\/\/api\.smart\.jd\.com\/c\/service\/getLoadingLinks\b/ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/storage\.360buyimg\.com\/(?:app\.m\.jd\.com\/lottie|occupy-home\/|xview|appcartsoa\/client\/cart_egg_entry)/ then reject(404)
+request if ${url} ~= /^https?:\/\/storage\.jd\.com\/ti-pythontask\/JD\/jdt_/ then reject(404)
 
-# 淘宝与菜鸟裹裹开屏、弹窗及纯广告 MTOP 接口
-request if ${url} ~= /^https?:\/\/(?:guide-acs|acs)\.m\.taobao\.com\/gw\/mtop\.(?:taobao\.baichuan\.smb\.get|taobao\.idle\.home\.welcome|alimama\.etao\.ad|taobao\.ad|cainiao\.adx|cainiao\.guoguo\.nbnetflow\.ads)\./ then reject_dict(200)
-request if ${url} ~= /^https?:\/\/(?:acs\.m|gw)\.cainiao\.com\/gw\/mtop\.cainiao\.(?:adx|ad|guoguo\.nbnetflow\.ads|nbmensa\.research)\./ then reject_dict(200)
+# 淘宝 / 天猫：纯广告与开屏接口（splash.awesome.get / cloudvideo / poplayer 交由脚本处理）
+request if ${url} ~= /^https?:\/\/acs\.m\.taobao\.com\/gw\/mtop\.(?:alibaba\.advertisementservice\.getadv|alimama\.etao\.config\.query\/.+?etao_advertise|alimusic\.common\.mobileservice\.startinit|etao\.noah\.query\/.+tao_splash|film\.mtopadvertiseapi\.queryadvertise|o2o\.ad\.gateway\.get|taobao\.idle\.home\.welcome|trip\.activity\.querytmsresources|taobao\.baichuan\.smb\.get|alimama\.etao\.ad|taobao\.ad)/ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/guide-acs\.m\.taobao\.com\/gw\/mtop\.taobao\.volvo\.secondfloor\.getconfig/ then reject_dict(200)
 
-# 丰巢开屏、取件弹窗与横幅广告接口
-request if ${url} ~= /^https?:\/\/(?:app|wx|api|m)\.fcbox\.com\/.*\/(?:ad|ads|advert|splash|openScreen|popup|marketing)(?:\/|[?]|$)/ then reject_dict(200)
+# 菜鸟裹裹：真实主网关 cn-acs.m.cainiao.com 与 netflow-mtop.cainiao.com 纯广告接口
+request if ${url} ~= /^https?:\/\/(?:cn-acs|acs)\.m\.cainiao\.com\/gw\/mtop\.(?:cainiao\.(?:adkeyword\.get|adx|ad\.|cncommunity\.my\.station\.query|guoguo\.nbnetflow\.ads\.(?:batch\.show\.v2|index)|nbopen\.miniapp\.recommend|nbmensa\.research\.researchservice\.(?:acquire|event|close)|nbpresentation\.(?:homepage\.merge|tabbar\.marketing)\.get)|com\.cainiao\.(?:cnactivitycenter|cncreditmarket\.hit\.getactivityhit|longquan\.place\.getpageresourcecontent))/ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/(?:guide-acs\.m\.taobao\.com|netflow-mtop\.cainiao\.com)\/gw\/mtop\.cainiao\.(?:adx\.flyad\.getad|guoguo\.nbnetflow\.ads)/ then reject_dict(200)
 
-# 拼多多开屏与弹窗接口
-request if ${url} ~= /^https?:\/\/api\.(?:pinduoduo|yangkeduo)\.com\/api\/(?:oak\/integration\/render|carnival\/image_list|cappuccino\/splash)/ then reject_dict(200)
+# 丰巢：开屏、取件弹窗与横幅广告接口（覆盖 consumer.fcbox.com）
+request if ${url} ~= /^https?:\/\/(?:consumer|app|wx|api|m)\.fcbox\.com\/.*\/(?:ad|ads|advert|splash|openScreen|popup|marketing)(?:\/|[?]|$)/ then reject_dict(200)
 
-# 美团与饿了么纯广告及开屏接口
+# 拼多多：开屏与全局弹窗（oak/integration/render 交由脚本剥离底部推广，避免整页拒掉）
+request if ${url} ~= /^https?:\/\/api\.(?:pinduoduo|yangkeduo)\.com\/api\/(?:cappuccino\/splash|carnival\/image_list|aquarius\/hungary\/global\/(?:app_popup|homepage)|flow\/hungary\/window\/global|zaire_biz\/chat\/resource\/get_list_data|brand-olay\/goods_detail\/bybt_guide|pdd_live_moore_main_lego)/ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/api\.pinduoduo\.com\/search_hotquery\b/ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/mobile\.yangkeduo\.com\/layer\/app_upgrade_popup/ then reject(404)
+
+# 美团 / 美团外卖：开屏、弹窗接口与广告素材 CDN
 request if ${url} ~= /^https?:\/\/wmapi\.meituan\.com\/api\/v\d+\/(?:ad|loadInfo|startpicture|openscreen)(?:[/?]|$)/ then reject_dict(200)
-request if ${url} ~= /^https?:\/\/apimobile\.meituan\.com\/(?:group\/v\d+\/ad|abtest\/v\d+\/ad|appupdate\/legacy\/check)(?:[/?]|$)/ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/apimobile\.meituan\.com\/(?:group\/v\d+\/(?:ad|recommend\/unity\/recommends)|abtest\/v\d+\/ad|appupdate)/ then reject_dict(200)
 request if ${url} ~= /^https?:\/\/mapi\.meituan\.com\/(?:launch\/v\d+\/ad|v\d+\/ad)(?:[/?]|$)/ then reject_dict(200)
 request if ${url} ~= /^https?:\/\/rms\.meituan\.com\/diancan\/api\/queryAdBoard/ then reject_dict(200)
-request if ${url} ~= /^https?:\/\/s3plus\.meituan\.net\/v1\/mss_[^/]+\/linglong\// then reject(404)
+request if ${url} ~= /^https?:\/\/portal-portm\.meituan\.com\/horn_ios/ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/sqt\.meituan\.com\/s\/gateway\/mweb\/api\/marketingResource\/show/ then reject(404)
+request if ${url} ~= /^https?:\/\/(?:s3plus|flowplus)\.meituan\.net\/v\d+\/[^/]+\/(?:linglong\/|brandcpt|waimai-alita\/|goku\/(?:lottie|lucency))/ then reject_img(200)
+request if ${url} ~= /^https?:\/\/img\.meituan\.net\/(?:adunion|display|midas|bizad|goodsawardpic)\// then reject_img(200)
+request if ${url} ~= /^https?:\/\/p\d+\.meituan\.net\/(?:display|mmc|cell)\// then reject_img(200)
+request if ${url} ~= /^https?:\/\/w\.meituan\.net\/v\d+\/mss_\w+\/waimai-mach\/\d+\/\d+\/pt-im-(?:guider|coupon-card-stateful)/ then reject(404)
+
+# 饿了么：AMDC 调度、广告接口与开屏图片/视频 CDN
+request if ${url} ~= /^https?:\/\/amdc\.m\.ele\.me\/amdc\/mobileDispatch/ then reject_dict(200)
 request if ${url} ~= /^https?:\/\/waimai-guide\.ele\.me\/h5\/mtop\.alsc\.waimai\.ad\./ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/g\.alicdn\.com\/TBTakeout\/et-store\/[\d.]+\/weex\/store-brand-popup/ then reject_dict(200)
+request if ${url} ~= /^https?:\/\/nr-op\.elemecdn\.com\/eleme\/transformer\/templates\/\w_eleme_home_yolo_popup/ then reject(404)
+request if ${url} ~= /^https?:\/\/(?:fuss10|cube|nr-op)\.elemecdn\.com\/.+\.(?:jpeg|jpg)\?x-oss-process=image\/resize,m_fill,w_\d{3,4},h_\d{3,4}\// then reject(404)
+request if ${url} ~= /^https?:\/\/(?:fuss10|cube)\.elemecdn\.com\/.*(?:\.mp4\?|\/w\/(?:640|750)\/h\/\d{3,4})/ then reject(404)
 
 [Script]
-# 兼容京东 POST body 传 functionId、淘宝/菜鸟 MTOP、丰巢、拼多多、美团及饿了么
-response if ${url} ~= /^https?:\/\/(?:api\.m\.jd\.com\/(?:client\.action|api)|(?:guide-acs|trade-acs|acs)\.m\.taobao\.com\/gw\/mtop\.|(?:acs\.m|gw)\.cainiao\.com\/gw\/mtop\.|(?:app|wx|api|m)\.fcbox\.com\/|api\.(?:pinduoduo|yangkeduo)\.com\/(?:api\/|search|v\d+\/)|(?:wmapi|apimobile|mapi|i)\.meituan\.com\/|wx\.waimai\.meituan\.com\/weapp\/|(?:waimai-guide|client-api|newton-api)\.ele\.me\/)/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/delivery/js/delivery_clean.js?v=20261123-3", {${block_ads}, ${clean_ui}}) with requires_body=true, tag="Shopping Clean", timeout=20
+# 仅针对菜鸟 UA 阻断 amdc.m.taobao.com 调度，避免影响淘宝主站
+request if ${url} ~= /^https?:\/\/amdc\.m\.taobao\.com\/amdc\/mobileDispatch$/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/delivery/js/delivery_clean.js?v=20261124-1", {${block_ads}, ${clean_ui}}) with tag="Shopping Clean AMDC", timeout=10
+# 响应清洗（京东、淘宝/poplayer、菜鸟 cn-acs、丰巢 consumer、拼多多、美团、饿了么）
+response if ${url} ~= /^https?:\/\/(?:api\.m\.jd\.com\/(?:client\.action|api)|(?:guide-acs|trade-acs|acs)\.m\.taobao\.com\/gw\/mtop\.|poplayer\.template\.alibaba\.com\/\w+\.json|(?:cn-acs|acs)\.m\.cainiao\.com\/gw\/mtop\.|netflow-mtop\.cainiao\.com\/gw\/mtop\.|(?:consumer|app|wx|api|m)\.fcbox\.com\/|api\.(?:pinduoduo|yangkeduo)\.com\/(?:api\/|search|v\d+\/)|(?:wmapi|apimobile|mapi|i)\.meituan\.com\/|wx\.waimai\.meituan\.com\/(?:weapp|api\/miniprogram)\/|waimai-guide\.ele\.me\/)/ then script("https://raw.githubusercontent.com/xzavier-amico/modules/master/loon/delivery/js/delivery_clean.js?v=20261124-1", {${block_ads}, ${clean_ui}}) with requires_body=true, tag="Shopping Clean", timeout=20
 
 [MitM]
-hostname = api.m.jd.com, api.smart.jd.com, homepage-gw.jd.com, guide-acs.m.taobao.com, trade-acs.m.taobao.com, acs.m.taobao.com, acs.m.cainiao.com, gw.cainiao.com, app.fcbox.com, wx.fcbox.com, api.fcbox.com, m.fcbox.com, api.pinduoduo.com, api.yangkeduo.com, wmapi.meituan.com, apimobile.meituan.com, mapi.meituan.com, i.meituan.com, rms.meituan.com, wx.waimai.meituan.com, s3plus.meituan.net, waimai-guide.ele.me, client-api.ele.me, newton-api.ele.me
+hostname = api.m.jd.com, api.smart.jd.com, homepage-gw.jd.com, storage.360buyimg.com, storage.jd.com, amdc.m.taobao.com, guide-acs.m.taobao.com, trade-acs.m.taobao.com, acs.m.taobao.com, poplayer.template.alibaba.com, cn-acs.m.cainiao.com, acs.m.cainiao.com, netflow-mtop.cainiao.com, consumer.fcbox.com, app.fcbox.com, wx.fcbox.com, api.fcbox.com, m.fcbox.com, api.pinduoduo.com, api.yangkeduo.com, mobile.yangkeduo.com, wmapi.meituan.com, apimobile.meituan.com, mapi.meituan.com, i.meituan.com, rms.meituan.com, wx.waimai.meituan.com, portal-portm.meituan.com, sqt.meituan.com, img.meituan.net, p0.meituan.net, p1.meituan.net, s3plus.meituan.net, flowplus.meituan.net, w.meituan.net, amdc.m.ele.me, waimai-guide.ele.me, g.alicdn.com, elemecdn.com, fuss10.elemecdn.com, cube.elemecdn.com, nr-op.elemecdn.com
 h2 = true

@@ -1,13 +1,21 @@
 #!name=NetEase Music Clean
-#!desc=网易云音乐去开屏、首页横幅广告、左滑抽屉（商城/云村有票/云推歌）、搜索买榜词与评论区推广。
+#!desc=网易云音乐去开屏、首页横幅广告、左滑抽屉（商城/云村有票/云推歌）、发现页横幅、搜索买榜词与评论区推广（支持 EAPI AES 密文实时加解密）。
 #!author=xzavier-amico
 #!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/netease.png
 #!arguments=去广告:true, 净化侧栏与首页:true
-#!arguments-desc=去广告：拦截开屏素材 CDN，并过滤首页横幅、搜索热词与评论区里的商业广告。\n净化侧栏与首页：移除左滑菜单里的商城、云村有票、云推歌、彩铃、游戏、免费听歌，以及首页发现流里的直播与语音房模块。
+#!arguments-desc=去广告：拦截开屏素材 CDN 与广告接口，解密 EAPI 响应并过滤首页横幅、发现页广告、搜索热词与评论区商业广告。\n净化侧栏与首页：移除左滑菜单里的商城、云村有票、云推歌、彩铃、游戏、VIP 轮播，以及首页/发现流里的直播与语音房模块。
 
 [Rule]
 AND,((DOMAIN-SUFFIX,163.com),(PROTOCOL,QUIC)),REJECT
 AND,((DOMAIN-SUFFIX,126.net),(PROTOCOL,QUIC)),REJECT
+DOMAIN,httpdns.n.netease.com,REJECT
+DOMAIN,httpdns-sdk.n.netease.com,REJECT
+DOMAIN,httpdns.music.163.com,REJECT
+DOMAIN,music.httpdns.c.163.com,REJECT
+IP-CIDR,59.111.239.61/32,REJECT,no-resolve
+IP-CIDR,59.111.239.62/32,REJECT,no-resolve
+IP-CIDR,115.236.121.51/32,REJECT,no-resolve
+IP-CIDR,115.236.121.195/32,REJECT,no-resolve
 DOMAIN,admusicpic.music.126.net,REJECT
 DOMAIN,g1.163.com,REJECT
 DOMAIN,iadmat.nosdn.127.net,REJECT
@@ -19,11 +27,14 @@ DOMAIN,yt-adp.nosdn.127.net,REJECT
 DOMAIN,yt-adp.ws.126.net,REJECT
 
 [URL Rewrite]
-^https?:\/\/interface\d*\.music\.163\.com\/e?api\/(?:ad|sp\/loading\/ad|v1\/ad)\/ reject-dict
+^https?:\/\/(?:ipv4|interface\d*)\.music\.163\.com\/[xw]?e?api\/(?:ad\/|sp\/loading\/ad\/|sp\/flow\/popup\/query|v\d+\/ad\/|mlog\/) reject-dict
+^https?:\/\/(?:ipv4|interface\d*)\.music\.163\.com\/[xw]?e?api\/(?:side-bar\/mini-program\/music-service\/account|delivery\/(?:batch-deliver|deliver)|yunbei\/account\/entrance\/get|vipmall\/couponcfg\/get|vipcenter\/tspopup\/get|vip\/cashier\/tspopup\/get|creator\/musician\/reminder\/message\/get) reject-dict
+^https?:\/\/(?:ipv4|interface\d*)\.music\.163\.com\/[xw]?e?api\/(?:search\/(?:chart|default|rcmd\/keyword|specialkeyword)|resource-exposure\/|activity\/bonus\/playpage\/time\/query|content\/activity\/music\/jar\/template\/list) reject-dict
+^https?:\/\/(?:ipv4|interface\d*)\.music\.163\.com\/[xw]?e?api\/(?:comment\/feed\/inserted|v\d+\/content\/exposure\/comment\/banner|mlivestream\/entrance\/playpage|link\/(?:position\/show\/strategy|scene\/show)|tips\/v\d+\/get|resniche\/position\/play\/new\/get|mine\/applet\/redpoint) reject-dict
 
 [Script]
-netease.clean = type=http-response,pattern=^https?:\/\/(?:interface\d*\.music\.163\.com|music\.163\.com)\/e?api\/(?:batch|ad\/|sp\/loading|homepage\/|sidebar|music-main-sidebar|entrance|resource\/exposure|v\d+\/user\/detail|v\d+\/banner\/get|v\d+\/discovery\/|search\/(?:hot|default)|v\d+\/resource\/comments|comment\/),requires-body=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/netease/js/netease_clean.js?v=20261123-2,argument="{"block_ads":{{{去广告}}},"clean_ui":{{{净化侧栏与首页}}}}"
+netease.clean = type=http-response,pattern=^https?:\/\/(?:ipv4|interface\d*|music)\.music\.163\.com\/[xw]?e?api\/(?:batch|ad\/|sp\/loading|homepage\/block\/page|link\/(?:home\/framework\/tab|page\/(?:rcmd\/(?:resource\/show|block\/resource\/multi\/refresh)|discovery\/resource\/show)|position\/show\/resource)|vipnewcenter\/app\/resource\/newaccountpage|side-?bar|music-main-sidebar|entrance|v\d+\/(?:banner\/get|discovery\/|resource\/comment)|search\/(?:hot|default)|comment\/),requires-body=1,binary-body-mode=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/netease/js/netease_clean.js?v=20261124-1,argument="{"block_ads":{{{去广告}}},"clean_ui":{{{净化侧栏与首页}}}}"
 
 [MITM]
-hostname = %APPEND% interface.music.163.com, interface3.music.163.com, music.163.com
+hostname = %APPEND% interface.music.163.com, interface3.music.163.com, interface4.music.163.com, interface5.music.163.com, interface6.music.163.com, interface9.music.163.com, ipv4.music.163.com, music.163.com
 h2 = true

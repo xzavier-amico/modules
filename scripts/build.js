@@ -162,25 +162,26 @@ const TARGETS = [
   {
     module: "delivery",
     file: "delivery_clean.js",
-    title: "Shopping Clean — 京东 / 淘宝 / 拼多多 / 美团 / 饿了么 JSON 清理",
+    title: "Shopping Clean — 京东 / 淘宝 / 菜鸟 / 丰巢 / 拼多多 / 美团 / 饿了么清理",
     standalone: "delivery_clean.js",
   },
   {
     module: "weibo",
     file: "weibo_clean.js",
-    title: "Weibo Clean — 微博开屏 / 时间线 / 评论 / 热搜广告清理",
+    title: "Weibo Clean — 微博开屏 / 时间线 / 评论 / 热搜 / 我的页清理",
     standalone: "weibo_clean.js",
   },
   {
     module: "zhihu",
     file: "zhihu_clean.js",
-    title: "Zhihu Clean — 知乎开屏 / 推荐流 / 回答 / 评论广告清理",
+    title: "Zhihu Clean — 知乎开屏 / 推荐流 / 回答 / 评论 / 配置清理",
     standalone: "zhihu_clean.js",
   },
   {
     module: "netease",
     file: "netease_clean.js",
-    title: "NetEase Music Clean — 网易云音乐开屏 / 首页横幅 / 搜索 / 评论广告清理",
+    binary: true,
+    title: "NetEase Music Clean — 网易云音乐 EAPI 解密 / 首页 / 侧栏 / 搜索 / 评论清理",
     standalone: "netease_clean.js",
   },
   {
