@@ -2,8 +2,8 @@
 #!desc=去广告、去会员推广、去遥测、精简界面，播放请求自动要最高画质。JSON 与 gRPC 都改，不碰视频流。模块已开启 h2 MITM；如客户端 MITM 设置里有 HTTP/2 开关请保持开启，否则 B 站加载会明显变慢。
 #!author=xzavier-amico
 #!icon=https://raw.githubusercontent.com/xzavier-amico/modules/master/icon/bilibili.png
-#!arguments=去广告:true, 去会员推广:true, 精简界面:true, 自动最高画质:true, 支持网页版:true
-#!arguments-desc=去广告：删除开屏、首页推荐、搜索、番剧页、直播推荐、番剧弹窗、详情页、评论区和暂停广告。\n去会员推广：删除番剧页 payment 块、大会员广告素材和 VIP 卡片。\n精简界面：删除底部「发布」+「会员购」、顶部「游戏中心」，以及「我的」页的「我的服务」分区。\n自动最高画质：把 playurl 的 qn 改成 120（4K），服务端按账号权限返回实际最高档。\n支持网页版：同时处理 B 站网页版的推荐、搜索、相关推荐、详情、动态、番剧和直播接口。
+#!arguments=去广告:true, 去会员推广:true, 精简界面:true, 自动最高画质:4k, 支持网页版:true
+#!arguments-desc=去广告：删除开屏、首页推荐、搜索、评论区、番剧页、直播推荐、番剧弹窗、详情页和暂停广告。\n去会员推广：删除番剧页 payment 块、大会员广告素材和 VIP 卡片。\n精简界面：删除底部「发布」+「会员购」、顶部「游戏中心」，以及「我的」页的「我的服务」分区。\n自动最高画质：可选 4k（默认）/ 8k / dolby / hdr / 1080p60 / 1080p+ / 1080p / off，按档位改写 playurl 的 qn / fourk / fnval。\n支持网页版：同时处理 B 站网页版的推荐、搜索、相关推荐、详情、评论、动态、番剧和直播接口。
 
 [Rule]
 # 遥测与广告
@@ -11,23 +11,31 @@ DOMAIN,data.bilibili.com,REJECT
 DOMAIN,cm.bilibili.com,REJECT
 DOMAIN,adtrack.qianwen.com,REJECT
 DOMAIN,tkio-redirect.solar-engine.com,REJECT
+# 拦截视频 HTTPDNS 调度，避免绕过代理直连 IP
+DOMAIN,httpdns.bilivideo.com,REJECT
 # 拒绝 QUIC，强制回落 TCP。gRPC / playurl 走 HTTP/3 时脚本拿不到响应。
 AND,((DOMAIN-SUFFIX,bilibili.com),(PROTOCOL,QUIC)),REJECT
 AND,((DOMAIN-SUFFIX,biliapi.net),(PROTOCOL,QUIC)),REJECT
+AND,((DOMAIN-SUFFIX,biliapi.com),(PROTOCOL,QUIC)),REJECT
 
 [URL Rewrite]
 # 点击埋点
 ^https?:\/\/api\.bilibili\.com\/x\/report\/click\/ reject
 
+[Header Rewrite]
+# 删除开屏 / 首页推荐的条件缓存头，避免 304 复用旧广告配置
+http-request ^https?:\/\/(?:api|app)\.bili(?:bili\.com|api\.net)\/x\/v2\/(?:splash\/|feed\/index) header-del if-none-match
+http-request ^https?:\/\/(?:api|app)\.bili(?:bili\.com|api\.net)\/x\/v2\/(?:splash\/|feed\/index) header-del if-modified-since
+
 [Script]
-bilibili.enhance = type=http-response,pattern=^https?:\/\/(?:app\.bilibili\.com|app\.biliapi\.net|api\.bilibili\.com|api\.live\.bilibili\.com)\/(?:x\/v2\/splash\/|x\/v2\/feed\/index|x\/v2\/search\/square|x\/web-interface\/(?:view|archive\/related|wbi\/(?:index\/top\/feed\/rcmd|search\/(?:type|square)|view\/detail))|x\/polymer\/web-dynamic\/v1\/feed\/all|x\/vip\/ads\/materials|pgc\/view\/(?:v2\/app|web)\/season|pgc\/page\/|pgc\/activity\/deliver\/material\/receive|x\/resource\/show\/tab|x\/v2\/account\/mine|xlive\/(?:app-interface\/v2\/(?:index\/feed|room\/recList)|(?:app|web)-room\/v1\/index\/getInfoByRoom|web-interface\/v1\/index\/getList)),requires-body=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/bilibili/js/bilibili_clean.js?v=20261123-1,argument="{"block_ads":{{{去广告}}},"hide_vip":{{{去会员推广}}},"clean_ui":{{{精简界面}}},"web":{{{支持网页版}}}}"
-bilibili.quality = type=http-request,pattern=^https?:\/\/(?:api\.bilibili\.com|app\.bilibili\.com|app\.biliapi\.net)\/(?:x|pgc)\/.*playurl,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/bilibili/js/bilibili_quality.js?v=20261123-1,argument="{"auto_quality":{{{自动最高画质}}},"web":{{{支持网页版}}}}"
+bilibili.enhance = type=http-response,pattern=^https?:\/\/(?:(?:app|api)\.bili(?:bili\.com|api\.net)|api\.live\.bilibili\.com)\/(?:x\/v2\/(?:splash\/|feed\/index|search\/square|reply\/(?:wbi\/)?main|account\/mine)|x\/web-interface\/(?:view|archive\/related|wbi\/(?:index\/top\/feed\/rcmd|search\/(?:type|square)|view\/detail))|x\/polymer\/web-dynamic\/v1\/feed\/all|x\/vip\/ads\/materials|pgc\/view\/(?:v2\/app|web)\/season|pgc\/page\/|pgc\/activity\/deliver\/material\/receive|x\/resource\/show\/tab|xlive\/(?:app-interface\/v2\/(?:index\/feed|room\/recList)|(?:app|web)-room\/v1\/index\/getInfoByRoom|web-interface\/v1\/index\/getList)),requires-body=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/bilibili/js/bilibili_clean.js?v=20261124-1,argument="{"block_ads":{{{去广告}}},"hide_vip":{{{去会员推广}}},"clean_ui":{{{精简界面}}},"web":{{{支持网页版}}}}"
+bilibili.quality = type=http-request,pattern=^https?:\/\/(?:api|app)\.bili(?:bili\.com|api\.net)\/(?:x|pgc)\/.*playurl,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/bilibili/js/bilibili_quality.js?v=20261124-1,argument="{"auto_quality":"{{{自动最高画质}}}","web":{{{支持网页版}}}}"
 # gRPC 的播放请求体里也有 qn，改完再放行。
-bilibili.quality.grpc = type=http-request,pattern=^https?:\/\/(?:app|grpc)\.bili(?:bili\.com|api\.net)\/bilibili\.(?:app\.playurl\.v1\.PlayURL|pgc\.gateway\.player\.v2\.PlayURL|app\.playerunite\.v1\.Player)\/(?:PlayView|PlayViewUnite)$,requires-body=1,binary-body-mode=1,max-size=1048576,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/bilibili/js/bilibili_quality.js?v=20261123-1,argument="{"auto_quality":{{{自动最高画质}}},"web":{{{支持网页版}}}}"
+bilibili.quality.grpc = type=http-request,pattern=^https?:\/\/(?:app|grpc)\.bili(?:bili\.com|api\.net)\/bilibili\.(?:app\.playurl\.v1\.PlayURL|pgc\.gateway\.player\.v2\.PlayURL|app\.playerunite\.v1\.Player)\/(?:PlayView|PlayViewUnite)$,requires-body=1,binary-body-mode=1,max-size=1048576,timeout=10,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/bilibili/js/bilibili_quality.js?v=20261124-1,argument="{"auto_quality":"{{{自动最高画质}}}","web":{{{支持网页版}}}}"
 # 详情页 / 评论区 / 播放器 / 动态 / 搜索走 gRPC（protobuf over HTTP/2），需要二进制 body。
-bilibili.grpc = type=http-response,pattern=^https?:\/\/(?:grpc\.biliapi\.net|grpc\.bilibili\.com|app\.biliapi\.net|app\.bilibili\.com)\/bilibili\.(?:app\.(?:view\.v1\.View\/(?:View|RelatesFeed|PlayerRelates|ViewProgress|TFInfo)|viewunite\.v1\.View\/(?:View|AIRelateAsync|RelatesFeed|ViewProgress|PlayPause|ViewEndPage)|dynamic\.v2\.Dynamic\/(?:DynAll|DynVideo|DynAllPersonal|DynVideoPersonal))|main\.community\.reply\.v1\.Reply\/MainList|polymer\.app\.search\.v1\.Search\/SearchAll)$,requires-body=1,binary-body-mode=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/bilibili/js/bilibili_grpc.js?v=20261123-1,argument="{"block_ads":{{{去广告}}},"hide_vip":{{{去会员推广}}}}"
+bilibili.grpc = type=http-response,pattern=^https?:\/\/(?:grpc\.biliapi\.net|grpc\.bilibili\.com|app\.biliapi\.net|app\.bilibili\.com)\/bilibili\.(?:app\.(?:view\.v1\.View\/(?:View|RelatesFeed|PlayerRelates|ViewProgress|TFInfo)|viewunite\.v1\.View\/(?:View|AIRelateAsync|RelatesFeed|ViewProgress|PlayPause|ViewEndPage)|dynamic\.v2\.Dynamic\/(?:DynAll|DynVideo|DynAllPersonal|DynVideoPersonal))|main\.community\.reply\.v1\.Reply\/MainList|polymer\.app\.search\.v1\.Search\/SearchAll)$,requires-body=1,binary-body-mode=1,max-size=8388608,timeout=20,script-path=https://raw.githubusercontent.com/xzavier-amico/modules/master/shadowrocket/bilibili/js/bilibili_grpc.js?v=20261124-1,argument="{"block_ads":{{{去广告}}},"hide_vip":{{{去会员推广}}}}"
 
 [MITM]
-hostname = %APPEND% app.bilibili.com, api.bilibili.com, api.live.bilibili.com, app.biliapi.net, grpc.biliapi.net, grpc.bilibili.com
+hostname = %APPEND% app.bilibili.com, api.bilibili.com, api.biliapi.net, api.live.bilibili.com, app.biliapi.net, grpc.biliapi.net, grpc.bilibili.com
 # B 站接口强制 HTTP/2，不开 h2 MITM 时并发请求处理会变慢（详情页 / 评论区 / 播放加载）。
 h2 = true

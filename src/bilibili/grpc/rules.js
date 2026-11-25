@@ -90,6 +90,10 @@
     asciiBytes("b23.tv/cm"),
     asciiBytes("b23.tv/mall"),
     asciiBytes("cm.bilibili.com/ad-showcase-h5"),
+    asciiBytes("gaoneng.bilibili.com"),
+    asciiBytes("huahuo.bilibili.com"),
+    asciiBytes("mall.bilibili.com"),
+    asciiBytes("ad.bilibili.com"),
   ];
 
   function commercialReply(b, s, e) {

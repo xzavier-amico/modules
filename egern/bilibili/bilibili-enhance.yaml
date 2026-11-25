@@ -56,13 +56,13 @@ env_schema:
     default_value: "true"
     options: ["true", "false"]
   auto_quality:
-    name: "自动最高画质"
-    description: "把 playurl 请求的 qn 改成 120（4K），服务端按账号权限返回实际最高档"
-    default_value: "true"
-    options: ["true", "false"]
+    name: "默认最高画质"
+    description: "按所选画质档位改写 playurl 的 qn / fourk / fnval；off 为保持客户端默认"
+    default_value: "4k"
+    options: ["4k", "8k", "dolby", "hdr", "1080p60", "1080p+", "1080p", "off"]
   web:
     name: "支持网页版"
-    description: "同时处理 B 站网页版的推荐、搜索、相关推荐、详情、动态、番剧和直播接口"
+    description: "同时处理 B 站网页版的推荐、搜索、相关推荐、详情、评论、动态、番剧和直播接口"
     default_value: "true"
     options: ["true", "false"]
 
@@ -80,6 +80,10 @@ rules:
   - domain:
       match: "tkio-redirect.solar-engine.com"
       policy: REJECT
+  # 拦截视频 HTTPDNS 调度，避免绕过代理直连 IP
+  - domain:
+      match: "httpdns.bilivideo.com"
+      policy: REJECT
   # 拒绝 QUIC，强制回落 TCP。gRPC / playurl 走 HTTP/3 时脚本拿不到响应。
   - and:
       match:
@@ -95,32 +99,50 @@ rules:
         - protocol:
             match: quic
       policy: REJECT
+  - and:
+      match:
+        - domain_suffix:
+            match: "biliapi.com"
+        - protocol:
+            match: quic
+      policy: REJECT
 
 url_rewrites:
   # 点击埋点
   - match: "^https?:\\/\\/api\\.bilibili\\.com\\/x\\/report\\/click\\/"
     location: "http://reject/"
 
+header_rewrites:
+  # 删除开屏 / 首页推荐的条件缓存头，避免 304 复用旧广告配置
+  - delete:
+      match: "^https?:\\/\\/(?:api|app)\\.bili(?:bili\\.com|api\\.net)\\/x\\/v2\\/(?:splash\\/|feed\\/index)"
+      name: "if-none-match"
+      type: "request"
+  - delete:
+      match: "^https?:\\/\\/(?:api|app)\\.bili(?:bili\\.com|api\\.net)\\/x\\/v2\\/(?:splash\\/|feed\\/index)"
+      name: "if-modified-since"
+      type: "request"
+
 scriptings:
   - http_response:
       name: "bilibili.enhance"
-      match: "^https?:\\/\\/(?:app\\.bilibili\\.com|app\\.biliapi\\.net|api\\.bilibili\\.com|api\\.live\\.bilibili\\.com)\\/(?:x\\/v2\\/splash\\/|x\\/v2\\/feed\\/index|x\\/v2\\/search\\/square|x\\/web-interface\\/(?:view|archive\\/related|wbi\\/(?:index\\/top\\/feed\\/rcmd|search\\/(?:type|square)|view\\/detail))|x\\/polymer\\/web-dynamic\\/v1\\/feed\\/all|x\\/vip\\/ads\\/materials|pgc\\/view\\/(?:v2\\/app|web)\\/season|pgc\\/page\\/|pgc\\/activity\\/deliver\\/material\\/receive|x\\/resource\\/show\\/tab|x\\/v2\\/account\\/mine|xlive\\/(?:app-interface\\/v2\\/(?:index\\/feed|room\\/recList)|(?:app|web)-room\\/v1\\/index\\/getInfoByRoom|web-interface\\/v1\\/index\\/getList))"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_clean.js?v=20261123-1"
+      match: "^https?:\\/\\/(?:(?:app|api)\\.bili(?:bili\\.com|api\\.net)|api\\.live\\.bilibili\\.com)\\/(?:x\\/v2\\/(?:splash\\/|feed\\/index|search\\/square|reply\\/(?:wbi\\/)?main|account\\/mine)|x\\/web-interface\\/(?:view|archive\\/related|wbi\\/(?:index\\/top\\/feed\\/rcmd|search\\/(?:type|square)|view\\/detail))|x\\/polymer\\/web-dynamic\\/v1\\/feed\\/all|x\\/vip\\/ads\\/materials|pgc\\/view\\/(?:v2\\/app|web)\\/season|pgc\\/page\\/|pgc\\/activity\\/deliver\\/material\\/receive|x\\/resource\\/show\\/tab|xlive\\/(?:app-interface\\/v2\\/(?:index\\/feed|room\\/recList)|(?:app|web)-room\\/v1\\/index\\/getInfoByRoom|web-interface\\/v1\\/index\\/getList))"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_clean.js?v=20261124-1"
       body_required: true
       max_size: 16777216
       timeout: 20
 
   - http_request:
       name: "bilibili.quality"
-      match: "^https?:\\/\\/(?:api\\.bilibili\\.com|app\\.bilibili\\.com|app\\.biliapi\\.net)\\/(?:x|pgc)\\/.*playurl"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_quality.js?v=20261123-1"
+      match: "^https?:\\/\\/(?:api|app)\\.bili(?:bili\\.com|api\\.net)\\/(?:x|pgc)\\/.*playurl"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_quality.js?v=20261124-1"
       timeout: 10
 
   # gRPC 的播放请求体里也有 qn，改完再放行。
   - http_request:
       name: "bilibili.quality.grpc"
       match: "^https?:\\/\\/(?:app|grpc)\\.bili(?:bili\\.com|api\\.net)\\/bilibili\\.(?:app\\.playurl\\.v1\\.PlayURL|pgc\\.gateway\\.player\\.v2\\.PlayURL|app\\.playerunite\\.v1\\.Player)\\/(?:PlayView|PlayViewUnite)$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_quality.js?v=20261123-1"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_quality.js?v=20261124-1"
       body_required: true
       binary_body: true
       max_size: 1048576
@@ -131,7 +153,7 @@ scriptings:
   - http_response:
       name: "bilibili.grpc"
       match: "^https?:\\/\\/(?:grpc\\.biliapi\\.net|grpc\\.bilibili\\.com|app\\.biliapi\\.net|app\\.bilibili\\.com)\\/bilibili\\.(?:app\\.(?:view\\.v1\\.View\\/(?:View|RelatesFeed|PlayerRelates|ViewProgress|TFInfo)|viewunite\\.v1\\.View\\/(?:View|AIRelateAsync|RelatesFeed|ViewProgress|PlayPause|ViewEndPage)|dynamic\\.v2\\.Dynamic\\/(?:DynAll|DynVideo|DynAllPersonal|DynVideoPersonal))|main\\.community\\.reply\\.v1\\.Reply\\/MainList|polymer\\.app\\.search\\.v1\\.Search\\/SearchAll)$"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_grpc.js?v=20261123-1"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/bilibili/js/bilibili_grpc.js?v=20261124-1"
       body_required: true
       binary_body: true
       max_size: 16777216
@@ -142,6 +164,7 @@ mitm:
     includes:
       - "app.bilibili.com"
       - "api.bilibili.com"
+      - "api.biliapi.net"
       - "api.live.bilibili.com"
       - "app.biliapi.net"
       - "grpc.biliapi.net"

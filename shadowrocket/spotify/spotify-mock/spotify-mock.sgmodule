@@ -23,32 +23,33 @@ AND,((DOMAIN-SUFFIX,spotify.com),(PROTOCOL,QUIC)),REJECT
 # 纯广告路径。桌面端和播放器核心会请求 /ads/*、/ad-logic/*、ad-on-app-open，
 # Premium 推广会请求 /premium-marketing/upsellOffer。
 # 不要拦 /social、gabo、pendragon：它们分别是好友动态、事件上报与消息服务。
-^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/ad- - reject
+^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/ad- - reject
 ^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?(?:\/ads\/|\/premium-marketing\/|[^?#]*\/ad-on-app-open) - reject
 
 # 账号状态与远程配置交给自建服务。显式捕获路径与查询串（含 /bootstrap/v3/bootstrap
 # 这类版本化路径），替换后原样拼回。Mock服务留空时替换成相对路径，等价于原请求；
 # 不部署服务不要启用模块。
-^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/bootstrap(\/.*)?(\?.*)?$ {{{Mock服务}}}/bootstrap$1$2 header
-^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/user-customization-service(\/.*)?(\?.*)?$ {{{Mock服务}}}/user-customization-service$1$2 header
+^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/bootstrap(\/.*)?(\?.*)?$ {{{Mock服务}}}/bootstrap$1$2 header
+^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/user-customization-service(\/.*)?(\?.*)?$ {{{Mock服务}}}/user-customization-service$1$2 header
 
 # 曲目元数据也交给服务端：请求体里的 etag 由服务端删，响应里的 has_lyrics 由服务端补。
-^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/extended-metadata(\/.*)?(\?.*)?$ {{{Mock服务}}}/extended-metadata$1$2 header
-^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/context-resolve(\/.*)?(\?.*)?$ {{{Mock服务}}}/context-resolve$1$2 header
-^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/connect-state(\/.*)?(\?.*)?$ {{{Mock服务}}}/connect-state$1$2 header
-^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/metadata\/4\/track(\/.*)?(\?.*)?$ {{{Mock服务}}}/metadata/4/track$1$2 header
+^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/extended-metadata(\/.*)?(\?.*)?$ {{{Mock服务}}}/extended-metadata$1$2 header
+^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/context-resolve(\/.*)?(\?.*)?$ {{{Mock服务}}}/context-resolve$1$2 header
+^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/connect-state(\/.*)?(\?.*)?$ {{{Mock服务}}}/connect-state$1$2 header
+^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/metadata\/4\/track(\/.*)?(\?.*)?$ {{{Mock服务}}}/metadata/4/track$1$2 header
 
 # 歌词：官方有歌词时清掉免费号的额度限制，没有歌词时由服务端用第三方歌词合成。
 # 客户端不加载脚本，304 / 校验头由服务端处理。
-^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/color-lyrics(\/.*)?(\?.*)?$ {{{Mock服务}}}/color-lyrics$1$2 header
+^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/color-lyrics(\/.*)?(\?.*)?$ {{{Mock服务}}}/color-lyrics$1$2 header
 
 # 首页 / 搜索页 / 滚动页的赞助内容由服务端改响应体删除；远程配置接口也要一起
 # 改写，否则 App 重新拉配置后会把广告开关重新打开。
-^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/casita(\/.*)?(\?.*)?$ {{{Mock服务}}}/casita$1$2 header
-^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/browsita(\/.*)?(\?.*)?$ {{{Mock服务}}}/browsita$1$2 header
-^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/scrollsita(\/.*)?(\?.*)?$ {{{Mock服务}}}/scrollsita$1$2 header
-^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/remote-config-resolver(\/.*)?(\?.*)?$ {{{Mock服务}}}/remote-config-resolver$1$2 header
-^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/nebula(\/.*)?(\?.*)?$ {{{Mock服务}}}/nebula$1$2 header
+^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/casita(\/.*)?(\?.*)?$ {{{Mock服务}}}/casita$1$2 header
+^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/browsita(\/.*)?(\?.*)?$ {{{Mock服务}}}/browsita$1$2 header
+^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/scrollsita(\/.*)?(\?.*)?$ {{{Mock服务}}}/scrollsita$1$2 header
+^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/remote-config-resolver(\/.*)?(\?.*)?$ {{{Mock服务}}}/remote-config-resolver$1$2 header
+^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/nebula(\/.*)?(\?.*)?$ {{{Mock服务}}}/nebula$1$2 header
 
 [MITM]
 hostname = %APPEND% *-spclient.spotify.com, spclient.wg.spotify.com
+h2 = true

@@ -185,6 +185,12 @@
   const PENDING_KEY = "spotify.lyrics.pending";
   // 歌词脚本自己的 deadline 是 4.5s；超过 10s 还没清掉就是脚本被杀了，按失效处理。
   const PENDING_TTL_MS = 10 * 1000;
+  // 官方有歌词的曲目记一笔：后续重开歌词页不再并发空跑第三方源，只在官方未命中时查询。
+  const OFFICIAL_HIT_KEY = "spotify.official.hits";
+  const OFFICIAL_HIT_MAX = 64;
+  const OFFICIAL_HIT_TTL_MS = 6 * 60 * 60 * 1000;
+  // 官方请求在路时允许它有 1.2s 的优先窗口，尽量不抢跑官方歌词。
+  const OFFICIAL_GRACE_MS = 1200;
 
   // Musixmatch：两跳要各给短超时，整条链路的总预算是 4.5s，token 慢就等于这一源
   // 白等。换到的匿名 token 大约 10 分钟有效，存起来省掉下一次往返；接口回非 200
@@ -266,6 +272,30 @@
   const markPending = () => {
     if (trackId) writeMark(PENDING_KEY, { id: trackId, at: Date.now() });
   };
+
+  function hasOfficialHit(id) {
+    if (!id) return false;
+    const map = readJsonMap(OFFICIAL_HIT_KEY);
+    const at = Number(map && map[id]);
+    return Number.isFinite(at) && at > 0 && Date.now() - at < OFFICIAL_HIT_TTL_MS;
+  }
+
+  function markOfficialHit(id) {
+    if (!id) return;
+    const map = readJsonMap(OFFICIAL_HIT_KEY) || {};
+    map[id] = Date.now();
+    const ids = Object.keys(map).sort((a, b) => Number(map[b] || 0) - Number(map[a] || 0));
+    for (const key of ids.slice(OFFICIAL_HIT_MAX)) delete map[key];
+    writeJsonMap(OFFICIAL_HIT_KEY, map);
+  }
+
+  function clearOfficialHit(id) {
+    if (!id) return;
+    const map = readJsonMap(OFFICIAL_HIT_KEY);
+    if (!map || !Object.prototype.hasOwnProperty.call(map, id)) return;
+    delete map[id];
+    writeJsonMap(OFFICIAL_HIT_KEY, map);
+  }
 
   function cachedTrackMeta(id) {
     const map = readJsonMap(TRACK_CACHE_KEY);
@@ -520,6 +550,7 @@
   let settled = false;
   let officialWon = false;
   let deadline;
+  let graceTimer;
   let plainTimer;
   let metaPollTimer;
   let plainFallback = null;
@@ -541,6 +572,7 @@
   const clearTimers = () => {
     if (typeof clearTimeout !== "function") return;
     if (deadline !== undefined) { clearTimeout(deadline); deadline = undefined; }
+    if (graceTimer !== undefined) { clearTimeout(graceTimer); graceTimer = undefined; }
     if (plainTimer !== undefined) { clearTimeout(plainTimer); plainTimer = undefined; }
     if (metaPollTimer !== undefined) { clearTimeout(metaPollTimer); metaPollTimer = undefined; }
   };
@@ -609,8 +641,9 @@
       // 没有曲名 / 歌手时要先请求 open.spotify.com，预取就没意义了：等元数据到了再说。
       const meta = cachedTrackMeta(target);
       if (!meta || !meta.title) return false;
-      rememberPrefetch(target);
-      // 闭包绑定当前预取的目标 key，避免并发预取时模块级变量互相覆盖导致串歌。
+      // 闭包绑定当前预取的目标 key，避免并发预取时模块级变量互相覆盖导致串歌；
+      // 只有命中歌词或网络确实给过答复后才写 prefetch 冷却标记，断网不误伤。
+      const netBefore = netAnswered;
       prefetching = true;
       trackId = target;
       cacheKey = targetCacheKey;
@@ -618,7 +651,8 @@
       plainFallbackPseudo = false;
       resolveLyrics((payload) => {
         if (payload) writeLyricsCache(targetCacheKey, payload);
-      });
+        if (payload || netAnswered > netBefore) rememberPrefetch(target);
+      }, target, targetCacheKey);
       return true;
     };
     return;
@@ -709,9 +743,12 @@
         officialHeaders[key] = requestHeaders[key];
       }
       const officialUrl = url;
+      const knownOfficial = hasOfficialHit(trackId);
       let officialDone = false;
       let officialMiss = null;
       let providersDone = false;
+      let providersStarted = false;
+      let syncedCandidate = null;
       const cleanOfficialHeaders = (source, body) => {
         const headers = {};
         if (source && "object" == typeof source) {
@@ -725,8 +762,15 @@
         headers["Content-Length"] = String(length);
         return headers;
       };
+      const emitThirdParty = (payload) => {
+        if (settled || officialWon || !payload) return;
+        writeLyricsCache(cacheKey, payload);
+        writeMark(MISS_KEY, null);
+        emit(payload);
+      };
       const winOfficial = (value) => {
         if (settled) return;
+        markOfficialHit(trackId);
         officialWon = true;
         settled = true;
         clearTimers();
@@ -734,11 +778,57 @@
         writeMark(MISS_KEY, null);
         $done({ response: { status: value.status, headers: cleanOfficialHeaders(value.headers, value.body), body: value.body } });
       };
+      const maybeFinishRace = () => {
+        if (settled || !officialDone) return;
+        if (syncedCandidate) {
+          emitThirdParty(syncedCandidate);
+          return;
+        }
+        if (!providersDone && !plainFallback) return;
+        if (plainFallback) {
+          emitThirdParty(plainFallback);
+        } else {
+          finish(officialMiss || {});
+        }
+      };
+      const startProviders = () => {
+        if (providersStarted || settled || officialWon) return;
+        providersStarted = true;
+        resolveLyrics((payload) => {
+          providersDone = true;
+          if (settled) {
+            // 官方歌词已胜出时绝不把晚到的第三方歌词写进缓存，避免下次播放覆盖官方歌词。
+            if (!officialWon && payload) writeLyricsCache(cacheKey, payload);
+            return;
+          }
+          const isPseudo = !!(payload && payload === plainFallback && plainFallbackPseudo);
+          if (payload && payload.lyrics.syncType === "LINE_SYNCED" && !isPseudo) {
+            // 官方刚回 404/未命中，或者环境无定时器，立刻发射第三方；
+            // 否则先留 OFFICIAL_GRACE_MS 给在路上的官方响应优先。
+            if (officialDone || typeof setTimeout !== "function") {
+              emitThirdParty(payload);
+              return;
+            }
+            syncedCandidate = payload;
+            if (graceTimer === undefined) {
+              graceTimer = setTimeout(() => {
+                graceTimer = undefined;
+                if (!settled && !officialWon && syncedCandidate) emitThirdParty(syncedCandidate);
+              }, OFFICIAL_GRACE_MS);
+            }
+            return;
+          }
+          if (payload) plainFallback = payload;
+          else markMiss();
+          maybeFinishRace();
+        });
+      };
       const finishOfficial = (error, response, data) => {
         if (settled) return;
         const code = Number(response && (response.status || response.statusCode));
         if (error || !response) {
           officialDone = true;
+          if (!providersStarted) startProviders();
           return maybeFinishRace();
         }
         // 登录失效、限流或服务端错误不伪装成歌词，原样透传清理后的官方响应。
@@ -773,26 +863,17 @@
             }
           }
         }
+        clearOfficialHit(trackId);
         officialDone = true;
         officialMiss = { status: code || 404, headers: cleanOfficialHeaders(response.headers, data), body: data };
+        if (!providersStarted) startProviders();
         maybeFinishRace();
-      };
-      const maybeFinishRace = () => {
-        if (settled || !officialDone || (!providersDone && !plainFallback)) return;
-        if (plainFallback) {
-          writeLyricsCache(cacheKey, plainFallback);
-          writeMark(MISS_KEY, null);
-          emit(plainFallback);
-        } else {
-          finish(officialMiss || {});
-        }
       };
       const raceDeadline = () => {
         if (settled) return;
-        if (plainFallback) {
-          writeLyricsCache(cacheKey, plainFallback);
-          writeMark(MISS_KEY, null);
-          emit(plainFallback);
+        const candidate = syncedCandidate || plainFallback;
+        if (candidate) {
+          emitThirdParty(candidate);
         } else if (officialDone && officialMiss) {
           finish(officialMiss);
         } else {
@@ -808,24 +889,7 @@
         officialDone = true;
       }
       if (settled) return;
-      resolveLyrics((payload) => {
-        providersDone = true;
-        if (settled) {
-          // 官方歌词已胜出时绝不把晚到的第三方歌词写进缓存，避免下次播放覆盖官方歌词。
-          if (!officialWon && payload) writeLyricsCache(cacheKey, payload);
-          return;
-        }
-        const isPseudo = !!(payload && payload === plainFallback && plainFallbackPseudo);
-        if (payload && payload.lyrics.syncType === "LINE_SYNCED" && !isPseudo) {
-          writeLyricsCache(cacheKey, payload);
-          writeMark(MISS_KEY, null);
-          emit(payload);
-          return;
-        }
-        if (payload) plainFallback = payload;
-        else markMiss();
-        maybeFinishRace();
-      });
+      if (!knownOfficial || officialDone) startProviders();
       return;
     }
     markPending();
@@ -855,11 +919,12 @@
       const inspected = rawBytes.length ? inspectProto(rawBytes) : null;
       const count = inspected ? inspected.count : -1;
       if (count !== 0) {
+        markOfficialHit(trackId);
         // 免费号的歌词有每月额度，用完服务端会在 restriction（字段 14）里回
         // monthlyLimitReached，客户端就只显示「额度已用完」。归一成 showLyrics 再放行。
         const cleaned = count > 0 ? rewriteOfficialProto(inspected) : null;
         if (cleaned) {
-          finish({ status: 200, headers: { "Content-Type": "application/x-protobuf" }, body: cleaned });
+          finish(protoResponse(cleaned));
         } else {
           // 原样放行，但 count > 0 说明官方歌词确实有内容。
           finish({});
@@ -867,6 +932,7 @@
         return;
       }
     } else if (hasLyrics(trimmed)) {
+      markOfficialHit(trackId);
       const cleaned = rewriteOfficialJson(trimmed);
       if (cleaned) {
         finish(jsonResponse(cleaned));
@@ -876,6 +942,7 @@
       return;
     }
   }
+  clearOfficialHit(trackId);
 
   // 歌词结果缓存：同一首歌在播放器 / 歌词页 / 歌词卡之间的重复请求不再重复查源。
   // 只缓存「官方没有歌词」的分支，官方歌词不会走到这里。
@@ -919,23 +986,23 @@
   });
 
   // 取曲目元数据 -> 按配置的歌词源找 -> 回调 payload
-  function resolveLyrics(cb) {
-    resolvePublicLyrics(cb);
+  function resolveLyrics(cb, activeTrackId = trackId, activeCacheKey = cacheKey) {
+    resolvePublicLyrics(cb, activeTrackId, activeCacheKey);
   }
 
-  function resolvePublicLyrics(cb) {
+  function resolvePublicLyrics(cb, activeTrackId = trackId, activeCacheKey = cacheKey) {
     // 客户端拉过的元数据优先：命中时直接查歌词，open.spotify.com 一次都不请求，
     // 歌词页背景用默认底色（不再为封面配色抓 embed 页面）。
     const startWith = (info, colorOf) => {
-      runWithIsrc(sourceOrder(info.title, info.artist), info.title, info.artist, cb, info.duration, colorOf);
+      runWithIsrc(sourceOrder(info.title, info.artist), info.title, info.artist, cb, info.duration, colorOf, activeCacheKey);
     };
-    const cached = cachedTrackMeta(trackId);
+    const cached = cachedTrackMeta(activeTrackId);
     if (cached) {
       startWith(cached, () => cached.color || null);
       return;
     }
-    const oembedUrl = "https://open.spotify.com/oembed?url=" + encodeURIComponent("https://open.spotify.com/track/" + trackId);
-    const embedUrl = "https://open.spotify.com/embed/track/" + trackId;
+    const oembedUrl = "https://open.spotify.com/oembed?url=" + encodeURIComponent("https://open.spotify.com/track/" + activeTrackId);
+    const embedUrl = "https://open.spotify.com/embed/track/" + activeTrackId;
     let meta = null;
     let embed = null;
     let metaDone = false;
@@ -973,7 +1040,7 @@
         return;
       }
       started = true;
-      rememberTrackMeta(trackId, info.title, info.artist, info.duration ? info.duration * 1000 : 0, colorOf());
+      rememberTrackMeta(activeTrackId, info.title, info.artist, info.duration ? info.duration * 1000 : 0, colorOf());
       startWith({ title: info.title, artist: info.artist, duration: info.duration }, colorOf);
     };
     // embed 提供封面主色与兜底元数据；与 oEmbed 并行发出，谁先到用谁。
@@ -986,7 +1053,7 @@
         // 歌词可能已经先返回了；embed 晚到时只补一份封面配色与更准确的元数据。
         if (started && embed && embed.color) {
           const info = merged();
-          rememberTrackMeta(trackId, info.title, info.artist, info.duration ? info.duration * 1000 : 0, embed.color);
+          rememberTrackMeta(activeTrackId, info.title, info.artist, info.duration ? info.duration * 1000 : 0, embed.color);
         }
         maybeStart();
       }, null, META_TIMEOUT_MS);
@@ -1028,7 +1095,7 @@
         metaPollTimer = setTimeout(() => {
           metaPollTimer = undefined;
           if (started || settled) return;
-          const hit = cachedTrackMeta(trackId);
+          const hit = cachedTrackMeta(activeTrackId);
           if (hit) {
             started = true;
             startWith(hit, () => (embed && embed.color) || hit.color || null);
@@ -1058,7 +1125,8 @@
   // 主链路：先按正常顺序查一轮；全部落空且开了 ISRC 反查时，再用 Deezer 的
   // 规范曲名 / 歌手和 ISRC 补两枪。这一轮通常在客户端 4.5s 窗口之后才回来，
   // 结果是写进缓存（下次打开 / 卡片直接命中），不占主链路的时间预算。
-  function runWithIsrc(order, title, artist, done, duration, colorOf) {
+  function runWithIsrc(order, title, artist, done, duration, colorOf, activeCacheKey = cacheKey) {
+    const writeKey = activeCacheKey || cacheKey;
     runSource(order, title, artist, (payload) => {
       if (payload || !isrcLookup || officialWon) {
         done(payload);
@@ -1072,7 +1140,7 @@
       let settledInner = false;
       const finishInner = (found) => {
         if (settledInner) {
-          if (found) writeLyricsCache(cacheKey, found);
+          if (found) writeLyricsCache(writeKey, found);
           return;
         }
         if (found) {
@@ -1101,15 +1169,16 @@
           });
         }
         runSource(sourceOrder(canonical.title, canonical.artist), canonical.title, canonical.artist,
-          (payload) => finishInner(payload), canonical.duration || duration, colorOf);
+          (payload) => finishInner(payload), canonical.duration || duration, colorOf, writeKey);
       });
-    }, duration, colorOf);
+    }, duration, colorOf, writeKey);
   }
 
   // 并发查询所有来源：首个通过校验的同步歌词胜出；只有纯文本时等全部结束。
   // settled 后不再 emit（响应已放行），但仍然写缓存：用户重新进歌词页时
   // 请求阶段就能直接命中。全部源都确认没歌词时才写 miss 标记。
-  function runSource(order, title, artist, done, duration, colorOf) {
+  function runSource(order, title, artist, done, duration, colorOf, activeCacheKey = cacheKey) {
+    const writeKey = activeCacheKey || cacheKey;
     if (stopped()) return;
     if (!order.length) {
       done(null);
@@ -1135,7 +1204,7 @@
           if (!officialWon) {
             if (record && colorOf) record.albumColor = colorOf();
             const latePayload = buildPayload(record);
-            if (latePayload) writeLyricsCache(cacheKey, latePayload);
+            if (latePayload) writeLyricsCache(writeKey, latePayload);
           }
           remaining -= 1;
           checkAllDone();
@@ -1178,7 +1247,7 @@
               if (onPlainFallback) {
                 onPlainFallback();
               } else {
-                writeLyricsCache(cacheKey, plainFallback);
+                writeLyricsCache(writeKey, plainFallback);
                 emit(plainFallback);
               }
             }, PLAIN_FALLBACK_MS);
@@ -1252,14 +1321,17 @@
       if (specs.some((item) => item.url === url)) return;
       specs.push({ url: url, path: path });
     };
-    for (const item of variants) {
+    for (let i = 0; i < variants.length; i++) {
+      const item = variants[i];
       addSpec("get", item.name, item.artist);
-      addSpec("search", item.name, item.artist);
+      if (i < 2) addSpec("search", item.name, item.artist);
     }
+    const baseName = cleanTitle || title;
+    const foldedName = fold(baseName);
+    if (foldedName !== baseName) addSpec("search", foldedName, fold(queryArtist));
     // 歌手写法不一致（feat. / 多歌手 / 翻译名）时的兜底也并进首轮。
-    addSpec("search", cleanTitle || title, "");
-    const foldedName = fold(cleanTitle || title);
-    if (foldedName !== (cleanTitle || title)) addSpec("search", foldedName, "");
+    addSpec("search", baseName, "");
+    if (foldedName !== baseName) addSpec("search", foldedName, "");
     if (!specs.length) {
       cb(null);
       return;
@@ -1860,7 +1932,10 @@
           if (Object.prototype.hasOwnProperty.call(extraHeaders, key)) headers[key] = extraHeaders[key];
         }
       }
-      const options = { url: target, headers: headers, timeout: timeoutMs || 4000 };
+      const ms = timeoutMs || 4000;
+      // Shadowrocket 的 $httpClient timeout 单位是秒，传毫秒会被放大 1000 倍。
+      const clientTimeout = typeof shadowrocketBase64From === "function" ? Math.max(1, Math.ceil(ms / 1000)) : ms;
+      const options = { url: target, headers: headers, timeout: clientTimeout };
       // 元数据请求（open.spotify.com 的 oEmbed / embed）和 Musixmatch 换 token 的
       // 那一跳也走这里，它们成功不代表歌词源给过答复，所以统计只算真正的歌词查询。
       const counted = target.indexOf("open.spotify.com") < 0 && target.indexOf("/token.get") < 0;
@@ -1898,14 +1973,18 @@
         return;
       }
       if (typeof $task !== "undefined" && $task && typeof $task.fetch === "function") {
-        $task.fetch({ url: target, headers: headers, timeout: timeoutMs || 4000 }).then(
+        $task.fetch({ url: target, headers: headers, timeout: ms }).then(
           (res) => onReply(null, { status: res.statusCode || res.status }, res.body),
           (err) => onReply(err, null, null),
         );
         return;
       }
       if (typeof fetch === "function") {
-        fetch(target, { headers: headers }).then(
+        const fetchOpt = { headers: headers };
+        if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+          fetchOpt.signal = AbortSignal.timeout(ms);
+        }
+        fetch(target, fetchOpt).then(
           (res) => res.text().then((text) => onReply(null, { status: res.status }, text)),
           (err) => onReply(err, null, null),
         );
@@ -1975,6 +2054,24 @@
     }
     headers["Content-Type"] = "application/json; charset=utf-8";
     headers["Content-Length"] = String(encoder.encode(body).length);
+    return { status: 200, headers: headers, body: body };
+  }
+
+  function protoResponse(body) {
+    const headers = {};
+    let contentType = "";
+    const source = res && res.headers;
+    if (source && "object" == typeof source) {
+      for (const key in source) {
+        const lower = String(key).toLowerCase();
+        if (lower === "content-length" || lower === "content-encoding" || lower === "transfer-encoding") continue;
+        if (lower === "content-type") contentType = String(source[key] || "");
+        else headers[key] = source[key];
+      }
+    }
+    const bytes = toBytes(body);
+    headers["Content-Type"] = contentType || "application/x-protobuf";
+    headers["Content-Length"] = String(bytes.length);
     return { status: 200, headers: headers, body: body };
   }
 

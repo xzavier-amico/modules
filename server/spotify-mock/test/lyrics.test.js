@@ -670,3 +670,114 @@ test("desktop color-lyrics JSON carries preview lines", async () => {
   assert.equal(typeof payload.colors.text, "number");
   assert.equal(typeof payload.colors.background, "number");
 });
+
+test("official JSON and protobuf traditional Chinese lyrics convert to Simplified and honor LYRICS_SCRIPT=source", async () => {
+  const tradJson = encoder.encode(JSON.stringify({
+    lyrics: { language: "zh-Hant", restriction: 3, lines: [{ startTimeMs: "0", words: "我們的愛 說謊" }] },
+  }));
+  stubNetwork([["spclient.wg.spotify.com", () => upstreamResponse(tradJson, 200, "application/json")]]);
+  const resHans = await handle(lyricsRequest({ query: "?format=json" }), {});
+  const bodyHans = await resHans.json();
+  assert.equal(bodyHans.lyrics.lines[0].words, "我们的爱 说谎");
+  assert.equal(bodyHans.lyrics.language, "zh-Hans");
+  assert.equal(bodyHans.lyrics.restriction, undefined);
+
+  stubNetwork([["spclient.wg.spotify.com", () => upstreamResponse(tradJson, 200, "application/json")]]);
+  const resSrc = await handle(lyricsRequest({ query: "?format=json" }), { LYRICS_SCRIPT: "source" });
+  const bodySrc = await resSrc.json();
+  assert.equal(bodySrc.lyrics.lines[0].words, "我們的愛 說謊");
+  assert.equal(bodySrc.lyrics.language, "zh-Hant");
+
+  const tradProtoData = concat([
+    vi(1, 1),
+    bytes(2, concat([vi(1, 500), str(2, "我們的愛")])),
+    str(5, "Spotify"),
+    str(10, "zh-Hant"),
+    vi(14, 3),
+    bytes(17, concat([vi(1, 500), str(2, "我們的愛")])),
+  ]);
+  const tradProto = concat([bytes(1, tradProtoData), bytes(2, concat([vi(1, 0xff121212)]))]);
+  stubNetwork([["spclient.wg.spotify.com", () => upstreamResponse(tradProto, 200, "application/x-protobuf")]]);
+  const protoRes = await handle(lyricsRequest(), {});
+  const protoOut = new Uint8Array(await protoRes.arrayBuffer());
+  const text = decoder.decode(protoOut);
+  assert.ok(text.includes("我们的爱"), "official protobuf traditional Chinese lines must fold to Simplified");
+  assert.ok(text.includes("zh-Hans"), "official protobuf language must update to zh-Hans");
+});
+
+test("third-party traditional Chinese lyrics convert to Simplified and preserve source mode", async () => {
+  stubNetwork([
+    ["spclient.wg.spotify.com", () => upstreamResponse(new Uint8Array(0), 404, "application/json")],
+    ["open.spotify.com/oembed", () => upstreamResponse(JSON.stringify({ title: "我們的愛", author_name: "F.I.R." }), 200, "application/json")],
+    ["music.163.com/api/search", () => upstreamResponse(JSON.stringify({ result: { songs: [
+      { id: 9, name: "我们的爱", artists: [{ name: "F.I.R." }], duration: 240000 },
+    ] } }), 200, "application/json")],
+    ["music.163.com/api/song/lyric", () => upstreamResponse(JSON.stringify({ lrc: { lyric: "[00:01.00]我們的愛 過了就不再回來" } }), 200, "application/json")],
+  ]);
+  const res = await handle(lyricsRequest({ query: "?format=json" }), { LYRICS_SOURCE: "netease" });
+  const body = await res.json();
+  assert.equal(body.lyrics.lines[0].words, "我们的爱 过了就不再回来");
+  assert.equal(body.lyrics.language, "zh-Hans");
+
+  resetLyricsCache();
+  const resSource = await handle(lyricsRequest({ query: "?format=json" }), { LYRICS_SOURCE: "netease", LYRICS_SCRIPT: "source" });
+  assert.equal((await resSource.json()).lyrics.lines[0].words, "我們的愛 過了就不再回來");
+});
+
+test("queryTitle strips nested parentheses while keeping version tags", async () => {
+  const calls = stubNetwork([
+    ["spclient.wg.spotify.com", () => upstreamResponse(new Uint8Array(0), 404, "application/json")],
+    ["open.spotify.com/oembed", () => upstreamResponse(JSON.stringify({ title: "晚秋 (電影《晚秋 (2010)》主題曲)", author_name: "毛寧" }), 200, "application/json")],
+    ["lrclib.net/api/get", (target) => target.includes(encodeURIComponent("晚秋") + "&") || target.includes(encodeURIComponent("毛宁"))
+      ? upstreamResponse(JSON.stringify({ trackName: "晚秋", artistName: "毛宁", syncedLyrics: "[00:01.00]晚秋" }), 200, "application/json")
+      : upstreamResponse("not found", 404, "text/plain")],
+  ]);
+  const res = await handle(lyricsRequest({ query: "?format=json" }), { LYRICS_SOURCE: "lrclib" });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).lyrics.lines[0].words, "晚秋");
+  assert.ok(calls.some((u) => u.includes("track_name=" + encodeURIComponent("晚秋") + "&")), "nested decorative parens must strip cleanly");
+});
+
+test("NetEase and QQ reject unrelated search results instead of falling back to songs[0]", async () => {
+  stubNetwork([
+    ["spclient.wg.spotify.com", () => upstreamResponse(new Uint8Array(0), 404, "application/x-protobuf")],
+    ["open.spotify.com/oembed", () => upstreamResponse(JSON.stringify({ title: "ExactSong", author_name: "RightArtist" }), 200, "application/json")],
+    ["music.163.com/api/search", () => upstreamResponse(JSON.stringify({ result: { songs: [
+      { id: 1, name: "Wrong Song Completely", artists: [{ name: "RightArtist" }] },
+      { id: 2, name: "ExactSong", artists: [{ name: "WrongSinger" }] },
+    ] } }), 200, "application/json")],
+    ["music.163.com/api/song/lyric", () => upstreamResponse(JSON.stringify({ lrc: { lyric: "[00:01.00]Should not be picked" } }), 200, "application/json")],
+  ]);
+  const res = await handle(lyricsRequest(), { LYRICS_SOURCE: "netease", LYRICS_ISRC: "false" });
+  assert.equal(res.status, 404);
+  assert.equal(res.headers.get("x-spotify-mock"), "passthrough");
+});
+
+test("auto races sources concurrently, falls back to Deezer ISRC, and pseudo-syncs plain lyrics", async () => {
+  stubNetwork([
+    ["spclient.wg.spotify.com", () => upstreamResponse(new Uint8Array(0), 404, "application/json")],
+    ["open.spotify.com/oembed", () => upstreamResponse(JSON.stringify({ title: "Alias Track", author_name: "Singer" }), 200, "application/json")],
+    ["api.deezer.com/search", () => upstreamResponse(JSON.stringify({ data: [{ id: 55, title: "Alias Track", artist: { name: "Singer" }, duration: 120 }] }), 200, "application/json")],
+    ["api.deezer.com/track/55", () => upstreamResponse(JSON.stringify({ id: 55, title: "Canonical Track", artist: { name: "Singer" }, isrc: "US1234567890", duration: 120 }), 200, "application/json")],
+    ["apic.musixmatch.com/ws/1.1/token.get", () => upstreamResponse(JSON.stringify({ message: { body: { user_token: "tok" } } }), 200, "application/json")],
+    ["apic.musixmatch.com/ws/1.1/macro.subtitles.get", (target) => target.includes("track_isrc=US1234567890")
+      ? upstreamResponse(JSON.stringify({ message: { header: { status_code: 200 }, body: { macro_calls: { "track.subtitles.get": { message: { body: { subtitle_list: [{ subtitle: { subtitle_id: 99, subtitle_body: "[00:02.00]ISRC Hit" } }] } } } } } } }), 200, "application/json")
+      : upstreamResponse(JSON.stringify({ message: { header: { status_code: 404 } } }), 200, "application/json")],
+  ]);
+  const isrcRes = await handle(lyricsRequest({ query: "?format=json" }), { LYRICS_SOURCE: "auto" });
+  assert.equal(isrcRes.status, 200);
+  const isrcBody = await isrcRes.json();
+  assert.equal(isrcBody.lyrics.lines[0].words, "ISRC Hit");
+
+  resetLyricsCache();
+  stubNetwork([
+    ["spclient.wg.spotify.com", () => upstreamResponse(new Uint8Array(0), 404, "application/json")],
+    ["open.spotify.com/oembed", () => upstreamResponse(JSON.stringify({ title: "PlainSong", author_name: "Artist" }), 200, "application/json")],
+    ["lrclib.net/api/get", () => upstreamResponse(JSON.stringify({ duration: 100, plainLyrics: "Line 1\nLine 2" }), 200, "application/json")],
+  ]);
+  const plainRes = await handle(lyricsRequest({ query: "?format=json" }), { LYRICS_SOURCE: "lrclib", LYRICS_SYNC_PLAIN: "true" });
+  const plainBody = await plainRes.json();
+  assert.equal(plainBody.lyrics.syncType, "LINE_SYNCED");
+  assert.equal(plainBody.lyrics.lines[0].startTimeMs, "0");
+  assert.ok(Number(plainBody.lyrics.lines[1].startTimeMs) > 0, "second plain line gets pseudo timestamp");
+});

@@ -1,20 +1,3 @@
-  // ---- 解压 -------------------------------------------------------------
-
-  async function gunzip(b) {
-    try {
-      if (typeof $utils !== "undefined" && $utils && typeof $utils.ungzip === "function") {
-        const r = $utils.ungzip(b);
-        return r && typeof r.then === "function" ? await r : r;
-      }
-      if (typeof ctx !== "undefined" && ctx && ctx.compress && typeof ctx.compress.gunzip === "function") {
-        return await ctx.compress.gunzip(b);
-      }
-    } catch (e) {
-      return null;
-    }
-    return null;
-  }
-
   // ---- gRPC 状态头 ------------------------------------------------------
 
   function headerValue(headers, lowerName, capName) {
@@ -123,11 +106,12 @@
 
       let msg = bytes.subarray(f.start, f.end);
       if (f.flag & 0x01) {
-        msg = toBytes(await gunzip(msg));
-        if (!msg) {
+        const rawMsg = await gunzipBytes(msg);
+        if (!rawMsg) {
           pass();
           return;
         }
+        msg = rawMsg;
       }
 
       const next = rule(msg);
@@ -145,7 +129,19 @@
     }
     const body = concat(out);
     const result = { body: body };
-    if (fixed) result.headers = fixed;
+    let outHeaders = fixed;
+    for (const k in headers) {
+      if (k.toLowerCase() === "content-length") {
+        outHeaders = outHeaders || Object.assign({}, headers);
+        delete outHeaders[k];
+      }
+    }
+    if (outHeaders) {
+      for (const k in outHeaders) {
+        if (k.toLowerCase() === "content-length") delete outHeaders[k];
+      }
+      result.headers = outHeaders;
+    }
     // 显式带回 trailers；Loon 不会因为改过 body 就把 grpc-status 丢掉。
     if (res.h2_trailers !== undefined) result.h2_trailers = res.h2_trailers;
     $done(result);

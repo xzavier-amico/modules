@@ -319,7 +319,8 @@ async function patchLyrics(env, request, targetPath, bytes, upstream, desktop, l
 
   const contentType = (upstream.headers.get("content-type") || "").toLowerCase();
   const status = upstream.status;
-  const official = status >= 200 && status < 300 ? cleanOfficialLyrics(bytes, contentType) : null;
+  const options = lyricsOptions(env);
+  const official = status >= 200 && status < 300 ? cleanOfficialLyrics(bytes, contentType, options) : null;
 
   if (official && official.hasLyrics) {
     markOfficialLyricsHit(trackId);
@@ -341,7 +342,6 @@ async function patchLyrics(env, request, targetPath, bytes, upstream, desktop, l
     return { bytes: null, status, contentType: null, lyrics: "official-empty" };
   }
 
-  const options = lyricsOptions(env);
   const found = await (lyricsLookup || findLyrics(trackId, options));
   if (!found.lyrics) {
     // 卡片已经乐观补上了：确认没歌词后短期内不再补空卡。

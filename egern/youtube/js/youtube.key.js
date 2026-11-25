@@ -53,20 +53,27 @@ export default async function (ctx) {
   const request = ctx.request
     ? { url: ctx.request.url, method: ctx.request.method, headers: plainHeaders(ctx.request.headers), body: requestBody }
     : undefined;
+  const rawTrailers =
+    ctx.response && (ctx.response.trailers !== undefined ? ctx.response.trailers : ctx.response.h2_trailers);
+  const responseTrailers = rawTrailers !== undefined ? plainHeaders(rawTrailers) : undefined;
   const response = ctx.response
-    ? {
-        url: ctx.request && ctx.request.url,
-        status: ctx.response.status,
-        statusCode: ctx.response.status,
-        headers: plainHeaders(ctx.response.headers),
-        body: responseBody,
-      }
+    ? Object.assign(
+        {
+          url: ctx.request && ctx.request.url,
+          status: ctx.response.status,
+          statusCode: ctx.response.status,
+          headers: plainHeaders(ctx.response.headers),
+          body: responseBody,
+        },
+        responseTrailers !== undefined ? { trailers: responseTrailers, h2_trailers: responseTrailers } : {},
+      )
     : undefined;
 
   // $httpClient 的 callback 形式（error, response, data）。
   const httpOptions = (options) => ("string" == typeof options ? { url: options } : options || {});
   const httpCall = (method, options, callback) => {
     const opt = httpOptions(options);
+    const isBinary = !!(opt["binary-mode"] || opt.binaryMode);
     Promise.resolve()
       .then(() =>
         ctx.http[method](opt.url, {
@@ -77,7 +84,8 @@ export default async function (ctx) {
       )
       .then(async (res) => {
         const headers = plainHeaders(res.headers);
-        callback(null, { status: res.status, statusCode: res.status, headers }, await res.text());
+        const body = isBinary ? new Uint8Array(await res.arrayBuffer()) : await res.text();
+        callback(null, { status: res.status, statusCode: res.status, headers }, body);
       })
       .catch((error) => callback(error || new Error("request failed"), null, null));
   };
@@ -122,6 +130,7 @@ export default async function (ctx) {
 
       const next = Object.assign({}, value);
       if (next.body === undefined && body !== undefined) next.body = body;
+      if (next.h2_trailers !== undefined && next.trailers === undefined) next.trailers = next.h2_trailers;
       resolve(next);
     };
 
@@ -449,8 +458,11 @@ export default async function (ctx) {
   // 优先按 BADGE_STYLE_TYPE_MEMBERS_ONLY 判定，文案只作兜底。
   const MEMBERS_ONLY_LABELS = [
     "Members only",
+    "Members first",
     "会员专享",
+    "会员抢先看",
     "會員專享",
+    "會員搶先看",
     "メンバー限定",
     "멤버 전용",
   ];
@@ -834,7 +846,9 @@ export default async function (ctx) {
   }
 
   function clientKeyFor(request) {
-    return isMusicRequest(request) ? "youtubeMusic" : "youtube";
+    const info = inspectRequest(request);
+    if (info.isWeb) return info.isMusic ? "youtubeMusicWeb" : "youtubeWeb";
+    return info.isMusic ? "youtubeMusic" : "youtube";
   }
 
   //=====================================================================================

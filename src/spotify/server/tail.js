@@ -15,6 +15,7 @@
     looksLikeAttributes,
     parse,
     serialize,
+    hanVariants: typeof SPOTIFY_HAN_VARIANTS !== "undefined" ? SPOTIFY_HAN_VARIANTS : null,
   };
 }
 

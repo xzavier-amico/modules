@@ -1,26 +1,20 @@
-// BiliBili Enhance — 画质请求改写（Loon / Egern）。
+// BiliBili Enhance — 画质请求改写（REST + gRPC）。
 //
-// 客户端请求播放地址时带 qn（清晰度编号），这里统一改成 120（4K），补上
-// fourk=1 和 fnval 的 4K 位。服务端会按账号权限返回「实际能给的最高档」：
-// 大会员给 4K，普通账号自动落到 1080P，不会因为要不到 4K 就报错。
+// 客户端请求播放地址时带 qn（清晰度编号），这里按档位参数改写（默认 4K qn=120，
+// 补 fourk=1 和 fnval 对应高位）。服务端会按账号权限返回「实际能给的最高档」：
+// 大会员给 4K/8K/杜比/HDR，普通账号自动落到 1080P，不会因为要不到高画质就报错。
 //
 // 两条路径都改：
-//   REST  api/app.bilibili.com 的 */playurl —— 改 query 里的 qn / fourk
+//   REST  api/app.bilibili.com|biliapi.net 的 */playurl —— 改 query 里的 qn / fourk / fnval
 //   gRPC  bilibili.app.playurl.v1.PlayURL/PlayView
 //         bilibili.pgc.gateway.player.v2.PlayURL/PlayView
 //         bilibili.app.playerunite.v1.Player/PlayViewUnite
-//         改请求体里的 qn(3) / fourk(8)；playerunite 的字段在 vod(1) 里面
-//
-// gRPC 请求体改之前会先确认 qn 字段的值是已知清晰度，字段号对不上就整条放行，
-// 不会把播放请求改坏。
-
-(() => {
-  "use strict";
+//         改请求体里的 qn(3) / fnval(5) / fourk(8)；playerunite 的字段在 vod(1) 里面
 
   const req = (typeof $request !== "undefined" && $request) || {};
   const url = req.url || "";
 
-  // Loon 传位置数组或对象，Egern 传 JSON 字符串，三种都兼容。
+  // Loon 传位置数组或对象，Egern / Shadowrocket 传 JSON 字符串或对象。
   let opt = {};
   try {
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
@@ -33,7 +27,27 @@
   const flag = (v, d) =>
     v === undefined || v === null ? d : !(v === false || v === "false" || v === 0 || v === "0");
 
-  if (!flag(opt.auto_quality, true)) {
+  const QUALITY_TIERS = {
+    "8k": { enabled: true, qn: 127, fnvalMask: 128 | 1024, fourk: 1 },
+    dolby: { enabled: true, qn: 126, fnvalMask: 128 | 512, fourk: 1 },
+    hdr: { enabled: true, qn: 125, fnvalMask: 128 | 64, fourk: 1 },
+    "4k": { enabled: true, qn: 120, fnvalMask: 128, fourk: 1 },
+    "1080p60": { enabled: true, qn: 116, fnvalMask: 0, fourk: null },
+    "1080p+": { enabled: true, qn: 112, fnvalMask: 0, fourk: null },
+    "1080p": { enabled: true, qn: 80, fnvalMask: 0, fourk: null },
+  };
+  function resolveQualityTier(v) {
+    if (v === false || v === "false" || v === 0 || v === "0") return { enabled: false };
+    if (v === undefined || v === null || v === "" || v === true || v === "true" || v === 1 || v === "1") {
+      return QUALITY_TIERS["4k"];
+    }
+    const key = String(v).trim().toLowerCase();
+    if (key === "off" || key === "false" || key === "0") return { enabled: false };
+    return Object.prototype.hasOwnProperty.call(QUALITY_TIERS, key) ? QUALITY_TIERS[key] : QUALITY_TIERS["4k"];
+  }
+
+  const tier = resolveQualityTier(opt.auto_quality);
+  if (!tier.enabled) {
     $done({});
     return;
   }
@@ -45,146 +59,9 @@
     return;
   }
 
-  const QN = 120;
-  const QN_VALUES = [6, 16, 32, 64, 74, 80, 112, 116, 120, 125, 126, 127];
-  // fnval 的 4K 位。客户端没要 4K 时补上，大会员账号才能真正拿到 4K 档。
-  const FNVAL_4K = 128;
+  const QN_VALUES = [0, 6, 16, 32, 64, 74, 80, 112, 116, 120, 125, 126, 127];
 
-  // ---- 字节工具 ---------------------------------------------------------
-
-  function toBytes(b) {
-    if (!b) return null;
-    if (b instanceof Uint8Array) return b;
-    if (typeof ArrayBuffer !== "undefined" && b instanceof ArrayBuffer) return new Uint8Array(b);
-    if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView && ArrayBuffer.isView(b)) {
-      return new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
-    }
-    if (typeof b === "string") {
-      const out = new Uint8Array(b.length);
-      for (let i = 0; i < b.length; i++) {
-        const c = b.charCodeAt(i);
-        if (c > 0xff) return null;
-        out[i] = c;
-      }
-      return out;
-    }
-    return null;
-  }
-
-  function concat(parts) {
-    let n = 0;
-    for (let i = 0; i < parts.length; i++) n += parts[i].length;
-    const out = new Uint8Array(n);
-    let o = 0;
-    for (let i = 0; i < parts.length; i++) {
-      out.set(parts[i], o);
-      o += parts[i].length;
-    }
-    return out;
-  }
-
-  function encodeVarint(value) {
-    const out = [];
-    let v = value;
-    while (v > 0x7f) {
-      out.push((v & 0x7f) | 0x80);
-      v = Math.floor(v / 128);
-    }
-    out.push(v);
-    return Uint8Array.from(out);
-  }
-
-  function encodeField(no, wt, payload) {
-    const tag = encodeVarint(no * 8 + wt);
-    if (wt !== 2) return concat([tag, payload]);
-    return concat([tag, encodeVarint(payload.length), payload]);
-  }
-
-  // ---- protobuf ---------------------------------------------------------
-
-  function readVarint(b, p, end) {
-    let v = 0;
-    let mul = 1;
-    while (p < end) {
-      const c = b[p++];
-      v += (c & 0x7f) * mul;
-      if (!(c & 0x80)) return [v, p];
-      mul *= 128;
-      if (mul > 0x10000000000000) return null;
-    }
-    return null;
-  }
-
-  function parseFields(b, start, end) {
-    const out = [];
-    let p = start;
-    while (p < end) {
-      const s = p;
-      const t = readVarint(b, p, end);
-      if (!t) return null;
-      const key = t[0];
-      p = t[1];
-      const no = Math.floor(key / 8);
-      const wt = key & 7;
-      if (no <= 0) return null;
-
-      let ds = p;
-      let de;
-      if (wt === 0) {
-        const r = readVarint(b, p, end);
-        if (!r) return null;
-        p = r[1];
-        de = p;
-      } else if (wt === 1) {
-        if (p + 8 > end) return null;
-        p += 8;
-        de = p;
-      } else if (wt === 2) {
-        const r = readVarint(b, p, end);
-        if (!r) return null;
-        const len = r[0];
-        const d0 = r[1];
-        if (d0 + len > end) return null;
-        ds = d0;
-        p = d0 + len;
-        de = p;
-      } else if (wt === 5) {
-        if (p + 4 > end) return null;
-        p += 4;
-        de = p;
-      } else {
-        return null;
-      }
-      out.push({ no: no, wt: wt, s: s, e: p, ds: ds, de: de });
-    }
-    return out;
-  }
-
-  // 对 no 字段的每个 length-delimited 载荷调用 fn；fn 返回 null 表示不改。
-  function mapSub(msg, no, fn) {
-    const fields = parseFields(msg, 0, msg.length);
-    if (!fields) return null;
-    let parts = null;
-    let keepFrom = 0;
-    for (let i = 0; i < fields.length; i++) {
-      const f = fields[i];
-      if (f.no === no && f.wt === 2) {
-        const sub = msg.subarray(f.ds, f.de);
-        const next = fn(sub);
-        if (next) {
-          if (!parts) parts = [];
-          if (f.s > keepFrom) parts.push(msg.subarray(keepFrom, f.s));
-          parts.push(encodeField(no, 2, next));
-          keepFrom = f.e;
-        }
-      }
-    }
-    if (!parts) return null;
-    if (keepFrom < msg.length) parts.push(msg.subarray(keepFrom, msg.length));
-    return concat(parts);
-  }
-
-  // 把 qn(3) 改成 120、fourk(8) 置 1、fnval(5) 补 4K 位；qn 不像清晰度就放弃。
+  // 把 qn(3) 改成目标清晰度；高画质档顺带补 fnval(5) 与 fourk(8)=1。
   function patchVod(msg) {
     const fields = parseFields(msg, 0, msg.length);
     if (!fields) return null;
@@ -200,25 +77,31 @@
       else if (f.no === 5) fnval = r[0];
       else if (f.no === 8) fourk = r[0];
     }
-    if (qn === null || QN_VALUES.indexOf(qn) < 0) return null;
-    const needFnval = fnval !== null && !(fnval & FNVAL_4K);
-    if (qn === QN && !needFnval && fourk === 1) return null;
+    if (qn !== null && QN_VALUES.indexOf(qn) < 0) return null;
+    if (qn === null && fnval === null && fourk === null) return null;
+
+    const targetQn = tier.qn;
+    const needFnval = tier.fnvalMask !== 0 && fnval !== null && (fnval & tier.fnvalMask) !== tier.fnvalMask;
+    const needFourk = tier.fourk === 1 && fourk !== 1;
+    if (qn === targetQn && !needFnval && !needFourk) return null;
 
     const parts = [];
+    let sawQn = false;
     let sawFourk = false;
-    let changed = qn !== QN;
+    let changed = qn !== targetQn;
     for (let i = 0; i < fields.length; i++) {
       const f = fields[i];
       if (f.no === 3 && f.wt === 0) {
-        parts.push(encodeField(3, 0, encodeVarint(QN)));
+        sawQn = true;
+        parts.push(qn === targetQn ? msg.subarray(f.s, f.e) : encodeField(3, 0, encodeVarint(targetQn)));
         continue;
       }
       if (f.no === 5 && f.wt === 0 && needFnval) {
-        parts.push(encodeField(5, 0, encodeVarint(fnval | FNVAL_4K)));
+        parts.push(encodeField(5, 0, encodeVarint(fnval | tier.fnvalMask)));
         changed = true;
         continue;
       }
-      if (f.no === 8 && f.wt === 0) {
+      if (f.no === 8 && f.wt === 0 && tier.fourk === 1) {
         sawFourk = true;
         if (fourk !== 1) {
           parts.push(encodeField(8, 0, encodeVarint(1)));
@@ -228,39 +111,15 @@
       }
       parts.push(msg.subarray(f.s, f.e));
     }
-    if (!sawFourk) {
+    if (!sawQn) {
+      parts.push(encodeField(3, 0, encodeVarint(targetQn)));
+      changed = true;
+    }
+    if (tier.fourk === 1 && !sawFourk) {
       parts.push(encodeField(8, 0, encodeVarint(1)));
       changed = true;
     }
     return changed ? concat(parts) : null;
-  }
-
-  // ---- gRPC -------------------------------------------------------------
-
-  function parseFrames(b) {
-    const out = [];
-    let p = 0;
-    while (p + 5 <= b.length) {
-      const flagByte = b[p];
-      const len = ((b[p + 1] << 24) | (b[p + 2] << 16) | (b[p + 3] << 8) | b[p + 4]) >>> 0;
-      const start = p + 5;
-      const end = start + len;
-      if (end > b.length) return null;
-      out.push({ flag: flagByte, hdr: p, start: start, end: end });
-      p = end;
-    }
-    if (p !== b.length) return null;
-    return out.length ? out : null;
-  }
-
-  function frame(msg) {
-    const out = new Uint8Array(5 + msg.length);
-    out[1] = (msg.length >>> 24) & 0xff;
-    out[2] = (msg.length >>> 16) & 0xff;
-    out[3] = (msg.length >>> 8) & 0xff;
-    out[4] = msg.length & 0xff;
-    out.set(msg, 5);
-    return out;
   }
 
   const GRPC = /\/bilibili\.(?:app\.playurl\.v1\.PlayURL|pgc\.gateway\.player\.v2\.PlayURL|app\.playerunite\.v1\.Player)\/(?:PlayView|PlayViewUnite)$/;
@@ -279,7 +138,7 @@
     const bytes = toBytes(req.body);
     if (!bytes || !bytes.length) return null;
     const frames = parseFrames(bytes);
-    if (!frames) return null;
+    if (!frames || !frames.length) return null;
 
     const out = [];
     let changed = false;
@@ -297,7 +156,7 @@
         continue;
       }
       changed = true;
-      out.push(frame(next));
+      out.push(frame(0, next));
     }
     return changed ? concat(out) : null;
   }
@@ -318,7 +177,7 @@
 
   // ---- REST -------------------------------------------------------------
 
-  if (!/^https?:\/\/(?:api|app)\.bili(?:bili\.com|api\.net)\//i.test(url)) {
+  if (!/^https?:\/\/(?:api|app|bangumi)\.bili(?:bili\.com|api\.net)\//i.test(url)) {
     $done({});
     return;
   }
@@ -327,18 +186,24 @@
     return;
   }
 
-  let out = url.replace(/([?&])qn=\d+/i, "$1qn=120");
+  let out = url.replace(/([?&])qn=\d*/i, "$1qn=" + tier.qn);
   if (!/[?&]qn=/i.test(out)) {
-    out += (out.indexOf("?") < 0 ? "?" : "&") + "qn=120";
+    out += (out.indexOf("?") < 0 ? "?" : "&") + "qn=" + tier.qn;
   }
-  if (!/[?&]fourk=/i.test(out)) {
-    out += "&fourk=1";
+  if (tier.fourk === 1) {
+    if (/[?&]fourk=\d*/i.test(out)) {
+      out = out.replace(/([?&])fourk=\d*/i, "$1fourk=1");
+    } else {
+      out += "&fourk=1";
+    }
   }
-  // fnval 补 4K 位，否则服务端不会给 4K 档。
-  const fn = /([?&])fnval=(\d+)/i.exec(out);
-  if (fn) {
-    const v = Number(fn[2]) | FNVAL_4K;
-    if (String(v) !== fn[2]) out = out.replace(fn[0], fn[1] + "fnval=" + v);
+  // fnval 补对应高画质位，否则服务端不会给 4K/8K/HDR/杜比档。
+  if (tier.fnvalMask) {
+    const fn = /([?&])fnval=(\d+)/i.exec(out);
+    if (fn) {
+      const v = Number(fn[2]) | tier.fnvalMask;
+      if (String(v) !== fn[2]) out = out.replace(fn[0], fn[1] + "fnval=" + v);
+    }
   }
 
   if (out === url) {
@@ -346,4 +211,3 @@
     return;
   }
   $done({ url: out });
-})();

@@ -32,32 +32,33 @@ AND, ((DOMAIN-SUFFIX, spotify.com), (PROTOCOL, QUIC)), REJECT
 # 纯广告路径。桌面端和播放器核心会请求 /ads/*、/ad-logic/*、ad-on-app-open，
 # Premium 推广会请求 /premium-marketing/upsellOffer；直接 404，让 App 跳过广告或推广。
 # 不要拦 /social、gabo、pendragon：它们分别是好友动态、事件上报与消息服务。
-request if ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/ad-/ then reject(404)
+request if ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/ad-/ then reject(404)
 request if ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?(?:\/ads\/|\/premium-marketing\/|[^?#]*\/ad-on-app-open)/i then reject(404)
 
 # 账号状态与远程配置交给自建服务。mock_base 留空时第一段条件不成立，保持官方请求。
 # url.replace 只替换正则命中的前缀，查询串会原样保留。
-request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/bootstrap/ then url.replace("${mock_base}/bootstrap")
-request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/user-customization-service/ then url.replace("${mock_base}/user-customization-service")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/bootstrap/ then url.replace("${mock_base}/bootstrap")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/user-customization-service/ then url.replace("${mock_base}/user-customization-service")
 
 # 曲目元数据也交给服务端：请求体里的 etag 由服务端删，响应里的 has_lyrics 由服务端补。
-request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/extended-metadata/ then url.replace("${mock_base}/extended-metadata")
-request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/context-resolve/ then url.replace("${mock_base}/context-resolve")
-request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/connect-state/ then url.replace("${mock_base}/connect-state")
-request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/metadata\/4\/track/ then url.replace("${mock_base}/metadata/4/track")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/extended-metadata/ then url.replace("${mock_base}/extended-metadata")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/context-resolve/ then url.replace("${mock_base}/context-resolve")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/connect-state/ then url.replace("${mock_base}/connect-state")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/metadata\/4\/track/ then url.replace("${mock_base}/metadata/4/track")
 
 # 歌词也交给服务端：官方有歌词时清掉免费号的额度限制，没有歌词时由服务端
 # 用第三方歌词合成 JSON / protobuf。客户端不再加载脚本，304 由服务端处理。
-request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/color-lyrics\// then url.replace("${mock_base}/color-lyrics/")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/color-lyrics\// then url.replace("${mock_base}/color-lyrics/")
 
 # 首页 / 搜索页 / 滚动页的赞助内容由服务端改响应体删除；远程配置接口也要一起
 # 改写，否则 App 重新拉配置后会把广告开关重新打开。url.replace 保留版本号和查询串。
-request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/casita\// then url.replace("${mock_base}/casita/")
-request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/browsita\// then url.replace("${mock_base}/browsita/")
-request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/scrollsita\// then url.replace("${mock_base}/scrollsita/")
-request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/remote-config-resolver\// then url.replace("${mock_base}/remote-config-resolver/")
-request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9]+-spclient)\.spotify\.com(?::443)?\/nebula\// then url.replace("${mock_base}/nebula/")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/casita\// then url.replace("${mock_base}/casita/")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/browsita\// then url.replace("${mock_base}/browsita/")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/scrollsita\// then url.replace("${mock_base}/scrollsita/")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/remote-config-resolver\// then url.replace("${mock_base}/remote-config-resolver/")
+request if ${mock_base} ~= /^https?:\/\/[^/]/ && ${url} ~= /^https:\/\/(?:spclient\.wg|[a-z0-9-]+-spclient)\.spotify\.com(?::443)?\/nebula\// then url.replace("${mock_base}/nebula/")
 
 [MitM]
 # iPhone / iPad 与 Mac 共用同一组 spclient 主机。
 hostname = *-spclient.spotify.com, spclient.wg.spotify.com
+h2 = true

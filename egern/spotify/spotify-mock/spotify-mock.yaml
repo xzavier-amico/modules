@@ -80,44 +80,44 @@ rules:
 # mock_base 留空时 location 变成相对路径，等价于原请求；不部署服务不要启用模块。
 url_rewrites:
   # 纯广告路径。不要拦 /social、gabo、pendragon：它们分别是好友动态、事件上报与消息服务。
-  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/ad-"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9-]+-spclient)\\.spotify\\.com(?::443)?\\/ad-"
     location: "http://reject/"
   # 桌面端和播放器核心会请求 /ads/*、/ad-logic/*、ad-on-app-open，Premium 推广会请求
   # /premium-marketing/upsellOffer。
   - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9-]+-spclient)\\.spotify\\.com(?::443)?(?:\\/ads\\/|\\/premium-marketing\\/|[^?#]*\\/ad-on-app-open)"
     location: "http://reject/"
 
-  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/bootstrap(\\/.*)?(\\?.*)?$"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9-]+-spclient)\\.spotify\\.com(?::443)?\\/bootstrap(\\/.*)?(\\?.*)?$"
     location: "{{{mock_base}}}/bootstrap$1$2"
-  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/user-customization-service(\\/.*)?(\\?.*)?$"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9-]+-spclient)\\.spotify\\.com(?::443)?\\/user-customization-service(\\/.*)?(\\?.*)?$"
     location: "{{{mock_base}}}/user-customization-service$1$2"
 
   # 曲目元数据：请求体 etag 由服务端删，响应里的 has_lyrics 由服务端补。
-  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/extended-metadata(\\/.*)?(\\?.*)?$"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9-]+-spclient)\\.spotify\\.com(?::443)?\\/extended-metadata(\\/.*)?(\\?.*)?$"
     location: "{{{mock_base}}}/extended-metadata$1$2"
-  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/context-resolve(\\/.*)?(\\?.*)?$"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9-]+-spclient)\\.spotify\\.com(?::443)?\\/context-resolve(\\/.*)?(\\?.*)?$"
     location: "{{{mock_base}}}/context-resolve$1$2"
-  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/connect-state(\\/.*)?(\\?.*)?$"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9-]+-spclient)\\.spotify\\.com(?::443)?\\/connect-state(\\/.*)?(\\?.*)?$"
     location: "{{{mock_base}}}/connect-state$1$2"
-  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/metadata\\/4\\/track(\\/.*)?(\\?.*)?$"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9-]+-spclient)\\.spotify\\.com(?::443)?\\/metadata\\/4\\/track(\\/.*)?(\\?.*)?$"
     location: "{{{mock_base}}}/metadata/4/track$1$2"
 
   # 歌词：官方有歌词时清掉免费号的额度限制，没有歌词时由服务端用第三方歌词合成。
   # 客户端不加载脚本，304 / 校验头由服务端处理。
-  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/color-lyrics(\\/.*)?(\\?.*)?$"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9-]+-spclient)\\.spotify\\.com(?::443)?\\/color-lyrics(\\/.*)?(\\?.*)?$"
     location: "{{{mock_base}}}/color-lyrics$1$2"
 
   # 首页 / 搜索页 / 滚动页的赞助内容由服务端改响应体删除；远程配置接口也要一起
   # 改写，否则 App 重新拉配置后会把广告开关重新打开。
-  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/casita(\\/.*)?(\\?.*)?$"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9-]+-spclient)\\.spotify\\.com(?::443)?\\/casita(\\/.*)?(\\?.*)?$"
     location: "{{{mock_base}}}/casita$1$2"
-  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/browsita(\\/.*)?(\\?.*)?$"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9-]+-spclient)\\.spotify\\.com(?::443)?\\/browsita(\\/.*)?(\\?.*)?$"
     location: "{{{mock_base}}}/browsita$1$2"
-  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/scrollsita(\\/.*)?(\\?.*)?$"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9-]+-spclient)\\.spotify\\.com(?::443)?\\/scrollsita(\\/.*)?(\\?.*)?$"
     location: "{{{mock_base}}}/scrollsita$1$2"
-  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/remote-config-resolver(\\/.*)?(\\?.*)?$"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9-]+-spclient)\\.spotify\\.com(?::443)?\\/remote-config-resolver(\\/.*)?(\\?.*)?$"
     location: "{{{mock_base}}}/remote-config-resolver$1$2"
-  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9]+-spclient)\\.spotify\\.com(?::443)?\\/nebula(\\/.*)?(\\?.*)?$"
+  - match: "^https:\\/\\/(?:spclient\\.wg|[a-z0-9-]+-spclient)\\.spotify\\.com(?::443)?\\/nebula(\\/.*)?(\\?.*)?$"
     location: "{{{mock_base}}}/nebula$1$2"
 
 mitm:

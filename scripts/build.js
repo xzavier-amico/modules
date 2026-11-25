@@ -73,6 +73,7 @@ const TARGETS = [
     title: "YouTube Enhance — youtubei 响应 + initplayback UMP",
     parts: [
       ...YT_CORE,
+      ["proto", "gunzip.js"],
       "response/schema.js",
       "response/codec.js",
       "response/filter.js",
@@ -104,7 +105,7 @@ const TARGETS = [
     file: "spotify.feed.js",
     binary: true,
     title: "Spotify Enhance — 信息流广告过滤",
-    parts: [...SP_CORE, "feed/ads.js", "feed/lyrics-card.js", "lyrics.js", "feed/lyrics.js", "feed/entry.js"],
+    parts: [...SP_CORE, "feed/ads.js", "feed/lyrics-card.js", "t2s.js", "lyrics.js", "feed/lyrics.js", "feed/entry.js"],
   },
   {
     module: "spotify",
@@ -148,7 +149,9 @@ const TARGETS = [
     file: "bilibili_quality.js",
     binary: true,
     title: "BiliBili Enhance — 播放请求画质（REST + gRPC）",
-    standalone: "bilibili_quality.js",
+    head: "quality/head.js",
+    tail: "grpc/tail.js",
+    parts: [["proto", "wire.js"], ["proto", "grpc.js"], "bilibili_quality.js"],
   },
   {
     module: "bilibili",
@@ -157,7 +160,7 @@ const TARGETS = [
     title: "BiliBili Enhance — gRPC 响应（详情 / 评论 / 动态）",
     head: "grpc/head.js",
     tail: "grpc/tail.js",
-    parts: [["proto", "wire.js"], ["proto", "grpc.js"], "grpc/rules.js", "grpc/entry.js"],
+    parts: [["proto", "wire.js"], ["proto", "grpc.js"], ["proto", "gunzip.js"], "grpc/rules.js", "grpc/entry.js"],
   },
   {
     module: "delivery",

@@ -139,7 +139,7 @@
       const unique = new Set();
       let match;
       while ((match = re.exec(text))) unique.add(match[1]);
-      if (!unique.size) return false;
+      if (!unique.size) return countMembersOnlyBadges(bytes, 1) > 0;
       if (1 === unique.size) return true;
       return countMembersOnlyBadges(bytes, unique.size) >= unique.size;
     } catch {
@@ -645,20 +645,22 @@
   }
 
   // 字幕翻译：在原字幕轨道后面补一条带 tlang 的翻译轨道，并把它设为默认。
-  // 目标语言本身就在轨道列表里时直接选中它，不再重复添加。
-  function applyCaptionTranslation(player, lang) {
+  // 目标语言（或等价区域码，如 zh-CN 之于 zh-Hans）已在轨道列表里时直接选中它；
+  // 同语言与英文底本均优先选择人工字幕而非自动生成（ASR）字幕，以免翻译底本质量退化。
+  function applyCaptionTranslation(player, lang, stripAuto) {
     const renderer = player.captions?.playerCaptionsTrackListRenderer;
     const tracks = renderer?.captionTracks;
     if (!Array.isArray(tracks) || !tracks.length) return false;
 
     let changed = false;
     let bestIndex = 0;
-    let bestScore = 0;
-    const target = String(lang).toLowerCase();
+    let bestScore = -1;
     for (let i = 0; i < tracks.length; i++) {
       const track = tracks[i];
-      const code = String(track.languageCode ?? "").toLowerCase();
-      const score = code === target ? 2 : /^en(?:-|$)/.test(code) ? 1 : 0;
+      const code = String(track.languageCode ?? "");
+      const manual = isAutoCaptionTrack(track) ? 0 : 1;
+      const langScore = sameCaptionLanguage(code, lang) ? 4 : /^en(?:-|$)/i.test(code) ? 2 : 0;
+      const score = langScore + manual;
       if (score > bestScore) {
         bestScore = score;
         bestIndex = i;
@@ -666,8 +668,9 @@
       if (track.isTranslatable !== true) changed = setField(track, "isTranslatable", true) || changed;
     }
 
+    const hasTarget = bestScore >= 4;
     let selected = bestIndex;
-    if (bestScore !== 2) {
+    if (!hasTarget) {
       const base = tracks[bestIndex];
       const baseUrl = String(base.baseUrl ?? "");
       if (!baseUrl) return changed;
@@ -682,13 +685,14 @@
       changed = setField(renderer, "captionTracks", [...tracks, translated]) || changed;
     }
 
+    const shouldEnable = !hasTarget && !stripAuto;
     changed = setField(renderer, "defaultCaptionTrackIndex", selected) || changed;
     if (Array.isArray(renderer.audioTracks)) {
       for (const audio of renderer.audioTracks) {
         const indices = Array.isArray(audio.captionTrackIndices) ? audio.captionTrackIndices : [];
         if (!indices.includes(selected)) changed = setField(audio, "captionTrackIndices", [...indices, selected]) || changed;
         changed = setField(audio, "defaultCaptionTrackIndex", selected) || changed;
-        changed = setField(audio, "captionsInitialState", 3) || changed;
+        if (shouldEnable) changed = setField(audio, "captionsInitialState", 3) || changed;
       }
     }
     return changed;
@@ -720,7 +724,7 @@
     if (options.captionLang && "off" !== String(options.captionLang).toLowerCase()) {
       // 字幕轨道结构异常时只跳过字幕，不能连累广告清理。
       try {
-        changed = applyCaptionTranslation(player, options.captionLang) || changed;
+        changed = applyCaptionTranslation(player, options.captionLang, !!options.stripAutoCaptions) || changed;
       } catch (e) {
         // ignore
       }

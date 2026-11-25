@@ -187,19 +187,11 @@
       t = (g) => (g << 8) | (g >>> 24);
     function n(g, I) {
       if (256 !== g.length) throw new Error("Wrong sbox length");
-      let A = new Uint32Array(256).map((A, C) => I(g[C])),
-        C = A.map(t),
-        E = C.map(t),
-        o = E.map(t),
-        e = new Uint32Array(65536),
-        B = new Uint32Array(65536),
-        n = new Uint16Array(65536);
-      for (let I = 0; I < 256; I++)
-        for (let t = 0; t < 256; t++) {
-          let S = 256 * I + t;
-          ((e[S] = A[I] ^ C[t]), (B[S] = E[I] ^ o[t]), (n[S] = (g[I] << 8) | g[t]));
-        }
-      return { sbox2: n, T01: e, T23: B };
+      let T0 = new Uint32Array(256).map((A, C) => I(g[C])),
+        T1 = T0.map(t),
+        T2 = T1.map(t),
+        T3 = T2.map(t);
+      return { sbox: g, T0, T1, T2, T3 };
     }
     var S = n(
         (() => {
@@ -220,23 +212,23 @@
         for (let I = 0, A = 1; I < 16; I++, A = o(A)) g[I] = A;
         return g;
       })();
-    function r(g, I, A, C, E, o) {
-      return g[((A << 8) & 65280) | ((C >>> 8) & 255)] ^ I[((E >>> 8) & 65280) | ((o >>> 24) & 255)];
+    function r(T0, T1, T2, T3, s0, s1, s2, s3) {
+      return T0[255 & s0] ^ T1[(s1 >>> 8) & 255] ^ T2[(s2 >>> 16) & 255] ^ T3[(s3 >>> 24) & 255];
     }
-    function h(g, I, A, C, E) {
-      return g[(255 & I) | (65280 & A)] | (g[((C >>> 16) & 255) | ((E >>> 16) & 65280)] << 16);
+    function h(sbox, s0, s1, s2, s3) {
+      return sbox[255 & s0] | (sbox[(s1 >>> 8) & 255] << 8) | (sbox[(s2 >>> 16) & 255] << 16) | (sbox[(s3 >>> 24) & 255] << 24);
     }
     function a(g, I, A, C, E) {
-      let { sbox2: o, T01: e, T23: B } = S,
+      let { sbox: o, T0, T1, T2, T3 } = S,
         t = 0;
       ((I ^= g[t++]), (A ^= g[t++]), (C ^= g[t++]), (E ^= g[t++]));
       let n = g.length / 4 - 2;
-      for (let o = 0; o < n; o++) {
-        let o = g[t++] ^ r(e, B, I, A, C, E),
-          n = g[t++] ^ r(e, B, A, C, E, I),
-          S = g[t++] ^ r(e, B, C, E, I, A),
-          i = g[t++] ^ r(e, B, E, I, A, C);
-        ((I = o), (A = n), (C = S), (E = i));
+      for (let i = 0; i < n; i++) {
+        let w0 = g[t++] ^ r(T0, T1, T2, T3, I, A, C, E),
+          w1 = g[t++] ^ r(T0, T1, T2, T3, A, C, E, I),
+          w2 = g[t++] ^ r(T0, T1, T2, T3, C, E, I, A),
+          w3 = g[t++] ^ r(T0, T1, T2, T3, E, I, A, C);
+        ((I = w0), (A = w1), (C = w2), (E = w3));
       }
       return {
         s0: g[t++] ^ h(o, I, A, C, E),
@@ -398,7 +390,7 @@
             let e = o.length;
             if (![16, 24, 32].includes(e))
               throw new Error("aes: invalid key size, should be 16, 24 or 32, got " + e);
-            let { sbox2: t } = S,
+            let { sbox: t } = S,
               n = [];
             C(o) || n.push((o = E(o)));
             let r = I(o),
@@ -532,7 +524,15 @@
       const isGzip = 31 === plaintext[0] && 139 === plaintext[1];
       if (1 === envelope.compressionAlgorithm && !isGzip) throw new Error("Invalid UMP gzip payload");
 
-      const decoded = isGzip ? await gzipStream(plaintext, true) : plaintext;
+      let decoded = plaintext;
+      if (isGzip) {
+        if ("function" == typeof gunzipBytes) {
+          decoded = await gunzipBytes(plaintext);
+          if (!decoded) throw new Error("Invalid UMP gzip payload");
+        } else {
+          decoded = await gzipStream(plaintext, true);
+        }
+      }
       const response = Onesie.fromBinary(decoded);
 
       if (collectPlayers) {
@@ -555,7 +555,16 @@
       const reencoded = Onesie.toBinary(response);
       if (bytesEqual(reencoded, decoded)) return partBytes;
 
-      const recompressed = isGzip ? await gzipStream(reencoded, false) : reencoded;
+      let recompressed = reencoded;
+      if (isGzip) {
+        if ("undefined" != typeof CompressionStream) {
+          recompressed = await gzipStream(reencoded, false);
+        } else if ("undefined" != typeof ctx && ctx && ctx.compress && "function" == typeof ctx.compress.gzip) {
+          recompressed = await ctx.compress.gzip(reencoded);
+        } else {
+          setField(envelope, "compressionAlgorithm", 0);
+        }
+      }
       const encrypted = await context.encrypt(recompressed);
       setField(envelope, "encryptedContent", encrypted.encryptedContent);
       setField(envelope, "hmac", encrypted.hmac);

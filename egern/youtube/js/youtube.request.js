@@ -53,20 +53,27 @@ export default async function (ctx) {
   const request = ctx.request
     ? { url: ctx.request.url, method: ctx.request.method, headers: plainHeaders(ctx.request.headers), body: requestBody }
     : undefined;
+  const rawTrailers =
+    ctx.response && (ctx.response.trailers !== undefined ? ctx.response.trailers : ctx.response.h2_trailers);
+  const responseTrailers = rawTrailers !== undefined ? plainHeaders(rawTrailers) : undefined;
   const response = ctx.response
-    ? {
-        url: ctx.request && ctx.request.url,
-        status: ctx.response.status,
-        statusCode: ctx.response.status,
-        headers: plainHeaders(ctx.response.headers),
-        body: responseBody,
-      }
+    ? Object.assign(
+        {
+          url: ctx.request && ctx.request.url,
+          status: ctx.response.status,
+          statusCode: ctx.response.status,
+          headers: plainHeaders(ctx.response.headers),
+          body: responseBody,
+        },
+        responseTrailers !== undefined ? { trailers: responseTrailers, h2_trailers: responseTrailers } : {},
+      )
     : undefined;
 
   // $httpClient 的 callback 形式（error, response, data）。
   const httpOptions = (options) => ("string" == typeof options ? { url: options } : options || {});
   const httpCall = (method, options, callback) => {
     const opt = httpOptions(options);
+    const isBinary = !!(opt["binary-mode"] || opt.binaryMode);
     Promise.resolve()
       .then(() =>
         ctx.http[method](opt.url, {
@@ -77,7 +84,8 @@ export default async function (ctx) {
       )
       .then(async (res) => {
         const headers = plainHeaders(res.headers);
-        callback(null, { status: res.status, statusCode: res.status, headers }, await res.text());
+        const body = isBinary ? new Uint8Array(await res.arrayBuffer()) : await res.text();
+        callback(null, { status: res.status, statusCode: res.status, headers }, body);
       })
       .catch((error) => callback(error || new Error("request failed"), null, null));
   };
@@ -122,6 +130,7 @@ export default async function (ctx) {
 
       const next = Object.assign({}, value);
       if (next.body === undefined && body !== undefined) next.body = body;
+      if (next.h2_trailers !== undefined && next.trailers === undefined) next.trailers = next.h2_trailers;
       resolve(next);
     };
 
@@ -449,8 +458,11 @@ export default async function (ctx) {
   // 优先按 BADGE_STYLE_TYPE_MEMBERS_ONLY 判定，文案只作兜底。
   const MEMBERS_ONLY_LABELS = [
     "Members only",
+    "Members first",
     "会员专享",
+    "会员抢先看",
     "會員專享",
+    "會員搶先看",
     "メンバー限定",
     "멤버 전용",
   ];
@@ -834,7 +846,9 @@ export default async function (ctx) {
   }
 
   function clientKeyFor(request) {
-    return isMusicRequest(request) ? "youtubeMusic" : "youtube";
+    const info = inspectRequest(request);
+    if (info.isWeb) return info.isMusic ? "youtubeMusicWeb" : "youtubeWeb";
+    return info.isMusic ? "youtubeMusic" : "youtube";
   }
 
   // 编码偏好：any 不过滤，no_av1 去掉 AV1，avc 只留 H.264。
@@ -844,6 +858,26 @@ export default async function (ctx) {
     if ("avc" === codec) return text.includes("avc1");
     if ("no_av1" === codec) return !text.includes("av01");
     return true;
+  }
+
+  function normalizeCaptionLang(lang) {
+    const raw = String(lang ?? "").trim().toLowerCase().replace(/_/g, "-");
+    if (!raw) return "";
+    if (/^zh-(?:hans|cn|sg|my)(?:-|$)/.test(raw)) return "zh-hans";
+    if (/^zh-(?:hant|tw|hk|mo)(?:-|$)/.test(raw)) return "zh-hant";
+    if ("iw" === raw || raw.startsWith("iw-")) return "iw" === raw ? "he" : "he-" + raw.slice(3);
+    if ("in" === raw || raw.startsWith("in-")) return "in" === raw ? "id" : "id-" + raw.slice(3);
+    return raw;
+  }
+
+  function sameCaptionLanguage(trackCode, targetCode) {
+    const a = normalizeCaptionLang(trackCode);
+    const b = normalizeCaptionLang(targetCode);
+    if (!a || !b) return false;
+    if (a === b) return true;
+    // 中文严格区分简繁，避免 zh-Hans 与 zh-Hant 互相匹配。
+    if (a.startsWith("zh") || b.startsWith("zh")) return false;
+    return !b.includes("-") && a.startsWith(b + "-");
   }
 
   function isQualityEntry(entry) {

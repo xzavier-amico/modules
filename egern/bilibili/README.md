@@ -21,6 +21,7 @@
 | `api.bilibili.com/x/web-interface/view` | 网页详情：删 `cm_config` / `cm_ipad` / `cm_under_player`，过滤 `relates` 广告 |
 | `api.bilibili.com/x/web-interface/wbi/view/detail` | 网页详情聚合：交给同一套详情处理 |
 | `api.bilibili.com/x/polymer/web-dynamic/v1/feed/all` | 网页动态：删 `DYNAMIC_TYPE_AD` 条目 |
+| `api.bilibili.com/x/v2/reply/(?:wbi/)?main` | 评论区：删 `cm` / `cm_info` 与带货置顶/商品链接评论 |
 | `api.bilibili.com/pgc/view/web/season` | 网页番剧页：删 `result.payment`（会员付费块） |
 | `api.live.bilibili.com/xlive/web-interface/v1/index/getList` | 网页直播首页：只删 `banner` 里带 `is_ad` / `show_ad_icon` 的卡片 |
 | `api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom` | 网页直播间：只删 banner 与购物位 |
@@ -70,6 +71,7 @@ gRPC 帧的 flag 是 1 表示消息体 gzip（帧级压缩，不是 `Content-Enc
 | `cm.bilibili.com` | REJECT（广告与商业上报） |
 | `adtrack.qianwen.com` | REJECT（第三方广告归因） |
 | `tkio-redirect.solar-engine.com` | REJECT（第三方广告归因） |
+| `httpdns.bilivideo.com` | REJECT（视频 HTTPDNS 调度） |
 | `api.bilibili.com/x/report/click/*` | reject 404（点击埋点） |
 
 ## 画质
@@ -77,12 +79,11 @@ gRPC 帧的 flag 是 1 表示消息体 gzip（帧级压缩，不是 `Content-Enc
 两条路径都改：REST 的 `*/playurl` 改 query 里的 `qn` / `fourk` / `fnval`；gRPC 的
 `bilibili.app.playurl.v1.PlayURL/PlayView`、`bilibili.pgc.gateway.player.v2.PlayURL/PlayView`
 和 `bilibili.app.playerunite.v1.Player/PlayViewUnite` 改请求体里的 `qn(3)` / `fnval(5)` / `fourk(8)`
-（playerunite 的字段在 `vod(1)` 里面）。服务端按账号权限返回实际能给的最高档：
-大会员给 4K，普通账号自动落到 1080P，不会报错。
+（playerunite 的字段在 `vod(1)` 里面）。默认按 `4k`（`qn=120`）改写，也可在参数里切换
+`8k` / `dolby` / `hdr` / `1080p60` / `1080p+` / `1080p` / `off`；服务端按账号权限返回实际能给的最高档。
 
-`fnval` 会补上 4K 位（128）——很多客户端只带了 1080P 的位，不补的话即使 qn=120
-服务端也不会给 4K。gRPC 请求体改之前会先确认 `qn` 的值是已知清晰度，字段号对不上就
-整条放行，不会把播放请求改坏。
+`fnval` 会按所选档位补上高位（如 4K 位 128、HDR 64、杜比 512、8K 1024）——很多客户端只带了 1080P 的位，不补的话即使 qn=120
+服务端也不会给 4K。gRPC 请求体改之前会先确认 `qn` 的值是已知清晰度或按 proto3 省略默认值，字段号对不上就整条放行，不会把播放请求改坏。
 
 **限制**：画质由服务端按账号权限下发，代理层只能把「请求要什么」提到最高。非大会员
 账号拿到 4K 流是不可能的；伪造 `accept_quality` 只会让界面显示 4K、实际播 1080P，
@@ -92,15 +93,15 @@ gRPC 帧的 flag 是 1 表示消息体 gzip（帧级压缩，不是 `Content-Enc
 
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
-| `block_ads` | true | 开屏、首页、搜索、番剧页、直播推荐、番剧弹窗、详情页、评论区、暂停广告 |
+| `block_ads` | true | 开屏、首页、搜索、评论区、番剧页、直播推荐、番剧弹窗、详情页、暂停广告 |
 | `hide_vip` | true | 番剧页 payment 块、大会员广告素材、VIP 卡片、我的页大会员推广 |
 | `clean_ui` | true | 底部「发布」+「会员购」、顶部「游戏中心」、「我的」页的「我的服务」分区 |
-| `auto_quality` | true | playurl 的 qn 改成 120（4K） |
-| `web` | true | 支持网页版：处理网页推荐、搜索、相关推荐、详情、动态、番剧与直播 API；关闭后网页版请求完全放行 |
+| `auto_quality` | `4k` | 默认最高画质档位：`4k` / `8k` / `dolby` / `hdr` / `1080p60` / `1080p+` / `1080p` / `off` |
+| `web` | true | 支持网页版：处理网页推荐、搜索、相关推荐、详情、评论、动态、番剧与直播 API；关闭后网页版请求完全放行 |
 
 ## 注意
 
-- 需开启 MitM：`app.bilibili.com`、`api.bilibili.com`、`api.live.bilibili.com`、
+- 需开启 MitM：`app.bilibili.com`、`api.bilibili.com`、`api.biliapi.net`、`api.live.bilibili.com`、
   `app.biliapi.net`、`grpc.biliapi.net`、`grpc.bilibili.com`。
 - Egern 内核的 MITM 默认支持 HTTP/2 并复用连接，不需要 Loon 那样的「MitM over HTTP/2」
   开关；B 站接口强制 HTTP/2，如果换到不支持 h2 MITM 的客户端，详情页 / 评论区 / 播放

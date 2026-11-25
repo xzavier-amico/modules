@@ -57,6 +57,15 @@
 
   const region = accountRegion();
   const timezone = REGION_TIMEZONES[region] || DEFAULT_TIMEZONE;
+  const tzMatch = /[?&]timezone=([^&]*)/i.exec(String(req.url));
+  let currentTz = tzMatch ? tzMatch[1] : "";
+  try {
+    currentTz = decodeURIComponent(currentTz);
+  } catch (e) {}
+  if (currentTz === timezone) {
+    $done({});
+    return;
+  }
   const nextUrl = String(req.url).replace(/([?&]timezone=)[^&]*/i, "$1" + timezone);
   if (nextUrl === req.url) {
     $done({});

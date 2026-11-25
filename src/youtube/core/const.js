@@ -52,8 +52,11 @@
   // 优先按 BADGE_STYLE_TYPE_MEMBERS_ONLY 判定，文案只作兜底。
   const MEMBERS_ONLY_LABELS = [
     "Members only",
+    "Members first",
     "会员专享",
+    "会员抢先看",
     "會員專享",
+    "會員搶先看",
     "メンバー限定",
     "멤버 전용",
   ];

@@ -39,7 +39,14 @@ if ("undefined" == typeof TextDecoder) {
   };
   TextDecoder.prototype.decode = function (input) {
     const b = input instanceof Uint8Array ? input : new Uint8Array(input || []);
+    const codes = [];
     let out = "";
+    const flush = () => {
+      if (codes.length) {
+        out += String.fromCharCode.apply(null, codes);
+        codes.length = 0;
+      }
+    };
     for (let i = 0; i < b.length; ) {
       const start = i;
       const first = b[i++];
@@ -65,18 +72,21 @@ if ("undefined" == typeof TextDecoder) {
       if (ok && need === 3 && (cp < 0x10000 || cp > 0x10ffff)) ok = false;
       if (!ok) {
         if (this.fatal) throw new TypeError("invalid utf-8");
-        out += "\ufffd";
+        codes.push(0xfffd);
+        if (codes.length >= 4096) flush();
         i = start + 1;
         continue;
       }
       i += need;
       if (cp > 0xffff) {
         cp -= 0x10000;
-        out += String.fromCharCode(0xd800 + (cp >> 10), 0xdc00 + (cp & 1023));
+        codes.push(0xd800 + (cp >> 10), 0xdc00 + (cp & 1023));
       } else {
-        out += String.fromCharCode(cp);
+        codes.push(cp);
       }
+      if (codes.length >= 4096) flush();
     }
+    flush();
     return out;
   };
 }
@@ -89,23 +99,34 @@ if ("undefined" == typeof Object.hasOwn) {
 
 // Uint8Array.fromBase64 / toBase64 是较新的 API，部分 Shadowrocket 的 JSC 没有。
 // 这里补标准 base64（带填充），并保留命名函数供冒烟测试直接调用。
+let shadowrocketB64Dec = null;
+
 function shadowrocketBase64From(text) {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  const clean = String(text)
-    .replace(/[-_]/g, (ch) => (ch === "-" ? "+" : "/"))
-    .replace(/[^A-Za-z0-9+/]/g, "");
-  const out = [];
-  for (let i = 0; i < clean.length; i += 4) {
-    const a = chars.indexOf(clean.charAt(i));
-    const b = chars.indexOf(clean.charAt(i + 1));
-    const c = chars.indexOf(clean.charAt(i + 2));
-    const d = chars.indexOf(clean.charAt(i + 3));
-    const n = (a << 18) | ((b & 63) << 12) | ((c & 63) << 6) | (d & 63);
-    out.push((n >> 16) & 255);
-    if (i + 2 < clean.length) out.push((n >> 8) & 255);
-    if (i + 3 < clean.length) out.push(n & 255);
+  if (!shadowrocketB64Dec) {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    shadowrocketB64Dec = new Int16Array(128).fill(-1);
+    for (let i = 0; i < chars.length; i++) shadowrocketB64Dec[chars.charCodeAt(i)] = i;
+    shadowrocketB64Dec[45] = 62;
+    shadowrocketB64Dec[95] = 63;
   }
-  return new Uint8Array(out);
+  const s = String(text);
+  const out = new Uint8Array(((s.length + 3) >>> 2) * 3);
+  let p = 0;
+  let acc = 0;
+  let bits = 0;
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code >= 128) continue;
+    const v = shadowrocketB64Dec[code];
+    if (v < 0) continue;
+    acc = (acc << 6) | v;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out[p++] = (acc >>> bits) & 0xff;
+    }
+  }
+  return p === out.length ? out : out.subarray(0, p);
 }
 
 function shadowrocketBase64To(bytes) {
@@ -211,6 +232,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
   const isWebEndpoint =
     path.indexOf("/x/web-interface/") >= 0 ||
+    path.indexOf("/x/v2/reply/wbi/") >= 0 ||
     path.indexOf("/x/polymer/web-dynamic/v1/feed/all") >= 0 ||
     path.indexOf("/pgc/view/web/season") >= 0 ||
     path.indexOf("/xlive/web-interface/") >= 0 ||
@@ -232,6 +254,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   const isWebViewDetail = path.indexOf("/x/web-interface/wbi/view/detail") >= 0;
   const isWebView = !isWebViewDetail && path.indexOf("/x/web-interface/view") >= 0;
   const isWebDynamic = path.indexOf("/x/polymer/web-dynamic/v1/feed/all") >= 0;
+  const isReply = path.indexOf("/x/v2/reply/") >= 0;
   const isVipMaterials = path.indexOf("/x/vip/ads/materials") >= 0;
   const isPgcSeason = path.indexOf("/pgc/view/v2/app/season") >= 0 || path.indexOf("/pgc/view/web/season") >= 0;
   const isPgcPage = path.indexOf("/pgc/page/") >= 0;
@@ -240,7 +263,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   const isLive = path.indexOf("/xlive/") >= 0;
 
   const handled =
-    ((isSplash || isFeed || isSearchSquare || isWebRcmd || isWebSearch || isWebRelated || isWebView || isWebViewDetail || isWebDynamic || isPgcPage || isLive) && blockAds) ||
+    ((isSplash || isFeed || isSearchSquare || isWebRcmd || isWebSearch || isWebRelated || isWebView || isWebViewDetail || isWebDynamic || isReply || isPgcPage || isLive) && blockAds) ||
     (isVipMaterials && (blockAds || hideVip)) ||
     (isPgcSeason && hideVip) ||
     (isShowTab && cleanUi) ||
@@ -261,11 +284,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     $done({});
     return;
   }
-  if ((isWebRcmd || isWebSearch || isWebRelated || isSearchSquare) && !/cm_|ad_|"ad"|"is_ad"\s*:\s*true/.test(body)) {
+  if ((isWebRcmd || isWebSearch || isWebRelated || isSearchSquare) && !/cm_|ad_|"ad"|"is_ad"\s*:\s*true|small_cover_v10|ad_info/.test(body)) {
     $done({});
     return;
   }
-  if ((isWebView || isWebViewDetail) && !/cm_config|cm_ipad|cm_under_player|cm_|ad_|"ad"|"is_ad"\s*:\s*true/.test(body)) {
+  if ((isWebView || isWebViewDetail) && !/cm_config|cm_ipad|cm_under_player|cm_|ad_|"ad"|"is_ad"\s*:\s*true|small_cover_v10|ad_info/.test(body)) {
     $done({});
     return;
   }
@@ -278,11 +301,13 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // 先用占位对象保护字符串外的 16+ 位数字，JSON.stringify 后原样还原。
   const BIGINT_MARK = "__bili_bigint_";
   let hasBigInt = false;
-  const safeBody = body.replace(/"(?:\\.|[^"\\])*"|(-?\d{16,})/g, (m, num) => {
-    if (!num) return m;
-    hasBigInt = true;
-    return '"' + BIGINT_MARK + num + '"';
-  });
+  const safeBody = /\d{16}/.test(body)
+    ? body.replace(/"(?:\\.|[^"\\])*"|(-?\d{16,})/g, (m, num) => {
+        if (!num) return m;
+        hasBigInt = true;
+        return '"' + BIGINT_MARK + num + '"';
+      })
+    : body;
 
   let data;
   try {
@@ -312,6 +337,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       ct.indexOf("cm_") === 0 ||
       cg.indexOf("ad_") === 0 ||
       (ct === "small_cover_v10" && cg === "game") ||
+      (isObj(o.ad_info) && Boolean(o.ad_info.creative_id)) ||
       o.goto === "ad" ||
       o.is_ad === true
     );
@@ -343,11 +369,21 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     }
   };
 
-  // 开屏：把几个已知数组清空。
+  // 开屏：清空广告列表并拉长轮询间隔、把 max_time 归零，减少客户端重启后立刻重拉开屏。
   if (isSplash && blockAds) {
     const d = data.data;
     if (isObj(d)) {
       ["list", "event_list", "brand_list", "show"].forEach((k) => clearArray(d, k));
+      if ("max_time" in d && d.max_time !== 0) {
+        d.max_time = 0;
+        changed = true;
+      }
+      ["min_interval", "pull_interval"].forEach((k) => {
+        if (typeof d[k] === "number" && d[k] < 86400) {
+          d[k] = 86400;
+          changed = true;
+        }
+      });
     } else if (Array.isArray(d) && d.length) {
       data.data = [];
       changed = true;
@@ -544,6 +580,52 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     }
   }
 
+  // 网页版 / REST 评论区（/x/v2/reply/wbi/main 等）：删评论广告对象、带货置顶与商品/招募广告评论。
+  if (blockAds && isReply && isObj(data.data)) {
+    const d = data.data;
+    const REPLY_AD_RE = /(?:b23\.tv\/(?:cm|mall)|cm\.bilibili\.com\/ad-showcase-h5|(?:gaoneng|huahuo|mall|ad)\.bilibili\.com)/i;
+    const isReplyAd = (r) => {
+      if (!isObj(r)) return false;
+      if (truthyFlag(r.is_ad) || isObj(r.cm)) return true;
+      const c = isObj(r.content) ? r.content : null;
+      if (!c) return false;
+      if (typeof c.message === "string" && REPLY_AD_RE.test(c.message)) return true;
+      if (isObj(c.jump_url)) {
+        for (const k of Object.keys(c.jump_url)) {
+          if (REPLY_AD_RE.test(k)) return true;
+          const v = c.jump_url[k];
+          if (isObj(v) && (REPLY_AD_RE.test(String(v.pc_url || "")) || REPLY_AD_RE.test(String(v.url || "")))) {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+    ["cm", "cm_info"].forEach((k) => {
+      if (k in d) {
+        delete d[k];
+        changed = true;
+      }
+    });
+    if (isObj(d.notice) && (REPLY_AD_RE.test(String(d.notice.link || "")) || REPLY_AD_RE.test(String(d.notice.content || "")))) {
+      delete d.notice;
+      changed = true;
+    }
+    if (isObj(d.upper) && isReplyAd(d.upper.top)) {
+      delete d.upper.top;
+      changed = true;
+    }
+    ["top_replies", "replies"].forEach((key) => {
+      const list = d[key];
+      if (!Array.isArray(list)) return;
+      const kept = list.filter((r) => !isReplyAd(r));
+      if (kept.length !== list.length) {
+        d[key] = kept;
+        changed = true;
+      }
+    });
+  }
+
   // 搜索广场：data 本身就是数组，只过滤广告项。
   if (blockAds && isSearchSquare) {
     const kept = keepNotAd(data.data);
@@ -580,7 +662,23 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         if (!isObj(t)) return false;
         const name = typeof t.name === "string" ? t.name.trim() : "";
         const id = typeof t.tab_id === "string" ? t.tab_id : "";
-        return name === "发布" || name === "会员购" || name === "游戏中心" || id.indexOf("会员购") >= 0;
+        const idLow = id.toLowerCase();
+        const uri = typeof t.uri === "string" ? t.uri : "";
+        return (
+          name === "发布" ||
+          name === "發布" ||
+          name === "会员购" ||
+          name === "會員購" ||
+          name === "游戏中心" ||
+          name === "遊戲中心" ||
+          id.indexOf("会员购") >= 0 ||
+          id.indexOf("會員購") >= 0 ||
+          idLow.indexOf("mall") >= 0 ||
+          idLow.indexOf("publish") >= 0 ||
+          uri.indexOf("mall.bilibili.com") >= 0 ||
+          uri.indexOf("game.bilibili.com") >= 0 ||
+          uri.indexOf("bilibili://upper/clip") >= 0
+        );
       };
       ["top", "tab", "bottom"].forEach((key) => {
         const list = d[key];
@@ -614,8 +712,8 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         const kept = list.filter((s) => {
           if (!isObj(s)) return true;
           const title = typeof s.title === "string" ? s.title : "";
-          if (hideVip && /大会员|会员购/.test(title)) return false;
-          if (cleanUi && /我的服务|更多服务|推荐服务/.test(title)) return false;
+          if (hideVip && /大会员|大會員|会员购|會員購/.test(title)) return false;
+          if (cleanUi && /我的服务|我的服務|更多服务|更多服務|推荐服务|推薦服務/.test(title)) return false;
           return true;
         });
         if (kept.length !== list.length) {

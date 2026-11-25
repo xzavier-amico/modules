@@ -113,46 +113,66 @@ rules:
 # 桌面端广告与推广接口；iOS 不请求这些路径，保留不影响。
 # Loon 插件里对应的是 request reject(404)，Egern 用 url_rewrites 的 reject 特殊值。
 url_rewrites:
-  - match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?(?:\\/ads\\/|\\/ad-|\\/premium-marketing\\/|[^?#]*\\/ad-on-app-open)"
+  - match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?(?:\\/ads\\/|\\/ad-|\\/premium-marketing\\/|[^?#]*\\/ad-on-app-open)"
     location: "http://reject/"
 
-# 删除 if-none-match，避免 304 空响应导致脚本拿不到 body。
+# 删除 if-none-match 与 if-modified-since，避免 304 空响应导致脚本拿不到 body。
 header_rewrites:
   - delete:
-      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:bootstrap|user-customization-service)\\/"
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:bootstrap|user-customization-service)"
       name: "if-none-match"
       type: "request"
   - delete:
-      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/extended-metadata\\/"
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:bootstrap|user-customization-service)"
+      name: "if-modified-since"
+      type: "request"
+  - delete:
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:extended-metadata|context-resolve|connect-state)\\/"
       name: "if-none-match"
       type: "request"
   - delete:
-      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/metadata\\/4\\/track\\/"
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:extended-metadata|context-resolve|connect-state)\\/"
+      name: "if-modified-since"
+      type: "request"
+  - delete:
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/metadata\\/4\\/track\\/"
       name: "if-none-match"
       type: "request"
   - delete:
-      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/"
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/metadata\\/4\\/track\\/"
+      name: "if-modified-since"
+      type: "request"
+  - delete:
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/"
       name: "if-none-match"
       type: "request"
-  # 远程配置 / 账号属性 / feed 同样删除 if-none-match。
   - delete:
-      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:remote-config-resolver|nebula|casita|browsita|scrollsita)\\/"
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/"
+      name: "if-modified-since"
+      type: "request"
+  # 远程配置 / 账号属性 / feed 同样删除条件缓存头。
+  - delete:
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:remote-config-resolver|nebula|casita|browsita|scrollsita)\\/"
       name: "if-none-match"
+      type: "request"
+  - delete:
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:remote-config-resolver|nebula|casita|browsita|scrollsita)\\/"
+      name: "if-modified-since"
       type: "request"
 
 scriptings:
   # 请求头 / 时区：按账号地区改写 URL 里的 timezone（固定开启）。
   - http_request:
       name: "spotify.headers"
-      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.headers.js?v=20261123-1"
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/.*[?&]timezone="
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.headers.js?v=20261124-1"
       timeout: 5
 
   # 删除 extended-metadata 请求体里的 etag，避免服务端回空数组。
   - http_request:
       name: "spotify.meta.req"
-      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/extended-metadata\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-42"
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/extended-metadata\\/"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261124-1"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -161,8 +181,8 @@ scriptings:
   # 改写账号状态与远程配置。
   - http_response:
       name: "spotify.enhance"
-      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:bootstrap|user-customization-service)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-42"
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:bootstrap|user-customization-service)"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261124-1"
       body_required: true
       binary_body: true
       max_size: 41943040
@@ -171,8 +191,8 @@ scriptings:
   # 将曲目元数据里的 has_lyrics 改为 true，客户端才会请求 color-lyrics。
   - http_response:
       name: "spotify.meta"
-      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:extended-metadata|context-resolve|connect-state|metadata\\/4\\/track)\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-42"
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:extended-metadata|context-resolve|connect-state|metadata\\/4\\/track)\\/"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261124-1"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -181,8 +201,8 @@ scriptings:
   # 改写 bootstrap 之后重新拉取的远程配置与账号属性。
   - http_response:
       name: "spotify.config"
-      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:remote-config-resolver|nebula)\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261123-42"
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:remote-config-resolver|nebula)\\/"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261124-1"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -193,8 +213,8 @@ scriptings:
   # 超时后 Egern 会放行原始响应，歌词卡片就不出现（重进一次才补上），所以放宽到 30。
   - http_response:
       name: "spotify.feed"
-      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:casita\\/v\\d+\\/home|browsita\\/v\\d+\\/browse|scrollsita\\/v\\d+\\/scroll)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.feed.js?v=20261123-5"
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:casita\\/v\\d+\\/home|browsita\\/v\\d+\\/browse|scrollsita\\/v\\d+\\/scroll)"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.feed.js?v=20261124-1"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -203,8 +223,8 @@ scriptings:
   # 请求阶段：缓存里已有这首歌的第三方歌词时直接返回，跳过可能很慢的官方请求。
   - http_request:
       name: "spotify.lyrics.req"
-      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261123-4"
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261124-1"
       binary_body: true
       max_size: 2097152
       timeout: 10
@@ -216,8 +236,8 @@ scriptings:
   # Egern 不支持按参数加载脚本，关闭补全歌词时脚本会立即返回。
   - http_response:
       name: "spotify.lyrics"
-      match: "^https:\\/\\/(?:\\w+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261123-4"
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261124-1"
       body_required: true
       binary_body: true
       max_size: 2097152

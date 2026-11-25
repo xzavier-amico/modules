@@ -7,6 +7,26 @@
     return true;
   }
 
+  function normalizeCaptionLang(lang) {
+    const raw = String(lang ?? "").trim().toLowerCase().replace(/_/g, "-");
+    if (!raw) return "";
+    if (/^zh-(?:hans|cn|sg|my)(?:-|$)/.test(raw)) return "zh-hans";
+    if (/^zh-(?:hant|tw|hk|mo)(?:-|$)/.test(raw)) return "zh-hant";
+    if ("iw" === raw || raw.startsWith("iw-")) return "iw" === raw ? "he" : "he-" + raw.slice(3);
+    if ("in" === raw || raw.startsWith("in-")) return "in" === raw ? "id" : "id-" + raw.slice(3);
+    return raw;
+  }
+
+  function sameCaptionLanguage(trackCode, targetCode) {
+    const a = normalizeCaptionLang(trackCode);
+    const b = normalizeCaptionLang(targetCode);
+    if (!a || !b) return false;
+    if (a === b) return true;
+    // 中文严格区分简繁，避免 zh-Hans 与 zh-Hant 互相匹配。
+    if (a.startsWith("zh") || b.startsWith("zh")) return false;
+    return !b.includes("-") && a.startsWith(b + "-");
+  }
+
   function isQualityEntry(entry) {
     return !!(
       entry &&

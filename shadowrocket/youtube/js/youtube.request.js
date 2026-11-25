@@ -39,7 +39,14 @@ if ("undefined" == typeof TextDecoder) {
   };
   TextDecoder.prototype.decode = function (input) {
     const b = input instanceof Uint8Array ? input : new Uint8Array(input || []);
+    const codes = [];
     let out = "";
+    const flush = () => {
+      if (codes.length) {
+        out += String.fromCharCode.apply(null, codes);
+        codes.length = 0;
+      }
+    };
     for (let i = 0; i < b.length; ) {
       const start = i;
       const first = b[i++];
@@ -65,18 +72,21 @@ if ("undefined" == typeof TextDecoder) {
       if (ok && need === 3 && (cp < 0x10000 || cp > 0x10ffff)) ok = false;
       if (!ok) {
         if (this.fatal) throw new TypeError("invalid utf-8");
-        out += "\ufffd";
+        codes.push(0xfffd);
+        if (codes.length >= 4096) flush();
         i = start + 1;
         continue;
       }
       i += need;
       if (cp > 0xffff) {
         cp -= 0x10000;
-        out += String.fromCharCode(0xd800 + (cp >> 10), 0xdc00 + (cp & 1023));
+        codes.push(0xd800 + (cp >> 10), 0xdc00 + (cp & 1023));
       } else {
-        out += String.fromCharCode(cp);
+        codes.push(cp);
       }
+      if (codes.length >= 4096) flush();
     }
+    flush();
     return out;
   };
 }
@@ -89,23 +99,34 @@ if ("undefined" == typeof Object.hasOwn) {
 
 // Uint8Array.fromBase64 / toBase64 是较新的 API，部分 Shadowrocket 的 JSC 没有。
 // 这里补标准 base64（带填充），并保留命名函数供冒烟测试直接调用。
+let shadowrocketB64Dec = null;
+
 function shadowrocketBase64From(text) {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  const clean = String(text)
-    .replace(/[-_]/g, (ch) => (ch === "-" ? "+" : "/"))
-    .replace(/[^A-Za-z0-9+/]/g, "");
-  const out = [];
-  for (let i = 0; i < clean.length; i += 4) {
-    const a = chars.indexOf(clean.charAt(i));
-    const b = chars.indexOf(clean.charAt(i + 1));
-    const c = chars.indexOf(clean.charAt(i + 2));
-    const d = chars.indexOf(clean.charAt(i + 3));
-    const n = (a << 18) | ((b & 63) << 12) | ((c & 63) << 6) | (d & 63);
-    out.push((n >> 16) & 255);
-    if (i + 2 < clean.length) out.push((n >> 8) & 255);
-    if (i + 3 < clean.length) out.push(n & 255);
+  if (!shadowrocketB64Dec) {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    shadowrocketB64Dec = new Int16Array(128).fill(-1);
+    for (let i = 0; i < chars.length; i++) shadowrocketB64Dec[chars.charCodeAt(i)] = i;
+    shadowrocketB64Dec[45] = 62;
+    shadowrocketB64Dec[95] = 63;
   }
-  return new Uint8Array(out);
+  const s = String(text);
+  const out = new Uint8Array(((s.length + 3) >>> 2) * 3);
+  let p = 0;
+  let acc = 0;
+  let bits = 0;
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code >= 128) continue;
+    const v = shadowrocketB64Dec[code];
+    if (v < 0) continue;
+    acc = (acc << 6) | v;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out[p++] = (acc >>> bits) & 0xff;
+    }
+  }
+  return p === out.length ? out : out.subarray(0, p);
 }
 
 function shadowrocketBase64To(bytes) {
@@ -450,8 +471,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // 优先按 BADGE_STYLE_TYPE_MEMBERS_ONLY 判定，文案只作兜底。
   const MEMBERS_ONLY_LABELS = [
     "Members only",
+    "Members first",
     "会员专享",
+    "会员抢先看",
     "會員專享",
+    "會員搶先看",
     "メンバー限定",
     "멤버 전용",
   ];
@@ -835,7 +859,9 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   function clientKeyFor(request) {
-    return isMusicRequest(request) ? "youtubeMusic" : "youtube";
+    const info = inspectRequest(request);
+    if (info.isWeb) return info.isMusic ? "youtubeMusicWeb" : "youtubeWeb";
+    return info.isMusic ? "youtubeMusic" : "youtube";
   }
 
   // 编码偏好：any 不过滤，no_av1 去掉 AV1，avc 只留 H.264。
@@ -845,6 +871,26 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     if ("avc" === codec) return text.includes("avc1");
     if ("no_av1" === codec) return !text.includes("av01");
     return true;
+  }
+
+  function normalizeCaptionLang(lang) {
+    const raw = String(lang ?? "").trim().toLowerCase().replace(/_/g, "-");
+    if (!raw) return "";
+    if (/^zh-(?:hans|cn|sg|my)(?:-|$)/.test(raw)) return "zh-hans";
+    if (/^zh-(?:hant|tw|hk|mo)(?:-|$)/.test(raw)) return "zh-hant";
+    if ("iw" === raw || raw.startsWith("iw-")) return "iw" === raw ? "he" : "he-" + raw.slice(3);
+    if ("in" === raw || raw.startsWith("in-")) return "in" === raw ? "id" : "id-" + raw.slice(3);
+    return raw;
+  }
+
+  function sameCaptionLanguage(trackCode, targetCode) {
+    const a = normalizeCaptionLang(trackCode);
+    const b = normalizeCaptionLang(targetCode);
+    if (!a || !b) return false;
+    if (a === b) return true;
+    // 中文严格区分简繁，避免 zh-Hans 与 zh-Hant 互相匹配。
+    if (a.startsWith("zh") || b.startsWith("zh")) return false;
+    return !b.includes("-") && a.startsWith(b + "-");
   }
 
   function isQualityEntry(entry) {

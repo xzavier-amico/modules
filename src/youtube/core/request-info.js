@@ -45,5 +45,7 @@
   }
 
   function clientKeyFor(request) {
-    return isMusicRequest(request) ? "youtubeMusic" : "youtube";
+    const info = inspectRequest(request);
+    if (info.isWeb) return info.isMusic ? "youtubeMusicWeb" : "youtubeWeb";
+    return info.isMusic ? "youtubeMusic" : "youtube";
   }

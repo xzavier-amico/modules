@@ -69,6 +69,7 @@ function runEgern(file, body, url, argument, extra) {
       method: "POST",
       headers: (extra.$request && extra.$request.headers) || {},
       body: phase === "request" && bytes ? { arrayBuffer: () => P.resolve(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)) } : undefined,
+      arrayBuffer: phase === "request" && bytes && bytes.length ? () => P.resolve(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)) : undefined,
     },
     response:
       phase === "response" && bytes
@@ -470,36 +471,124 @@ check("Loon Spotify request phase returns official lyrics directly", () => {
   assert.equal(Number(out.response.headers["Content-Length"]), new TextEncoder().encode(out.response.body).length);
 });
 
-check("Loon Spotify request phase returns a synchronized auto result before official", () => {
+check("Loon Spotify request phase prioritizes official lyrics within the grace window and falls back cleanly", () => {
   const id = "0VjIjW4GlUZAMYd2vXMi3b";
   const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json";
-  const values = {
-    "spotify.track.meta.v2": JSON.stringify({ [id]: ["Blinding Lights", "The Weeknd", 200000, Date.now()] }),
+  const newStore = () => {
+    const values = { "spotify.track.meta.v2": JSON.stringify({ [id]: ["Blinding Lights", "The Weeknd", 200000, Date.now()] }) };
+    return {
+      values,
+      api: { read: (key) => values[key] || null, write: (value, key) => { values[key] = value; return true; } },
+    };
   };
-  let officialPending = false;
-  const out = run("loon/spotify/js/spotify_lyrics.js", "", url, ["lrclib", true], {
-    $request: { url, method: "GET", headers: { Authorization: "Bearer test", Accept: "application/json" } },
-    $response: undefined,
-    $loon: "iPhone",
-    $persistentStore: { read: (key) => values[key] || null, write: (value, key) => { values[key] = value; return true; } },
-    $httpClient: { get: (options, callback) => {
-      if (options.url === url) {
-        officialPending = true;
-        return;
-      }
-      if (/lrclib\.net\/api\//.test(options.url)) {
-        callback(null, { status: 200, headers: { "Content-Type": "application/json" } }, JSON.stringify({
-          id: 12, trackName: "Blinding Lights", artistName: "The Weeknd", duration: 200,
-          syncedLyrics: "[00:01.00]third-party line",
-        }));
-        return;
-      }
-      callback(null, { status: 404, headers: {} }, "");
-    } },
-  });
-  assert.equal(officialPending, true, "official request starts before third-party lookup");
-  assert.equal(out.response.status, 200);
-  assert.equal(JSON.parse(out.response.body).lyrics.lines[0].words, "third-party line");
+
+  // 1) 第三方更早返回时给官方留出 1.2s 窗口；官方 404 立刻发射第三方同步歌词。
+  {
+    const store = newStore();
+    let officialCb = null;
+    const timers = [];
+    let out = null;
+    const context = vm.createContext({
+      TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, console,
+      $request: { url, method: "GET", headers: { Authorization: "Bearer test", Accept: "application/json" } },
+      $response: undefined, $loon: "iPhone", $persistentStore: store.api,
+      setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+      clearTimeout() {},
+      $done: (v) => { out = v; },
+      $httpClient: { get: (options, callback) => {
+        if (options.url === url) { officialCb = callback; return; }
+        if (/lrclib\.net\/api\//.test(options.url)) {
+          callback(null, { status: 200, headers: { "Content-Type": "application/json" } }, JSON.stringify({
+            id: 12, trackName: "Blinding Lights", artistName: "The Weeknd", duration: 200,
+            syncedLyrics: "[00:01.00]third-party line",
+          }));
+          return;
+        }
+        callback(null, { status: 404, headers: {} }, "");
+      } },
+    });
+    vm.runInContext(read("loon/spotify/js/spotify_lyrics.js"), context);
+    assert.ok(officialCb, "official request must start");
+    assert.equal(out, null, "third-party synced result must wait briefly for in-flight official request");
+    assert.ok(timers.some((t) => t.ms === 1200), "grace timer must be scheduled for 1200ms");
+    officialCb(null, { status: 404, headers: {} }, "");
+    assert.equal(out.response.status, 200);
+    assert.equal(JSON.parse(out.response.body).lyrics.lines[0].words, "third-party line");
+  }
+
+  // 2) 官方挂起超过 1.2s 宽限期，graceTimer 到点后发射第三方。
+  {
+    const store = newStore();
+    const timers = [];
+    let out = null;
+    const context = vm.createContext({
+      TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, console,
+      $request: { url, method: "GET", headers: { Accept: "application/json" } },
+      $response: undefined, $loon: "iPhone", $persistentStore: store.api,
+      setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+      clearTimeout() {},
+      $done: (v) => { out = v; },
+      $httpClient: { get: (options, callback) => {
+        if (options.url === url) return;
+        if (/lrclib\.net\/api\//.test(options.url)) {
+          callback(null, { status: 200, headers: { "Content-Type": "application/json" } }, JSON.stringify({
+            id: 12, trackName: "Blinding Lights", artistName: "The Weeknd", duration: 200,
+            syncedLyrics: "[00:01.00]third-party grace line",
+          }));
+          return;
+        }
+        callback(null, { status: 404, headers: {} }, "");
+      } },
+    });
+    vm.runInContext(read("loon/spotify/js/spotify_lyrics.js"), context);
+    assert.equal(out, null);
+    timers.find((t) => t.ms === 1200).fn();
+    assert.equal(JSON.parse(out.response.body).lyrics.lines[0].words, "third-party grace line");
+  }
+
+  // 3) 第三方先到但在宽限期内官方 200 到达：官方胜出并记入 spotify.official.hits；下次不再提前并发第三方。
+  {
+    const store = newStore();
+    let officialCb = null;
+    const timers = [];
+    let out = null;
+    const officialBody = JSON.stringify({ lyrics: { lines: [{ startTimeMs: "0", words: "official wins" }], language: "en" } });
+    const context = vm.createContext({
+      TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, console,
+      $request: { url, method: "GET", headers: { Accept: "application/json" } },
+      $response: undefined, $loon: "iPhone", $persistentStore: store.api,
+      setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+      clearTimeout() {},
+      $done: (v) => { out = v; },
+      $httpClient: { get: (options, callback) => {
+        if (options.url === url) { officialCb = callback; return; }
+        if (/lrclib\.net\/api\//.test(options.url)) {
+          callback(null, { status: 200, headers: { "Content-Type": "application/json" } }, JSON.stringify({
+            id: 12, trackName: "Blinding Lights", artistName: "The Weeknd", duration: 200,
+            syncedLyrics: "[00:01.00]third-party line",
+          }));
+          return;
+        }
+        callback(null, { status: 404, headers: {} }, "");
+      } },
+    });
+    vm.runInContext(read("loon/spotify/js/spotify_lyrics.js"), context);
+    officialCb(null, { status: 200, headers: { "Content-Type": "application/json" } }, officialBody);
+    assert.equal(JSON.parse(out.response.body).lyrics.lines[0].words, "official wins");
+    assert.ok(JSON.parse(store.values["spotify.official.hits"])[id] > 0, "official hit must be recorded");
+
+    // 第二次请求该曲目（未到 TTL）时，在官方未回 404 前不提前查第三方源。
+    const calls2 = [];
+    const ctx2 = vm.createContext({
+      TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, console,
+      $request: { url, method: "GET", headers: { Accept: "application/json" } },
+      $response: undefined, $loon: "iPhone", $persistentStore: store.api,
+      setTimeout: () => 1, clearTimeout() {}, $done: () => {},
+      $httpClient: { get: (options) => { calls2.push(options.url); } },
+    });
+    vm.runInContext(read("loon/spotify/js/spotify_lyrics.js"), ctx2);
+    assert.deepEqual(calls2, [url], "known official hit must only request official endpoint before official misses");
+  }
 });
 
 check("Spotify cache hits fold traditional prefetch entries", () => {
@@ -2843,6 +2932,8 @@ check("Loon passes arguments in the declared order", () => {
     for (const name of names) assert.ok(new RegExp("^" + name + " = ", "m").test(plugin));
     if (line.includes("spotify_lyrics.js")) {
       assert.deepEqual(names, ["lyrics_source", "enable_lyrics", "desktop", "lyrics_script", "ignore_han_variants", "sync_plain_lyrics", "lyrics_isrc"]);
+    } else if (line.includes("spotify.feed.js")) {
+      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source", "prefetch_lyrics", "sync_plain_lyrics", "lyrics_isrc", "lyrics_script", "ignore_han_variants"]);
     } else {
       assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source", "prefetch_lyrics", "sync_plain_lyrics", "lyrics_isrc"]);
     }
@@ -4514,6 +4605,347 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
   });
 }
 
+check("Shadowrocket compat handles chunked UTF-8 decode and single-pass base64 LUT", () => {
+  const ctx = vm.createContext({ Uint8Array, Int16Array, ArrayBuffer });
+  vm.runInContext(read("src/compat/shadowrocket.js") + "\nglobalThis.compat = { shadowrocketBase64From, shadowrocketBase64To };", ctx);
+  const longText = "A".repeat(4500) + "你好😀" + "B".repeat(500);
+  const encoded = new TextEncoder().encode(longText);
+  assert.equal(new ctx.TextDecoder("utf-8").decode(encoded), longText);
+  assert.equal(new ctx.TextDecoder("utf-8").decode(new Uint8Array([0x41, 0xff, 0x80, 0x42])), "A\ufffd\ufffdB");
+  const raw = "Hello?World\n";
+  const b64 = Buffer.from(raw, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_");
+  const spaced = b64.slice(0, 4) + "\n " + b64.slice(4);
+  assert.equal(Buffer.from(ctx.compat.shadowrocketBase64From(spaced)).toString("utf8"), raw);
+});
+
+check("Bilibili quality supports tiers, proto3 omitted/zero qn, api.biliapi.net, and manifest rules", () => {
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const file = platform + "/bilibili/js/bilibili_quality.js";
+    const base = "https://api.biliapi.net/x/player/playurl?cid=1&qn=64&fnval=16";
+    assert.ok(run(file, new Uint8Array(), base, { auto_quality: "8k" }).url.includes("qn=127") &&
+      run(file, new Uint8Array(), base, { auto_quality: "8k" }).url.includes("fnval=1168"));
+    assert.ok(run(file, new Uint8Array(), base, { auto_quality: "dolby" }).url.includes("qn=126") &&
+      run(file, new Uint8Array(), base, { auto_quality: "dolby" }).url.includes("fnval=656"));
+    assert.ok(run(file, new Uint8Array(), base, { auto_quality: "hdr" }).url.includes("qn=125") &&
+      run(file, new Uint8Array(), base, { auto_quality: "hdr" }).url.includes("fnval=208"));
+    const p60 = run(file, new Uint8Array(), base, { auto_quality: "1080p60" }).url;
+    assert.ok(p60.includes("qn=116") && p60.includes("fnval=16") && !p60.includes("fourk=1"));
+    const off = run(file, new Uint8Array(), base, { auto_quality: "off" });
+    assert.deepEqual(Object.keys(off || {}), []);
+
+    const mkFrame = (msg) => {
+      const h = new Uint8Array(5 + msg.length);
+      new DataView(h.buffer).setUint32(1, msg.length);
+      h.set(msg, 5);
+      return h;
+    };
+    const grpcExtra = (url, body) => ({ $request: { url, headers: { "content-type": "application/grpc" }, body } });
+    // qn=0 场景
+    const pvUrl = "https://grpc.biliapi.net/bilibili.app.playurl.v1.PlayURL/PlayView";
+    const pvMsg = mkFrame(serialize([v(3, 0n), v(5, 16n)]));
+    const pvOut = run(file, pvMsg, pvUrl, { auto_quality: "4k" }, grpcExtra(pvUrl, pvMsg));
+    const pvFields = parse(pvOut.body.subarray(5));
+    assert.equal(first(pvFields, 3).v, 120n);
+    assert.equal(first(pvFields, 5).v, 144n);
+    assert.equal(first(pvFields, 8).v, 1n);
+
+    // proto3 省略 qn（仅带 fnval）+ playerunite vod(1) 嵌套
+    const uniteUrl = "https://grpc.biliapi.net/bilibili.app.playerunite.v1.Player/PlayViewUnite";
+    const uniteMsg = mkFrame(serialize([b(1, serialize([v(5, 16n)]))]));
+    const uniteOut = run(file, uniteMsg, uniteUrl, { auto_quality: "4k" }, grpcExtra(uniteUrl, uniteMsg));
+    const vodFields = parse(first(parse(uniteOut.body.subarray(5)), 1).p);
+    assert.equal(first(vodFields, 3).v, 120n);
+    assert.equal(first(vodFields, 5).v, 144n);
+    assert.equal(first(vodFields, 8).v, 1n);
+
+    // gRPC 新增 4 个带货/广告域名屏蔽
+    const grpcFile = platform + "/bilibili/js/bilibili_grpc.js";
+    const replyOk = s(4, "正常评论");
+    for (const adHost of ["gaoneng.bilibili.com", "huahuo.bilibili.com", "mall.bilibili.com", "ad.bilibili.com"]) {
+      const gOut = run(grpcFile, mkFrame(serialize([s(4, "广告 https://" + adHost + "/x"), replyOk])),
+        "https://grpc.biliapi.net/bilibili.main.community.reply.v1.Reply/MainList", { block_ads: true });
+      assert.deepEqual(gOut.body, mkFrame(serialize([replyOk])), platform + " grpc must strip " + adHost);
+    }
+  }
+
+  for (const manifest of [
+    "loon/bilibili/bilibili-enhance.plugin",
+    "egern/bilibili/bilibili-enhance.yaml",
+    "shadowrocket/bilibili/bilibili-enhance.sgmodule",
+  ]) {
+    const text = read(manifest);
+    assert.ok(text.includes("httpdns.bilivideo.com"), manifest + " httdns rule");
+    assert.ok(text.includes("biliapi.com"), manifest + " biliapi.com QUIC rule");
+    assert.ok(text.includes("api.biliapi.net"), manifest + " api.biliapi.net host");
+    assert.ok(text.includes("if-none-match") && text.includes("if-modified-since"), manifest + " cache header deletion");
+  }
+  const srLine = read("shadowrocket/bilibili/bilibili-enhance.sgmodule").split("\n").find((l) => l.startsWith("bilibili.quality ="));
+  const srArg = /argument="(.*)"$/.exec(srLine)[1].replace(/\{\{\{[^}]*\}\}\}/g, "true");
+  assert.equal(JSON.parse(srArg).auto_quality, "true");
+});
+
+check("Bilibili clean strips REST replies, ad_info, splash intervals and traditional Chinese tabs", () => {
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const file = platform + "/bilibili/js/bilibili_clean.js";
+    const replyUrl = "https://api.bilibili.com/x/v2/reply/wbi/main?oid=1";
+    const replyBody = JSON.stringify({
+      code: 0,
+      data: {
+        cm: { id: 1 },
+        cm_info: { ads: {} },
+        notice: { link: "https://mall.bilibili.com/p" },
+        upper: { top: { rpid: 1, content: { message: "看这里 https://gaoneng.bilibili.com/x" } } },
+        top_replies: [{ rpid: 2, is_ad: true }, { rpid: 3, content: { message: "置顶正常评论" } }],
+        replies: [
+          { rpid: 4, content: { jump_url: { "https://huahuo.bilibili.com/a": {} }, message: "好物" } },
+          { rpid: 5, content: { message: "普通评论" } },
+        ],
+      },
+    });
+    const rOut = JSON.parse(run(file, replyBody, replyUrl, { block_ads: true, web: true }).body);
+    assert.equal(rOut.data.cm, undefined);
+    assert.equal(rOut.data.cm_info, undefined);
+    assert.equal(rOut.data.notice, undefined);
+    assert.equal(rOut.data.upper.top, undefined);
+    assert.deepEqual(rOut.data.top_replies.map((r) => r.rpid), [3]);
+    assert.deepEqual(rOut.data.replies.map((r) => r.rpid), [5]);
+    assert.deepEqual(Object.keys(run(file, replyBody, replyUrl, { block_ads: true, web: false })), []);
+
+    const feedOut = JSON.parse(run(file, JSON.stringify({
+      code: 0,
+      data: {
+        items: [
+          { card_type: "small_cover_v2", ad_info: { creative_id: 99 } },
+          { card_type: "small_cover_v10", card_goto: "game" },
+          { card_type: "small_cover_v2", card_goto: "av" },
+        ],
+      },
+    }), "https://app.bilibili.com/x/v2/feed/index?idx=0", { block_ads: true }).body);
+    assert.deepEqual(feedOut.data.items.map((x) => x.card_goto), ["av"]);
+
+    const splashOut = JSON.parse(run(file, JSON.stringify({
+      code: 0,
+      data: { list: [{ id: 1 }], max_time: 5, min_interval: 600, pull_interval: 1200 },
+    }), "https://app.bilibili.com/x/v2/splash/list", { block_ads: true }).body);
+    assert.deepEqual(splashOut.data.list, []);
+    assert.equal(splashOut.data.max_time, 0);
+    assert.equal(splashOut.data.min_interval, 86400);
+    assert.equal(splashOut.data.pull_interval, 86400);
+
+    const tabOut = JSON.parse(run(file, JSON.stringify({
+      code: 0,
+      data: {
+        tab: [{ name: "推薦", pos: 1 }, { name: "會員購", uri: "https://mall.bilibili.com/x", pos: 2 }],
+        bottom: [{ name: "發布", tab_id: "publish", pos: 1 }, { name: "我的", pos: 2 }],
+        top: [{ name: "遊戲中心", uri: "https://game.bilibili.com/", pos: 1 }],
+      },
+    }), "https://app.bilibili.com/x/resource/show/tab", { clean_ui: true }).body);
+    assert.deepEqual(tabOut.data.tab.map((x) => x.name), ["推薦"]);
+    assert.deepEqual(tabOut.data.bottom.map((x) => [x.name, x.pos]), [["我的", 1]]);
+    assert.deepEqual(tabOut.data.top, []);
+
+    const mineOut = JSON.parse(run(file, JSON.stringify({
+      code: 0,
+      data: { sections_v2: [{ title: "大會員中心" }, { title: "我的服務" }, { title: "創作中心" }] },
+    }), "https://app.bilibili.com/x/v2/account/mine", { hide_vip: true, clean_ui: true }).body);
+    assert.deepEqual(mineOut.data.sections_v2.map((x) => x.title), ["創作中心"]);
+  }
+});
+
+check("YouTube isolates clientKey by web/app, drops Members first & badge-only cards, and improves caption matching", () => {
+  // clientKeyFor 区分 web 与 app
+  const nest = (path, leaf) => path.reduceRight((acc, no) => serialize([b(no, acc)]), leaf);
+  const leaf = serialize([b(1, new Uint8Array(32).fill(5)), b(2, new Uint8Array(16).fill(8))]);
+  const keyBody = serialize([b(1, nest([16, 7, 138536474, 146311580], leaf))]);
+  const map = {};
+  const store = { read: (k) => (k in map ? map[k] : null), write: (v, k) => ((map[k] = v), true) };
+  for (const url of [
+    "https://youtubei.googleapis.com/youtubei/v1/config",
+    "https://music.youtube.com/youtubei/v1/config",
+    "https://www.youtube.com/youtubei/v1/config",
+  ]) {
+    const ctx = vm.createContext({
+      TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, console,
+      $request: { url, headers: {} }, $response: { url, status: 200, headers: {}, body: keyBody },
+      $persistentStore: store, $done: () => {},
+    });
+    vm.runInContext(read("loon/youtube/js/youtube.key.js"), ctx);
+  }
+  const savedKeys = JSON.parse(map.YouTubeConfig);
+  assert.ok(savedKeys.youtube?.clientKey && savedKeys.youtubeWeb?.clientKey && savedKeys.youtubeMusicWeb?.clientKey);
+
+  // Members first 与无 /vi/ 缩略图的纯徽章卡片过滤
+  const badgeOnlyCard = serialize([b(172660663, serialize([b(1, serialize([b(168777401, serialize([s(5, "Members first")]))]))]))]);
+  const browseMembers = serialize([b(9, serialize([b(49399797, serialize([b(1, serialize([b(50195462, serialize([b(1, serialize([b(153515154, parse(badgeOnlyCard)[0].p)]))]))]))]))]))]);
+  const bOut = run("loon/youtube/js/youtube.response.js", browseMembers, "https://youtubei.googleapis.com/youtubei/v1/browse", {
+    blockAds: false, blockMembersOnly: true,
+  });
+  const listContents = parse(first(parse(first(parse(bOut.body), 9).p), 49399797).p);
+  assert.equal(listContents.length, 0, "Members first card without /vi/ thumbnail must be dropped");
+
+  // 字幕匹配：zh-CN 对齐 zh-Hans 不重复加轨、保 keep 状态；en-US 命中 en；人工轨优先于 ASR
+  const pUrl = "https://www.youtube.com/youtubei/v1/player";
+  const cnBody = JSON.stringify({
+    captions: {
+      playerCaptionsTrackListRenderer: {
+        captionTracks: [
+          { baseUrl: "https://x/t?lang=en", languageCode: "en", vssId: ".en" },
+          { baseUrl: "https://x/t?lang=zh-CN", languageCode: "zh-CN", vssId: ".zh-CN" },
+        ],
+        audioTracks: [{ captionTrackIndices: [0, 1], defaultCaptionTrackIndex: 0, captionsInitialState: 1 }],
+        defaultCaptionTrackIndex: 0,
+      },
+    },
+  });
+  const cnOut = JSON.parse(run("loon/youtube/js/youtube.response.js", cnBody, pUrl, {
+    captionLang: "zh-Hans", captionsMode: "keep", web: true,
+  }, { $request: { url: pUrl }, $response: { url: pUrl, status: 200, headers: { "content-type": "application/json" }, body: cnBody } }).body);
+  const cnR = cnOut.captions.playerCaptionsTrackListRenderer;
+  assert.equal(cnR.captionTracks.length, 2, "zh-CN must match zh-Hans without duplicate @Enhance track");
+  assert.equal(cnR.defaultCaptionTrackIndex, 1);
+  assert.equal(cnR.audioTracks[0].captionsInitialState, 1, "captionsMode=keep must not force captionsInitialState=3 when native track exists");
+
+  const asrFirst = JSON.stringify({
+    captions: {
+      playerCaptionsTrackListRenderer: {
+        captionTracks: [
+          { baseUrl: "https://x/t?asr=1", languageCode: "en", vssId: "a.en", kind: "asr" },
+          { baseUrl: "https://x/t?manual=1", languageCode: "en", vssId: ".en", kind: "" },
+        ],
+        audioTracks: [{ captionTrackIndices: [0, 1], captionsInitialState: 1 }],
+      },
+    },
+  });
+  const trOut = JSON.parse(run("loon/youtube/js/youtube.response.js", asrFirst, pUrl, {
+    captionLang: "zh-Hans", web: true,
+  }, { $request: { url: pUrl }, $response: { url: pUrl, status: 200, headers: { "content-type": "application/json" }, body: asrFirst } }).body);
+  const addedTrack = trOut.captions.playerCaptionsTrackListRenderer.captionTracks[2];
+  assert.ok(addedTrack.baseUrl.includes("manual=1"), "translation must use manual .en track instead of ASR a.en");
+
+  // en-US 命中 en，不重复添加 @Enhance (en)
+  const enUs = JSON.stringify({
+    captions: { playerCaptionsTrackListRenderer: {
+      captionTracks: [{ baseUrl: "https://x/t?lang=en-US", languageCode: "en-US", vssId: ".en-US" }],
+      audioTracks: [{ captionTrackIndices: [0], captionsInitialState: 1 }],
+    } },
+  });
+  const enOut = JSON.parse(run("loon/youtube/js/youtube.response.js", enUs, pUrl, {
+    captionLang: "en", captionsMode: "keep", web: true,
+  }, { $request: { url: pUrl }, $response: { url: pUrl, status: 200, headers: { "content-type": "application/json" }, body: enUs } }).body);
+  assert.equal(enOut.captions.playerCaptionsTrackListRenderer.captionTracks.length, 1, "en-US must satisfy captionLang=en");
+  assert.equal(enOut.captions.playerCaptionsTrackListRenderer.audioTracks[0].captionsInitialState, 1);
+
+  for (const f of [
+    "loon/youtube/youtube-enhance.plugin",
+    "egern/youtube/youtube-enhance.yaml",
+    "shadowrocket/youtube/youtube-enhance.sgmodule",
+  ]) {
+    assert.ok(/\(\?:www\|m\|music\)\\+\.youtube\\+\.com(?:\\\/|\/)\(pagead\|pcs\)/.test(read(f)), f + " m/music pagead/pcs rule");
+  }
+});
+
+check("Spotify headers percent-encoded early return, feed prefetch, Shadowrocket timeout, and manifest rules", () => {
+  // 1) headers URL percent-encoded timezone 早退
+  const hdrOut = run("loon/spotify/js/spotify.headers.js", "",
+    "https://spclient.wg.spotify.com/bootstrap/v1?timezone=Asia%2FShanghai", {},
+    { $request: { url: "https://spclient.wg.spotify.com/bootstrap/v1?timezone=Asia%2FShanghai", headers: {} },
+      $persistentStore: { read: () => "CN", write: () => true } });
+  assert.deepEqual(Object.keys(hdrOut), []);
+
+  // 2) feed 预取已折叠繁体且网络全 500 时不写 30min 冷却标记
+  const id1 = "0VjIjW4GlUZAMYd2vXMi3b";
+  const id2 = "1111111111111111111111";
+  const cards = serialize([b(1, serialize([b(1, serialize([
+    b(1, serialize([s(2, "ordinary")])),
+    b(23, serialize([s(1, "spotify:section:ordinary")])),
+  ]))]))]);
+  const sUrl = "https://spclient.wg.spotify.com/scrollsita/v1/scroll/" + encodeURIComponent("spotify:track:" + id1);
+  const failMap = {
+    "spotify.queue": JSON.stringify({ current: id1, next: [id2], at: Date.now() }),
+    "spotify.track.meta.v2": JSON.stringify({ [id2]: ["我們的愛", "F.I.R.", 200000, Date.now()] }),
+  };
+  const failStore = { read: (k) => failMap[k] || null, write: (v, k) => { failMap[k] = v; return true; } };
+  run("loon/spotify/js/spotify.feed.js", cards, sUrl,
+    [true, false, true, true, "ios", "netease", true, true, false, "hans", true],
+    {
+      $persistentStore: failStore,
+      $httpClient: { get: (req, cb) => cb(null, { status: 502 }, "bad gateway") },
+    });
+  assert.equal(failMap["spotify.prefetch.v1"], undefined, "502 outage must not persist 30min prefetch cooldown");
+
+  const okMap = {
+    "spotify.queue": JSON.stringify({ current: id1, next: [id2], at: Date.now() }),
+    "spotify.track.meta.v2": JSON.stringify({ [id2]: ["我們的愛", "F.I.R.", 200000, Date.now()] }),
+  };
+  const okStore = { read: (k) => okMap[k] || null, write: (v, k) => { okMap[k] = v; return true; } };
+  run("loon/spotify/js/spotify.feed.js", cards, sUrl,
+    [true, false, true, true, "ios", "netease", true, true, false, "hans", true],
+    {
+      $persistentStore: okStore,
+      $httpClient: { get: (req, cb) => {
+        if (req.url.includes("music.163.com/api/search")) {
+          cb(null, { status: 200 }, JSON.stringify({ result: { songs: [{ id: 1, name: "我们的爱", artists: [{ name: "F.I.R." }], duration: 200000 }] } }));
+        } else {
+          cb(null, { status: 200 }, JSON.stringify({ lrc: { lyric: "[00:01.00]我們的愛 說謊" } }));
+        }
+      } },
+    });
+  const cached = JSON.parse(okMap["spotify.lyrics.cache.v2"])["netease|hans|" + id2];
+  assert.equal(cached.z, 1);
+  assert.equal(cached.u, 0);
+  assert.equal(cached.a[0][1], "我们的爱 说谎");
+  assert.ok(JSON.parse(okMap["spotify.prefetch.v1"])[id2] > 0);
+
+  // 3) Shadowrocket $httpClient timeout 传秒
+  const srTimeouts = [];
+  run("shadowrocket/spotify/js/spotify_lyrics.js", "",
+    "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id1 + "?format=json",
+    { lyrics_source: "lrclib", enable_lyrics: true },
+    {
+      $response: { status: 404, body: "" },
+      $httpClient: { get: (req, cb) => {
+        srTimeouts.push(req.timeout);
+        cb(null, { status: 200 }, JSON.stringify(req.url.includes("oembed")
+          ? { title: "Song", author_name: "Artist" }
+          : { trackName: "Song", artistName: "Artist", syncedLyrics: "[00:01.00]Hello" }));
+      } },
+    });
+  assert.ok(srTimeouts.length > 0 && srTimeouts.every((t) => t > 0 && t <= 10), "Shadowrocket timeout must be in seconds");
+
+  // 4) 官方 protobuf 响应保留上游 CORS 头并重算 Content-Length
+  const offProto = serialize([b(1, serialize([v(1, 1), b(2, serialize([v(1, 10), s(2, "line")])), v(14, 3)]))]);
+  const corsOut = run("loon/spotify/js/spotify_lyrics.js", offProto,
+    "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id1,
+    ["auto", true],
+    {
+      $request: { url: "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id1, headers: {} },
+      $response: { status: 200, headers: { "Content-Type": "application/x-protobuf", "Access-Control-Allow-Origin": "https://open.spotify.com" }, body: offProto },
+    });
+  assert.equal(corsOut.headers["Access-Control-Allow-Origin"], "https://open.spotify.com");
+  assert.equal(Number(corsOut.headers["Content-Length"]), corsOut.body.length);
+
+  // 5) Spotify manifests 检查
+  assert.match(read("loon/spotify/spotify-enhance.plugin"), /\[MitM\][\s\S]*?^h2 = true$/m);
+  assert.match(read("loon/spotify/spotify-mock/spotify-mock.plugin"), /\[MitM\][\s\S]*?^h2 = true$/m);
+  assert.match(read("shadowrocket/spotify/spotify-mock/spotify-mock.sgmodule"), /\[MITM\][\s\S]*?^h2 = true$/m);
+  for (const f of [
+    "loon/spotify/spotify-enhance.plugin",
+    "egern/spotify/spotify-enhance.yaml",
+    "shadowrocket/spotify/spotify-enhance.sgmodule",
+  ]) {
+    const t = read(f);
+    assert.ok(/\[\\+w-\]\+-spclient/.test(t), f + " hyphen spclient host");
+    assert.ok(!/(?:\\+w\+|\[a-z0-9\]\+)-spclient/.test(t), f + " no unhyphenated spclient host");
+    assert.ok(t.includes("if-modified-since") && t.includes("context-resolve"), f + " cache header deletion");
+  }
+  for (const line of read("shadowrocket/spotify/spotify-enhance.sgmodule").split("\n").filter((l) => l.includes('argument="'))) {
+    const raw = /argument="(.*)"$/.exec(line)[1].replace(/\{\{\{[^}]*\}\}\}/g, "true");
+    const parsed = JSON.parse(raw);
+    assert.equal(parsed.enable_lyrics, true, "Shadowrocket Spotify argument JSON valid");
+    if (!line.includes("spotify_lyrics.js")) assert.equal(parsed.spoof_premium, true, "Shadowrocket Spotify spoof_premium valid");
+  }
+});
+
 // B 站 gRPC：按字段号删广告，没改动的字段连同原始编码一起保留。
 function testBilibiliGrpc() {
   // B 站接口强制 HTTP/2。MITM 不按 h2 解密时，并发请求会被串行化，
@@ -4671,7 +5103,209 @@ async function testUmp() {
   checks++;
   console.log("ok   YouTube real UMP crypto (WebCrypto + JS): dropNextExtras, videoCodec player collection & container preservation");
 }
+async function testOptimizationAsync() {
+  const zlibMod = require("node:zlib");
+  const frame = (msg, flag = 0) => {
+    const head = new Uint8Array(5);
+    head[0] = flag;
+    new DataView(head.buffer).setUint32(1, msg.length);
+    return concat(head, msg);
+  };
+  const viewUrl = "https://grpc.biliapi.net/bilibili.app.view.v1.View/View";
+
+  // 1) B 站 gRPC 在无 $utils.ungzip 与 DecompressionStream 时通过纯 JS gunzipJs 解压（含 dynamic/fixed/stored 与坏 ISIZE）并删 Content-Length
+  for (const platform of ["loon", "egern", "shadowrocket"]) {
+    const file = platform + "/bilibili/js/bilibili_grpc.js";
+    const relateOk = serialize([s(7, "av"), s(2, "normal_".repeat(40))]);
+    const rawView = serialize([b(10, relateOk), s(30, "cms_ad"), v(99, 7n)]);
+    const gzDyn = new Uint8Array(zlibMod.gzipSync(Buffer.from(rawView)));
+    const gzStored = new Uint8Array(zlibMod.gzipSync(Buffer.from(rawView), { level: 0 }));
+    for (const gzMsg of [gzDyn, gzStored]) {
+      const body = frame(gzMsg, 1);
+      let out;
+      if (platform === "egern") {
+        const bytes = body;
+        const sandbox = { TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, console };
+        const context = vm.createContext(sandbox);
+        const P = vm.runInContext("Promise", context);
+        sandbox.ctx = {
+          env: { block_ads: "true" },
+          request: { url: viewUrl, method: "POST", headers: {} },
+          response: { status: 200, headers: { "Content-Length": "999" }, body: {}, arrayBuffer: () => P.resolve(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)) },
+          storage: { get: () => null, set: () => {} },
+          http: { get: () => P.reject(new Error("no http")), post: () => P.reject(new Error("no http")) },
+          respond: (v) => v,
+        };
+        const code = read(file).replace(/^export default async function \(ctx\) \{/m, "globalThis.__entry = async function (ctx) {");
+        vm.runInContext(code + "\nglobalThis.__promise = __entry(ctx);", context, { timeout: 10000 });
+        out = await sandbox.__promise;
+      } else {
+        const calls = [];
+        const ctx = vm.createContext({
+          TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, console,
+          $request: { url: viewUrl },
+          $response: { status: 200, headers: { "Content-Length": "999" }, body },
+          $argument: { block_ads: true },
+          $done: (v) => calls.push(v),
+        });
+        vm.runInContext(read(file), ctx, { timeout: 10000 });
+        await new Promise((r) => setImmediate(r));
+        assert.equal(calls.length, 1);
+        out = calls[0];
+      }
+      assert.deepEqual(out.body, frame(serialize([b(10, relateOk), v(99, 7n)]), 0), platform + " pure-JS gunzipJs must decompress and strip");
+      assert.equal(out.headers && (out.headers["Content-Length"] || out.headers["content-length"]), undefined, platform + " must strip stale Content-Length");
+    }
+
+    // 坏 ISIZE 的 gzip 帧必须放行
+    const badGz = gzDyn.slice();
+    badGz[badGz.length - 1] ^= 1;
+    const badBody = frame(badGz, 1);
+    if (platform === "egern") {
+      const out = await runEgernAsync(file, badBody, viewUrl, { block_ads: true });
+      assert.deepEqual(Object.keys(out || {}), [], "bad ISIZE must pass through on egern");
+    } else {
+      const calls = [];
+      const ctx = vm.createContext({
+        TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, console,
+        $request: { url: viewUrl }, $response: { status: 200, body: badBody },
+        $argument: { block_ads: true }, $done: (v) => calls.push(v),
+      });
+      vm.runInContext(read(file), ctx, { timeout: 10000 });
+      await new Promise((r) => setImmediate(r));
+      assert.deepEqual(Object.keys(calls[0]), [], "bad ISIZE must pass through on " + platform);
+    }
+  }
+  checks++;
+  console.log("ok   Bilibili gRPC pure-JS gunzipJs (dynamic + stored), ISIZE rejection & Content-Length removal");
+
+  // 2) Egern env/head.js trailers forwarding + binary-mode httpClient
+  {
+    const sandbox = { TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, console };
+    const ctx = vm.createContext(sandbox);
+    const P = vm.runInContext("Promise", ctx);
+    const binBytes = new Uint8Array([9, 8, 7]);
+    let gotBin = null;
+    sandbox.ctx = {
+      env: {},
+      request: { url: "https://example.com/test", method: "GET", headers: {} },
+      response: { status: 200, headers: {}, trailers: { "grpc-status": "0" }, body: {}, arrayBuffer: () => P.resolve(new Uint8Array([1, 2]).buffer) },
+      http: { get: () => P.resolve({ status: 200, headers: {}, arrayBuffer: () => P.resolve(binBytes.buffer), text: () => P.resolve("err") }) },
+      respond: (v) => v,
+    };
+    const wrapped = read("src/env/head.js").replace(/^export default async function \(ctx\) \{/m, "globalThis.__entry = async function (ctx) {") +
+      '\n$httpClient.get({ url: "https://x.test", "binary-mode": true }, (e, r, b) => { gotBin = b; $done({ body: new Uint8Array([3, 4]), h2_trailers: $response.trailers }); });\n' +
+      read("src/env/tail.js");
+    ctx.gotBin = null;
+    vm.runInContext(wrapped.replace("gotBin = b", "globalThis.gotBin = b") + "\nglobalThis.__p = __entry(ctx);", ctx, { timeout: 10000 });
+    const res = await sandbox.__p;
+    assert.deepEqual(Array.from(sandbox.gotBin), [9, 8, 7], "Egern httpCall must honor binary-mode");
+    assert.equal(res.trailers["grpc-status"], "0", "Egern adapter must forward h2_trailers as trailers");
+    assert.deepEqual({ ...res.trailers }, { "grpc-status": "0" }, "Egern adapter must preserve all trailer keys");
+    checks++;
+    console.log("ok   Egern env/head.js adapter binary-mode httpClient & trailers forwarding");
+  }
+
+  // 3) YouTube 真实 gzip UMP 在缺少 CompressionStream / DecompressionStream 时仍解密并用非压缩写回
+  {
+    const umpHelperCtx = vm.createContext({ Uint8Array, Uint32Array, Uint16Array, TextEncoder, TextDecoder, crypto: globalThis.crypto, EAGER_TYPES: { ump: {} } });
+    vm.runInContext(read("src/youtube/response/ump.js") + "\nglobalThis.ump = { createUmpCrypto, UmpWriter };", umpHelperCtx);
+    const { createUmpCrypto, UmpWriter } = umpHelperCtx.ump;
+    const key = new Uint8Array(32).fill(9);
+    const clientCtx = new (createUmpCrypto().CryptoContext)(key);
+    clientCtx.iv = new Uint8Array(16).fill(4);
+
+    const player = serialize([b(7, serialize([v(1, 99n)])), v(15, 1n)]);
+    const onesie = serialize([b(4, serialize([b(2, player)]))]);
+    const gzOnesie = new Uint8Array(zlibMod.gzipSync(Buffer.from(onesie)));
+    const enc = clientCtx.encrypt(gzOnesie);
+    const part11 = serialize([b(1, enc.encryptedContent), b(2, enc.hmac), b(3, clientCtx.iv), v(4, 1n)]);
+    const w = new UmpWriter();
+    w.writePart({ type: 10, data: new Uint8Array([8, 25]) });
+    w.writePart({ type: 11, data: part11 });
+    const umpBody = w.finish();
+
+    const umpUrl = "https://rr1---sn.googlevideo.com/initplayback";
+    const savedKey = Buffer.from(key).toString("base64");
+    const runAsyncUmp = (env) => new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error("UMP async timeout")), 2000);
+      vm.runInContext(
+        read("loon/youtube/js/youtube.response.js"),
+        vm.createContext({
+          TextEncoder, TextDecoder, Uint8Array, Uint32Array, Uint16Array, ArrayBuffer, console, crypto: globalThis.crypto,
+          ...env,
+          $done: (v) => {
+            clearTimeout(t);
+            resolve(v);
+          },
+        }),
+        { timeout: 10000 },
+      );
+    });
+
+    const storeMap = { YouTubeConfig: JSON.stringify({ youtube: { clientKey: savedKey, encryptKey: savedKey } }) };
+    const out = await runAsyncUmp({
+      $request: { url: umpUrl, headers: {} },
+      $response: { url: umpUrl, status: 200, headers: {}, body: umpBody },
+      $argument: [true],
+      $persistentStore: { read: (k) => storeMap[k] || null, write: () => true },
+    });
+    const outBytes = out.body;
+    assert.ok(outBytes instanceof Uint8Array && outBytes.length > 0, "gzipped UMP must succeed without DecompressionStream/CompressionStream");
+    const checkCtx = vm.createContext({ Uint8Array, Uint32Array, Uint16Array, TextEncoder, TextDecoder, crypto: globalThis.crypto, EAGER_TYPES: { ump: {} } });
+    vm.runInContext(
+      read("src/proto/wire.js") +
+        read("src/youtube/core/const.js") +
+        read("src/youtube/core/bytes.js") +
+        read("src/youtube/core/protobuf.js") +
+        read("src/youtube/response/schema.js") +
+        read("src/youtube/response/codec.js") +
+        read("src/youtube/response/ump.js") +
+        "\nglobalThis.umpCheck = { UmpReader, messageCodec, createUmpCrypto, EAGER_TYPES };",
+      checkCtx,
+    );
+    const reader2 = new checkCtx.umpCheck.UmpReader(outBytes);
+    let encPartBytes = null;
+    while (reader2.hasNext) {
+      const part = reader2.readPart();
+      if (part.type === 11) encPartBytes = part.data;
+    }
+    const env2 = checkCtx.umpCheck.messageCodec("EncryptedResponsePart", checkCtx.umpCheck.EAGER_TYPES.ump).fromBinary(encPartBytes);
+    assert.equal(env2.compressionAlgorithm ?? 0, 0, "re-encrypted UMP without CompressionStream must use compressionAlgorithm=0");
+    const plain2 = new (checkCtx.umpCheck.createUmpCrypto().CryptoContext)(key).decrypt(env2);
+    const onesie2 = checkCtx.umpCheck.messageCodec("OnesieInnertubeResponse", checkCtx.umpCheck.EAGER_TYPES.ump).fromBinary(plain2);
+    assert.equal(onesie2.contents[0].player.adPlacements.length, 0, "adPlacements must be stripped inside re-encrypted UMP");
+
+    // Web UMP (Origin=www.youtube.com) 读取 YouTubeConfig.youtubeWeb，与 youtube / youtubeMusicWeb 隔离；
+    // 只有 wrongKey 在 youtube 下时，web UMP 必须按 youtubeWeb 正确解密，App 请求则会抛 HMAC 降级为空响应。
+    const wrongKey = Buffer.from(new Uint8Array(32).fill(1)).toString("base64");
+    const splitStore = { YouTubeConfig: JSON.stringify({ youtubeWeb: { clientKey: savedKey, encryptKey: savedKey }, youtube: { clientKey: wrongKey, encryptKey: wrongKey } }) };
+    const webOut = await runAsyncUmp({
+      $request: { url: umpUrl, headers: { origin: "https://www.youtube.com" } },
+      $response: { url: umpUrl, status: 200, headers: {}, body: umpBody },
+      $argument: [true],
+      $persistentStore: { read: (k) => splitStore[k] || null, write: () => true },
+    });
+    assert.ok(webOut.body instanceof Uint8Array && webOut.body.length > 0, "web UMP must pick youtubeWeb key");
+
+    const appFailOut = await runAsyncUmp({
+      DecompressionStream,
+      CompressionStream,
+      $request: { url: umpUrl, headers: {} },
+      $response: { url: umpUrl, status: 200, headers: {}, body: umpBody },
+      $argument: [true],
+      $persistentStore: { read: (k) => splitStore[k] || null, write: () => true },
+    });
+    assert.equal(appFailOut.status, 200);
+    assert.equal(appFailOut.body.length, 0, "app UMP uses wrongKey under youtube rather than youtubeWeb");
+
+    checks++;
+    console.log("ok   YouTube full gzipped UMP rewrites without CompressionStream / DecompressionStream & isolates youtubeWeb key");
+  }
+}
+
 testBilibiliGrpc()
   .then(() => testUmp())
+  .then(() => testOptimizationAsync())
   .then(() => console.log("\n" + checks + " regression checks passed"))
   .catch((e) => { console.error(e); process.exitCode = 1; });

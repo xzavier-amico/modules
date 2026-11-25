@@ -16,6 +16,10 @@
 // All third-party traffic happens here, so iPhone / iPad / Mac clients do not
 // need a response script at all.
 
+import { createPatcher } from "./patcher.js";
+
+const hanVariants = createPatcher().hanVariants;
+
 // LRCLIB asks callers to identify themselves, so the descriptive UA stays the
 // default. NetEase / QQ Music are web endpoints: a browser UA is what their
 // anti-bot rules expect (and what the client scripts send).
@@ -95,6 +99,7 @@ function parseSources(raw) {
 
 export function lyricsOptions(env = {}) {
   const sources = parseSources(env.LYRICS_SOURCE);
+  const script = String(env.LYRICS_SCRIPT || "hans").trim().toLowerCase();
   return {
     enabled: flag(env.LYRICS_ENABLED, true),
     source: sources.label,
@@ -103,6 +108,10 @@ export function lyricsOptions(env = {}) {
     cacheTtlMs: numberIn(env.LYRICS_CACHE_TTL, DEFAULT_CACHE_TTL, 0, 604800) * 1000,
     // 官方请求与第三方查询并行；关掉退回「先等官方、404 再查」。
     parallel: flag(env.LYRICS_PARALLEL, true),
+    hansLyrics: script !== "source" && script !== "original" && script !== "keep",
+    ignoreHanVariants: flag(env.LYRICS_IGNORE_HAN_VARIANTS, true),
+    syncPlainLyrics: flag(env.LYRICS_SYNC_PLAIN, true),
+    isrcLookup: flag(env.LYRICS_ISRC, true),
   };
 }
 
@@ -162,6 +171,54 @@ async function getJson(target, ctx, extraHeaders, countAnswer = true) {
   }
 }
 
+async function getText(target, ctx, extraHeaders) {
+  const remaining = ctx.deadline - Date.now();
+  if (remaining <= 0) return "";
+  const controller = new AbortController();
+  const timeout = Math.min(remaining, REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const headers = { "user-agent": BROWSER_UA };
+    if (extraHeaders) {
+      for (const key of Object.keys(extraHeaders)) headers[key] = extraHeaders[key];
+    }
+    const response = await fetch(target, { headers, signal: controller.signal, redirect: "follow" });
+    if (!response || response.status < 200 || response.status >= 300) return "";
+    const text = await response.text();
+    return text && text.length <= MAX_JSON_BYTES ? text : "";
+  } catch {
+    return "";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function parseEmbedTrack(html) {
+  if (!html) return null;
+  const startToken = '<script id="__NEXT_DATA__" type="application/json">';
+  const start = html.indexOf(startToken);
+  if (start < 0) return null;
+  const bodyStart = start + startToken.length;
+  const end = html.indexOf("</script>", bodyStart);
+  if (end < 0) return null;
+  try {
+    const nextData = JSON.parse(html.slice(bodyStart, end));
+    const entity = nextData?.props?.pageProps?.state?.data?.entity;
+    if (!entity || !entity.name) return null;
+    const artists = Array.isArray(entity.artists)
+      ? entity.artists.map((a) => String((a && a.name) || "").trim()).filter(Boolean).join(", ")
+      : "";
+    const durationMs = Number(entity.duration || 0);
+    return {
+      title: String(entity.name),
+      artist: artists,
+      duration: Number.isFinite(durationMs) && durationMs > 10000 ? durationMs / 1000 : NaN,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ------------------------------------------------------------------- metadata
 
 async function lookupMetadata(trackId, ctx) {
@@ -169,44 +226,106 @@ async function lookupMetadata(trackId, ctx) {
     "https://open.spotify.com/oembed?url=" +
     encodeURIComponent("https://open.spotify.com/track/" + trackId);
   const meta = await getJson(target, ctx, null, false);
-  if (!meta || !meta.title) return null;
-  return {
-    title: String(meta.title),
-    artist: String(meta.author_name || "").split(",")[0].trim(),
-  };
+  const oembedTitle = meta && meta.title ? String(meta.title) : "";
+  const oembedArtist = meta && meta.author_name ? String(meta.author_name).trim() : "";
+  if (oembedTitle && oembedArtist && !isLive(oembedTitle)) {
+    return { title: oembedTitle, artist: oembedArtist, duration: NaN };
+  }
+  const embedHtml = await getText("https://open.spotify.com/embed/track/" + trackId, ctx);
+  const page = parseEmbedTrack(embedHtml);
+  const title = (isLive(oembedTitle) && page && page.title) || oembedTitle || (page && page.title) || "";
+  if (!title) return null;
+  const artist = oembedArtist || (page && page.artist) || "";
+  return { title: String(title), artist: String(artist).trim(), duration: page ? page.duration : NaN };
 }
 
 // --------------------------------------------------------------------- sources
 
-async function lookupLrclib(title, artist, ctx) {
-  const query = (name) =>
-    "track_name=" + encodeURIComponent(name) + (artist ? "&artist_name=" + encodeURIComponent(artist) : "");
-  const clean = queryTitle(title);
-  const names = clean && clean !== title ? [title, clean] : [title];
-
-  // Track titles often carry decorative parentheses the lyric databases omit
-  // ("晚秋 (电影《…》主题曲)"). Ask for the full title first, then the cleaned
-  // title; LRCLIB's /api/get is exact, so this is the fallback that matters.
-  let record = null;
-  for (const name of names) {
-    const candidate = await getJson("https://lrclib.net/api/get?" + query(name), ctx);
-    if (candidate && (!record || isSynced(candidate))) record = candidate;
-    if (record && isSynced(record)) break;
-  }
-
-  let anchor = NaN;
-  if (record && Number.isFinite(Number(record.duration))) anchor = Number(record.duration);
-  if (record && isSynced(record)) return buildLyrics(withProvider(record, "LRCLIB"));
-
-  const list = await getJson("https://lrclib.net/api/search?" + query(clean || title), ctx);
-  const picked = pickRecord(list, title, anchor);
-  if (picked) return buildLyrics(withProvider(picked, "LRCLIB"));
-  return record && hasAnyLyrics(record) ? buildLyrics(withProvider(record, "LRCLIB")) : null;
+function durationSeconds(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return NaN;
+  return n > 10000 ? n / 1000 : n;
 }
 
-async function lookupNetease(title, artist, ctx) {
+function foldHan(value, ignoreHan = true) {
+  const text = String(value || "");
+  return ignoreHan && hanVariants ? hanVariants.fold(text) : text;
+}
+
+async function lookupLrclib(title, artist, duration, ctx, options = {}) {
+  const ignoreHan = options.ignoreHanVariants !== false;
+  const query = (name, singer = artist) =>
+    "track_name=" + encodeURIComponent(name) + (singer ? "&artist_name=" + encodeURIComponent(singer) : "");
+  const clean = queryTitle(title);
+  const foldedTitle = foldHan(title, ignoreHan);
+  const foldedClean = foldHan(clean, ignoreHan);
+  const foldedArtist = foldHan(artist, ignoreHan);
+
+  const getSpecs = [];
+  const addGet = (name, singer) => {
+    if (!name) return;
+    const url = "https://lrclib.net/api/get?" + query(name, singer);
+    if (!getSpecs.includes(url)) getSpecs.push(url);
+  };
+  addGet(title, artist);
+  if (clean && clean !== title) addGet(clean, artist);
+  if (ignoreHan && (foldedTitle !== title || foldedArtist !== artist)) addGet(foldedTitle, foldedArtist);
+  if (ignoreHan && foldedClean && foldedClean !== clean) addGet(foldedClean, foldedArtist);
+
+  const searchUrls = [];
+  const addSearch = (name, singer) => {
+    if (!name) return;
+    const url = "https://lrclib.net/api/search?" + query(name, singer);
+    if (!searchUrls.includes(url)) searchUrls.push(url);
+  };
+  addSearch(clean || title, artist);
+  if (ignoreHan && foldedClean && foldedClean !== (clean || title)) addSearch(foldedClean, foldedArtist);
+
+  const validateExact = (rec) => {
+    if (!hasAnyLyrics(rec) || rec.instrumental) return false;
+    if (!rec.trackName) return true;
+    return (
+      matchesSong(title, artist, duration, rec.trackName, rec.artistName, rec.duration, ignoreHan) ||
+      matchesSongLoose(title, artist, duration, rec.trackName, rec.artistName, rec.duration, ignoreHan)
+    );
+  };
+
+  const results = await Promise.all([
+    ...getSpecs.map((url) => getJson(url, ctx).then((rec) => ({ kind: "get", rec }))),
+    ...searchUrls.map((url) => getJson(url, ctx).then((list) => ({ kind: "search", list }))),
+  ]);
+
+  let getRecord = null;
+  const searchItems = [];
+  for (const r of results) {
+    if (r.kind === "get" && validateExact(r.rec)) {
+      if (!getRecord || isSynced(r.rec)) getRecord = r.rec;
+    } else if (r.kind === "search" && Array.isArray(r.list)) {
+      for (const item of r.list) searchItems.push(item);
+    }
+  }
+  if (getRecord && isSynced(getRecord)) {
+    const out = buildLyrics(withProvider(getRecord, "LRCLIB"), options);
+    if (out) return out;
+  }
+  const anchor = Number.isFinite(duration) && duration > 0
+    ? duration
+    : getRecord && Number.isFinite(Number(getRecord.duration))
+      ? durationSeconds(getRecord.duration)
+      : NaN;
+  const picked = pickRecord(searchItems, title, artist, anchor, ignoreHan);
+  if (picked) {
+    const out = buildLyrics(withProvider(picked, "LRCLIB"), options);
+    if (out) return out;
+  }
+  return getRecord ? buildLyrics(withProvider(getRecord, "LRCLIB"), options) : null;
+}
+
+async function lookupNetease(title, artist, duration, ctx, options = {}) {
+  const ignoreHan = options.ignoreHanVariants !== false;
   const queryArtist = isDj(title) ? "" : artist;
-  const query = encodeURIComponent(queryTitle(title) + (queryArtist ? " " + queryArtist : ""));
+  const qName = queryTitle(title);
+  const query = encodeURIComponent(foldHan(qName, ignoreHan) + (queryArtist ? " " + foldHan(queryArtist, ignoreHan) : ""));
   const headers = { Referer: "https://music.163.com/", "User-Agent": BROWSER_UA };
   const data = await getJson(
     "https://music.163.com/api/search/get?s=" + query + "&type=1&limit=5&offset=0",
@@ -214,17 +333,31 @@ async function lookupNetease(title, artist, ctx) {
     headers,
   );
   const songs = data && data.result && data.result.songs;
-  const picked = pickSong(songs, title, (item) => item.name);
-  if (!picked) return null;
-
-  const lyric = await getJson(
-    "https://music.163.com/api/song/lyric?id=" + picked.id + "&lv=-1&kv=-1&tv=-1",
-    ctx,
-    headers,
+  const pickedList = pickSongs(
+    songs,
+    title,
+    artist,
+    duration,
+    (item) => item.name,
+    (item) => (item.artists || item.ar || []).map((a) => a && a.name).filter(Boolean).join(", "),
+    (item) => item.duration,
+    ignoreHan,
   );
-  const text = lyric && lyric.lrc && lyric.lrc.lyric;
-  if (!text) return null;
-  return buildLyrics({ provider: "NetEase", providerId: String(picked.id), syncedLyrics: text });
+  if (!pickedList.length) return null;
+
+  const builtList = await Promise.all(
+    pickedList.map(async (item) => {
+      const lyric = await getJson(
+        "https://music.163.com/api/song/lyric?id=" + item.id + "&lv=-1&kv=-1&tv=-1",
+        ctx,
+        headers,
+      );
+      const text = lyric && lyric.lrc && lyric.lrc.lyric;
+      if (!text) return null;
+      return buildLyrics({ provider: "NetEase", providerId: String(item.id), duration, syncedLyrics: text }, options);
+    }),
+  );
+  return builtList.find((r) => r && r.syncType === "LINE_SYNCED" && !r.pseudo) || builtList.find(Boolean) || null;
 }
 
 const HTML_ENTITIES = { apos: "'", quot: '"', amp: "&", lt: "<", gt: ">", nbsp: " " };
@@ -241,9 +374,11 @@ function decodeHtmlEntities(text) {
   });
 }
 
-async function lookupQq(title, artist, ctx) {
+async function lookupQq(title, artist, duration, ctx, options = {}) {
+  const ignoreHan = options.ignoreHanVariants !== false;
   const queryArtist = isDj(title) ? "" : artist;
-  const query = encodeURIComponent(queryTitle(title) + (queryArtist ? " " + queryArtist : ""));
+  const qName = queryTitle(title);
+  const query = encodeURIComponent(foldHan(qName, ignoreHan) + (queryArtist ? " " + foldHan(queryArtist, ignoreHan) : ""));
   const headers = { Referer: "https://y.qq.com/", "User-Agent": MOBILE_UA };
   const data = await getJson(
     "https://c.y.qq.com/soso/fcgi-bin/search_for_qq_cp?w=" + query + "&format=json&n=5&p=1",
@@ -251,19 +386,33 @@ async function lookupQq(title, artist, ctx) {
     headers,
   );
   const list = data && data.data && data.data.song && data.data.song.list;
-  const picked = pickSong(list, title, (item) => item.songname);
-  if (!picked) return null;
-
-  const lyric = await getJson(
-    "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=" +
-      encodeURIComponent(String(picked.songmid)) +
-      "&format=json&nobase64=1&g_tk=5381",
-    ctx,
-    headers,
+  const pickedList = pickSongs(
+    list,
+    title,
+    artist,
+    duration,
+    (item) => item.songname,
+    (item) => (item.singer || []).map((s) => s && s.name).filter(Boolean).join(", "),
+    (item) => item.interval,
+    ignoreHan,
   );
-  const text = lyric && lyric.lyric ? decodeHtmlEntities(lyric.lyric) : "";
-  if (!text) return null;
-  return buildLyrics({ provider: "QQ Music", providerId: String(picked.songmid), syncedLyrics: text });
+  if (!pickedList.length) return null;
+
+  const builtList = await Promise.all(
+    pickedList.map(async (item) => {
+      const lyric = await getJson(
+        "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=" +
+          encodeURIComponent(String(item.songmid)) +
+          "&format=json&nobase64=1&g_tk=5381",
+        ctx,
+        headers,
+      );
+      const text = lyric && lyric.lyric ? decodeHtmlEntities(lyric.lyric) : "";
+      if (!text) return null;
+      return buildLyrics({ provider: "QQ Music", providerId: String(item.songmid), duration, syncedLyrics: text }, options);
+    }),
+  );
+  return builtList.find((r) => r && r.syncType === "LINE_SYNCED" && !r.pseudo) || builtList.find(Boolean) || null;
 }
 
 // Musixmatch: exchange the public app id for an anonymous token (cached 8 min),
@@ -271,20 +420,22 @@ async function lookupQq(title, artist, ctx) {
 const MMX_TOKEN_TTL_MS = 8 * 60 * 1000;
 let cachedMmxToken = { token: "", at: 0 };
 
-async function lookupMusixmatch(title, artist, ctx) {
+async function getMmxToken(ctx) {
   const APP_ID = "mac-ios-v2.0";
   let userToken = cachedMmxToken.token && Date.now() - cachedMmxToken.at < MMX_TOKEN_TTL_MS ? cachedMmxToken.token : "";
-  if (!userToken) {
-    const token = await getJson(
-      "https://apic.musixmatch.com/ws/1.1/token.get?app_id=" + APP_ID,
-      ctx,
-      null,
-      false,
-    );
-    userToken = token && token.message && token.message.body && token.message.body.user_token;
-    if (!userToken) return null;
-    cachedMmxToken = { token: String(userToken), at: Date.now() };
-  }
+  if (userToken) return userToken;
+  const token = await getJson("https://apic.musixmatch.com/ws/1.1/token.get?app_id=" + APP_ID, ctx, null, false);
+  userToken = token && token.message && token.message.body && token.message.body.user_token;
+  if (!userToken) return "";
+  cachedMmxToken = { token: String(userToken), at: Date.now() };
+  return cachedMmxToken.token;
+}
+
+async function lookupMusixmatch(title, artist, duration, ctx, options = {}) {
+  const ignoreHan = options.ignoreHanVariants !== false;
+  const APP_ID = "mac-ios-v2.0";
+  const userToken = await getMmxToken(ctx);
+  if (!userToken) return null;
 
   const target =
     "https://apic.musixmatch.com/ws/1.1/macro.subtitles.get?format=json&app_id=" +
@@ -305,23 +456,91 @@ async function lookupMusixmatch(title, artist, ctx) {
   const matched = calls && calls["matcher.track.get"] && calls["matcher.track.get"].message;
   const track = matched && matched.body && matched.body.track;
   if (track && Number(track.instrumental) === 1) return null;
+  if (
+    track &&
+    track.track_name &&
+    !matchesSongLoose(title, artist, duration, track.track_name, track.artist_name, track.track_length, ignoreHan)
+  ) {
+    return null;
+  }
   const sub = calls && calls["track.subtitles.get"] && calls["track.subtitles.get"].message;
   const list = sub && sub.body && sub.body.subtitle_list;
   const first = Array.isArray(list) ? list[0] : null;
   const body = first && first.subtitle && first.subtitle.subtitle_body;
   if (!body || Number(first.subtitle.restricted) === 1) return null;
-  return buildLyrics({
-    provider: "Musixmatch",
-    providerId: String(first.subtitle.subtitle_id || ""),
-    syncedLyrics: body,
-  });
+  return buildLyrics(
+    { provider: "Musixmatch", providerId: String(first.subtitle.subtitle_id || ""), duration, syncedLyrics: body },
+    options,
+  );
 }
 
-function lookupSource(name, title, artist, ctx) {
-  if (name === "lrclib") return lookupLrclib(title, artist, ctx);
-  if (name === "netease") return lookupNetease(title, artist, ctx);
-  if (name === "qq") return lookupQq(title, artist, ctx);
-  if (name === "musixmatch") return lookupMusixmatch(title, artist, ctx);
+async function lookupMusixmatchByIsrc(isrc, duration, ctx, options = {}) {
+  if (!isrc) return null;
+  const APP_ID = "mac-ios-v2.0";
+  const userToken = await getMmxToken(ctx);
+  if (!userToken) return null;
+  const target =
+    "https://apic.musixmatch.com/ws/1.1/macro.subtitles.get?format=json&app_id=" +
+    APP_ID +
+    "&usertoken=" +
+    encodeURIComponent(userToken) +
+    "&subtitle_format=lrc&track_isrc=" +
+    encodeURIComponent(isrc) +
+    "&user_language=zh";
+  const data = await getJson(target, ctx);
+  const status = data && data.message && data.message.header && data.message.header.status_code;
+  if (data && Number(status) !== 200) {
+    cachedMmxToken = { token: "", at: 0 };
+    return null;
+  }
+  const calls = data && data.message && data.message.body && data.message.body.macro_calls;
+  const matched = calls && calls["matcher.track.get"] && calls["matcher.track.get"].message;
+  const track = matched && matched.body && matched.body.track;
+  if (track && Number(track.instrumental) === 1) return null;
+  const sub = calls && calls["track.subtitles.get"] && calls["track.subtitles.get"].message;
+  const list = sub && sub.body && sub.body.subtitle_list;
+  const first = Array.isArray(list) ? list[0] : null;
+  const body = first && first.subtitle && first.subtitle.subtitle_body;
+  if (!body || Number(first.subtitle.restricted) === 1) return null;
+  return buildLyrics(
+    { provider: "Musixmatch", providerId: String(first.subtitle.subtitle_id || ""), duration, syncedLyrics: body },
+    options,
+  );
+}
+
+async function lookupDeezer(title, artist, duration, ctx, ignoreHan) {
+  const primary = String(artist || "").split(",")[0].trim();
+  const q = queryTitle(title) + (primary ? " " + primary : "");
+  const search = await getJson("https://api.deezer.com/search?q=" + encodeURIComponent(q) + "&limit=5", ctx, null, false);
+  const list = search && Array.isArray(search.data) ? search.data : [];
+  let picked = null;
+  for (const item of list) {
+    if (!item || !item.id) continue;
+    const candArtist = item.artist && item.artist.name ? item.artist.name : "";
+    if (
+      matchesSong(title, artist, duration, item.title, candArtist, item.duration, ignoreHan) ||
+      matchesSongLoose(title, artist, duration, item.title, candArtist, item.duration, ignoreHan)
+    ) {
+      picked = item;
+      break;
+    }
+  }
+  if (!picked) return null;
+  const detail = await getJson("https://api.deezer.com/track/" + encodeURIComponent(String(picked.id)), ctx, null, false);
+  if (!detail || !detail.title) return null;
+  return {
+    title: String(detail.title),
+    artist: String((detail.artist && detail.artist.name) || (picked.artist && picked.artist.name) || "").trim(),
+    isrc: String(detail.isrc || ""),
+    duration: Number.isFinite(Number(detail.duration)) ? Number(detail.duration) : duration,
+  };
+}
+
+function lookupSource(name, title, artist, duration, ctx, options) {
+  if (name === "lrclib") return lookupLrclib(title, artist, duration, ctx, options);
+  if (name === "netease") return lookupNetease(title, artist, duration, ctx, options);
+  if (name === "qq") return lookupQq(title, artist, duration, ctx, options);
+  if (name === "musixmatch") return lookupMusixmatch(title, artist, duration, ctx, options);
   return Promise.resolve(null);
 }
 
@@ -346,41 +565,176 @@ function hasAnyLyrics(record) {
   );
 }
 
-function pickSong(list, title, nameOf) {
-  if (!Array.isArray(list) || !list.length) return null;
-  const wanted = titleKeys(title);
-  let fallback = null;
+const LIVE_MARK = /(?:\blive\b|live版|现场|現場|[一二三四五六七八九十\d]+公)/i;
+const INSTRUMENTAL_MARK = /伴奏|instrumental|karaoke/i;
+const ARTIST_SPLIT = /[,，、/;&]|\b(?:feat\.?|ft\.?|featuring|with)\b/i;
+
+function isLive(title) {
+  return LIVE_MARK.test(String(title || ""));
+}
+
+function normalize(text, ignoreHan = true) {
+  return foldHan(text, ignoreHan)
+    .toLowerCase()
+    .replace(/[^0-9a-z\u00c0-\uffff]+/gi, "");
+}
+
+function stripParenGroups(text, shouldDrop) {
+  const s = String(text || "");
+  let out = "";
+  let i = 0;
+  while (i < s.length) {
+    const ch = s.charAt(i);
+    const openIdx = ch === "(" ? 0 : ch === "（" ? 1 : ch === "[" ? 2 : -1;
+    if (openIdx < 0) {
+      out += ch;
+      i += 1;
+      continue;
+    }
+    const closeCh = openIdx === 0 ? ")" : openIdx === 1 ? "）" : "]";
+    let depth = 0;
+    let j = i;
+    let matched = false;
+    while (j < s.length) {
+      const c = s.charAt(j);
+      if (c === ch) depth += 1;
+      else if (c === closeCh) {
+        depth -= 1;
+        if (depth === 0) {
+          matched = true;
+          break;
+        }
+      }
+      j += 1;
+    }
+    if (!matched) {
+      out += ch;
+      i += 1;
+      continue;
+    }
+    const group = s.slice(i, j + 1);
+    const inner = s.slice(i + 1, j);
+    if (shouldDrop(group, inner)) out += " ";
+    else out += group;
+    i = j + 1;
+  }
+  return out;
+}
+
+function titleKeys(title, ignoreHan = true) {
+  const keys = [];
+  for (const value of [normalize(title, ignoreHan), normalize(queryTitle(title), ignoreHan)]) {
+    if (value && keys.indexOf(value) < 0) keys.push(value);
+  }
+  return keys;
+}
+
+function matchTitles(wantedTitle, candidateTitle, ignoreHan = true) {
+  const w = titleKeys(wantedTitle, ignoreHan);
+  const c = titleKeys(candidateTitle, ignoreHan);
+  for (const wk of w) {
+    for (const ck of c) {
+      if (wk === ck) return true;
+      if (wk.length >= 2 && ck.length >= 2 && (ck.indexOf(wk) === 0 || wk.indexOf(ck) === 0)) return true;
+    }
+  }
+  return false;
+}
+
+function matchesArtist(wantedArtist, candidateArtist, ignoreHan = true) {
+  const parts = (s) =>
+    String(s || "")
+      .split(ARTIST_SPLIT)
+      .map((p) => normalize(p, ignoreHan))
+      .filter(Boolean);
+  const wList = parts(wantedArtist);
+  const cList = parts(candidateArtist);
+  if (!wList.length || !cList.length) return !wList.length;
+  for (const w of wList) {
+    for (const c of cList) {
+      if (w === c || (w.length >= 2 && c.length >= 2 && (w.includes(c) || c.includes(w)))) return true;
+    }
+  }
+  return false;
+}
+
+function matchesSong(title, artist, duration, candidateTitle, candidateArtist, candidateDuration, ignoreHan = true) {
+  if (!candidateTitle || !matchTitles(title, candidateTitle, ignoreHan)) return false;
+  if (isLive(title) !== isLive(candidateTitle)) return false;
+  if (INSTRUMENTAL_MARK.test(candidateTitle) && !INSTRUMENTAL_MARK.test(title)) return false;
+  const dj = isDj(title) || isDj(candidateTitle);
+  const singer = normalize(artist, ignoreHan);
+  if (singer && !dj && candidateArtist && !matchesArtist(artist, candidateArtist, ignoreHan)) return false;
+  const wd = durationSeconds(duration);
+  const cd = durationSeconds(candidateDuration);
+  if (Number.isFinite(wd) && wd > 0 && Number.isFinite(cd) && cd > 0) {
+    if (Math.abs(cd - wd) > (dj ? 60 : isLive(title) ? 8 : 10)) return false;
+  }
+  return true;
+}
+
+function matchesSongLoose(title, artist, duration, candidateTitle, candidateArtist, candidateDuration, ignoreHan = true) {
+  if (!candidateTitle) return false;
+  const w = titleKeys(title, ignoreHan);
+  const c = titleKeys(candidateTitle, ignoreHan);
+  if (!w.length || !c.some((k) => w.includes(k))) return false;
+  if (isLive(title) !== isLive(candidateTitle)) return false;
+  if (INSTRUMENTAL_MARK.test(candidateTitle) && !INSTRUMENTAL_MARK.test(title)) return false;
+  const wd = durationSeconds(duration);
+  const cd = durationSeconds(candidateDuration);
+  if (Number.isFinite(wd) && wd > 0 && Number.isFinite(cd) && cd > 0) {
+    if (Math.abs(cd - wd) > 12) return false;
+    return true;
+  }
+  const singer = normalize(artist, ignoreHan);
+  return !singer || !candidateArtist || isDj(title) || isDj(candidateTitle) || matchesArtist(artist, candidateArtist, ignoreHan);
+}
+
+function pickSongs(list, title, artist, duration, nameOf, artistOf, durOf, ignoreHan = true) {
+  if (!Array.isArray(list) || !list.length) return [];
+  const strict = [];
+  const loose = [];
   for (const item of list) {
     if (!item) continue;
-    if (!fallback) fallback = item;
-    const name = normalize(nameOf(item));
-    if (wanted.some((key) => name === key || name.indexOf(key) === 0)) return item;
+    const candTitle = nameOf(item);
+    const candArtist = artistOf ? artistOf(item) : "";
+    const candDur = durOf ? durOf(item) : NaN;
+    if (matchesSong(title, artist, duration, candTitle, candArtist, candDur, ignoreHan)) strict.push(item);
+    else if (matchesSongLoose(title, artist, duration, candTitle, candArtist, candDur, ignoreHan)) loose.push(item);
   }
-  return fallback;
+  const matched = strict.length ? strict : loose;
+  const wanted = titleKeys(title, ignoreHan);
+  matched.sort((a, b) => {
+    const exactA = normalize(nameOf(a), ignoreHan) === wanted[0] ? 1 : 0;
+    const exactB = normalize(nameOf(b), ignoreHan) === wanted[0] ? 1 : 0;
+    return exactB - exactA;
+  });
+  return matched.slice(0, 3);
 }
 
 // Same title often has several versions (original, video edit, extended mix).
-// Prefer a close duration, then synced lyrics, then an exact title.
-function pickRecord(list, title, duration) {
+// Prefer validated strict matches, close duration, synced lyrics, exact title.
+function pickRecord(list, title, artist, duration, ignoreHan = true) {
   if (!Array.isArray(list) || !list.length) return null;
-  const wanted = titleKeys(title);
   const usable = list.filter((item) => {
     if (!item || typeof item !== "object" || item.instrumental) return false;
-    return Boolean(
-      (typeof item.syncedLyrics === "string" && item.syncedLyrics.trim()) ||
-        (typeof item.plainLyrics === "string" && item.plainLyrics.trim()),
-    );
+    if (!hasAnyLyrics(item)) return false;
+    return !item.trackName || matchesSong(title, artist, duration, item.trackName, item.artistName, item.duration, ignoreHan) ||
+      matchesSongLoose(title, artist, duration, item.trackName, item.artistName, item.duration, ignoreHan);
   });
   if (!usable.length) return null;
 
+  const wanted = titleKeys(title, ignoreHan);
   const synced = (item) => Boolean(item.syncedLyrics && item.syncedLyrics.trim());
-  const named = (item) => titleKeys(item.trackName).some((key) => wanted.indexOf(key) >= 0);
+  const strict = (item) =>
+    !item.trackName || matchesSong(title, artist, duration, item.trackName, item.artistName, item.duration, ignoreHan);
+  const named = (item) => titleKeys(item.trackName, ignoreHan).some((key) => wanted.indexOf(key) >= 0);
   const near = (item) =>
     Number.isFinite(duration) &&
     duration > 0 &&
-    Number.isFinite(Number(item.duration)) &&
-    Math.abs(Number(item.duration) - duration) <= 3;
-  const score = (item) => (synced(item) ? 2 : 0) + (named(item) ? 1 : 0) + (near(item) ? 4 : 0);
+    Number.isFinite(durationSeconds(item.duration)) &&
+    Math.abs(durationSeconds(item.duration) - duration) <= 3;
+  const score = (item) => (strict(item) ? 8 : 0) + (near(item) ? 4 : 0) + (synced(item) ? 2 : 0) + (named(item) ? 1 : 0);
 
   let best = usable[0];
   let bestScore = score(best);
@@ -398,11 +752,10 @@ function pickRecord(list, title, duration) {
 // databases: "Song (电影《…》主题曲)", "Song (电视剧片尾曲)", "Song (歌手名)".
 // Remove those groups, but keep version-defining ones such as (Live), (Remix)
 // and (伴奏) so a studio track is not matched to a live recording.
-const TITLE_BRACKET_GROUP = /[（(]([^()（）]*)[)）]/g;
 const TITLE_VERSION_BRACKET =
   /\b(?:live|acoustic|unplugged|remix|mix|version|edit|remaster(?:ed)?|instrumental|karaoke|demo|cover|session|mono|stereo|deluxe|bonus|explicit|clean)\b|现场|現場|演唱会|演唱會|伴奏|纯音乐|純音樂|混音|重制|重製|翻唱|翻自|试听|試聽|片段|版/i;
-const TITLE_BRACKET_NOISE =
-  /[（(\[][^()（）\[\]]*\b(?:(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?(?:\s+version)?|feat\.?|ft\.?|featuring|with|prod\.?|radio edit|single version|album version|bonus track|deluxe(?: edition)?|explicit|clean|mono|stereo)\b[^()（）\[\]]*[)）\]]/gi;
+const TITLE_NOISE_BRACKET =
+  /\b(?:(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?(?:\s+version)?|feat\.?|ft\.?|featuring|with|prod\.?|radio edit|single version|album version|bonus track|deluxe(?: edition)?|explicit|clean|mono|stereo)\b/i;
 const TITLE_DASH_FEAT = /\s*[-–—]\s*(?:feat\.?|ft\.?|featuring|with|prod\.?)\b.*$/i;
 const TITLE_DASH_EDITION =
   /\s*[-–—]\s*(?:(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?(?:\s+version)?|radio edit|single version|album version|bonus track|deluxe(?: edition)?|explicit|clean|mono|stereo)\s*$/i;
@@ -411,42 +764,30 @@ const TITLE_DASH_EDITION =
 // databases only list "Song". Drop the DJ marker before searching and skip the
 // artist constraint, since the DJ edit is usually credited to someone else.
 const DJ_VERSION_MARK =
-  /dj\s*(?:版|remix|mix|version|edit|抖音|舞曲|慢摇|house|club)|[（(\[]\s*dj\s*[)）\]]|(?:^|[\s\-–—])dj\s*$/i;
+  /dj\s*(?:版|remix|mix|version|edit|抖音|舞曲|慢摇|house|club)|(?:^|[\s\-–—])dj\s*$/i;
 const TITLE_DASH_DJ =
   /\s*[-–—]\s*dj\s*(?:版|remix|mix|version|edit|抖音|舞曲|慢摇|house|club).*$|\s*[-–—]\s*dj\s*$/i;
 const TITLE_LEADING_DJ = /^\s*dj\s*(?:版|remix|mix|version|edit|抖音|舞曲|慢摇|house|club)\s*[-–—:]?\s*/i;
 
 function isDj(title) {
-  return DJ_VERSION_MARK.test(String(title || ""));
+  const s = String(title || "");
+  if (DJ_VERSION_MARK.test(s)) return true;
+  return /[（(\[]\s*dj\s*[)）\]]/i.test(s);
 }
 
 function stripDjVersion(title) {
-  let text = String(title || "");
-  text = text.replace(TITLE_BRACKET_GROUP, (whole, inner) => (DJ_VERSION_MARK.test(inner) ? " " : whole));
+  let text = stripParenGroups(title, (whole, inner) => DJ_VERSION_MARK.test(inner) || /^\s*dj\s*$/i.test(inner));
   return text.replace(TITLE_DASH_DJ, "").replace(TITLE_LEADING_DJ, "");
 }
 
 function queryTitle(title) {
   let text = stripDjVersion(title);
   text = text.replace(TITLE_DASH_FEAT, "").replace(TITLE_DASH_EDITION, "");
-  text = text.replace(TITLE_BRACKET_NOISE, "");
-  text = text.replace(TITLE_BRACKET_GROUP, (whole, inner) =>
-    TITLE_VERSION_BRACKET.test(inner) ? whole : " ");
+  text = stripParenGroups(text, (whole, inner) => {
+    if (TITLE_NOISE_BRACKET.test(inner)) return true;
+    return !TITLE_VERSION_BRACKET.test(inner);
+  });
   return text.replace(/\s+/g, " ").trim() || String(title || "");
-}
-
-function titleKeys(title) {
-  const keys = [];
-  for (const value of [normalize(title), normalize(queryTitle(title))]) {
-    if (value && keys.indexOf(value) < 0) keys.push(value);
-  }
-  return keys;
-}
-
-function normalize(text) {
-  return String(text || "")
-    .toLowerCase()
-    .replace(/[^0-9a-z\u00c0-\uffff]+/gi, "");
 }
 
 // LRC -> Spotify lines. Supports multiple timestamps per line, [offset:±ms],
@@ -500,33 +841,60 @@ function detectLanguage(lines) {
   return "en";
 }
 
-function buildLyrics(record) {
+function buildLyrics(record, options = {}) {
   if (!record || typeof record !== "object" || record.instrumental) return null;
 
   if (typeof record.syncedLyrics === "string") {
     const lines = parseLrc(record.syncedLyrics);
-    if (lines.length) return makeLyrics("LINE_SYNCED", lines, record);
+    if (lines.length) return makeLyrics("LINE_SYNCED", lines, record, options);
   }
 
   if (typeof record.plainLyrics === "string") {
-    const lines = record.plainLyrics
+    const rawLines = record.plainLyrics
       .split(/\r?\n/)
       .map((line) => line.trim())
-      .filter(Boolean)
-      .map((words) => ({ startTimeMs: "0", words, syllables: [], endTimeMs: "0" }));
-    if (lines.length) return makeLyrics("UNSYNCED", lines, record);
+      .filter(Boolean);
+    if (rawLines.length) {
+      const durationSec = durationSeconds(record.duration);
+      if (options.syncPlainLyrics !== false && Number.isFinite(durationSec) && durationSec > 10) {
+        const spanMs = Math.max(1000, Math.round(durationSec * 1000) - 2000);
+        const step = spanMs / rawLines.length;
+        const synced = rawLines.map((words, idx) => ({
+          startTimeMs: String(Math.round(idx * step)),
+          words,
+          syllables: [],
+          endTimeMs: "0",
+        }));
+        const out = makeLyrics("LINE_SYNCED", synced, record, options);
+        if (out) out.pseudo = true;
+        return out;
+      }
+      const lines = rawLines.map((words) => ({ startTimeMs: "0", words, syllables: [], endTimeMs: "0" }));
+      return makeLyrics("UNSYNCED", lines, record, options);
+    }
   }
 
   return null;
 }
 
-function makeLyrics(syncType, lines, record) {
+function makeLyrics(syncType, lines, record, options = {}) {
   const provider = record.provider || "LRCLIB";
   const id = record.providerId !== undefined ? record.providerId : record.id;
-  const language = detectLanguage(lines);
+  const sample = lines.slice(0, 20).map((line) => line.words).join("");
+  let finalLines = lines;
+  let language = detectLanguage(lines);
+  if (options.hansLyrics !== false && hanVariants && hanVariants.isTraditional(sample)) {
+    finalLines = lines.map((line) => ({
+      startTimeMs: line.startTimeMs,
+      words: hanVariants.fold(line.words),
+      syllables: line.syllables,
+      endTimeMs: line.endTimeMs,
+    }));
+    language = "zh-Hans";
+  }
   return {
     syncType,
-    lines: appendCreditLine(lines, syncType, provider),
+    lines: appendCreditLine(finalLines, syncType, provider),
     provider,
     providerId: id === undefined || id === null ? "" : String(id),
     language,
@@ -619,18 +987,60 @@ function cacheSet(key, value, options) {
 // least one provider or just a network failure. Only the former may be recorded
 // as a miss: a backgrounded client whose provider requests all failed would
 // otherwise keep its lyrics card suppressed for the whole miss window.
+async function runSources(sources, title, artist, duration, ctx, options) {
+  if (!sources.length) return null;
+  if (sources.length === 1) return lookupSource(sources[0], title, artist, duration, ctx, options);
+  return await new Promise((resolve) => {
+    let pending = sources.length;
+    let settled = false;
+    let fallback = null;
+    for (const source of sources) {
+      Promise.resolve()
+        .then(() => lookupSource(source, title, artist, duration, ctx, options))
+        .catch(() => null)
+        .then((res) => {
+          pending -= 1;
+          if (settled) return;
+          if (res && res.syncType === "LINE_SYNCED" && !res.pseudo) {
+            settled = true;
+            resolve(res);
+            return;
+          }
+          if (res && (!fallback || (!fallback.pseudo && res.pseudo))) {
+            if (!fallback || res.syncType === "LINE_SYNCED") fallback = res;
+          }
+          if (pending <= 0) {
+            settled = true;
+            resolve(fallback);
+          }
+        });
+    }
+  });
+}
+
 async function resolveLyrics(trackId, options) {
   const deadline = Date.now() + options.timeoutMs;
   const ctx = { deadline, answered: 0 };
   const meta = await lookupMetadata(trackId, ctx);
   if (!meta) return { lyrics: null, authoritative: false };
 
-  for (const source of options.sources) {
-    if (Date.now() >= deadline) break;
-    const lyrics = await lookupSource(source, meta.title, meta.artist, ctx);
-    if (lyrics) return { lyrics, authoritative: true };
+  const orderedSources =
+    options.source === "auto" && /[\u3400-\u9fff]/.test(meta.title + meta.artist)
+      ? ["netease", "qq", "lrclib", "musixmatch"]
+      : options.sources;
+  let lyrics = await runSources(orderedSources, meta.title, meta.artist, meta.duration, ctx, options);
+  if (!lyrics && options.isrcLookup && (ctx.answered || 0) > 0 && ctx.deadline - Date.now() > 200) {
+    const canonical = await lookupDeezer(meta.title, meta.artist, meta.duration, ctx, options.ignoreHanVariants !== false);
+    if (canonical) {
+      const tries = [];
+      if (canonical.isrc) tries.push(lookupMusixmatchByIsrc(canonical.isrc, canonical.duration, ctx, options));
+      tries.push(runSources(orderedSources, canonical.title, canonical.artist, canonical.duration, ctx, options));
+      const found = await Promise.all(tries);
+      lyrics = found.find((r) => r && r.syncType === "LINE_SYNCED" && !r.pseudo) || found.find(Boolean) || null;
+    }
   }
-  return { lyrics: null, authoritative: (ctx.answered || 0) > 0 };
+  if (lyrics && "pseudo" in lyrics) delete lyrics.pseudo;
+  return { lyrics, authoritative: (ctx.answered || 0) > 0 };
 }
 
 export async function findLyrics(trackId, options = lyricsOptions()) {
@@ -686,9 +1096,10 @@ export function stripRestrictionJson(text) {
 
 // Returns { hasLyrics, body, json }. `body` is the cleaned replacement, or
 // null when the original response can be passed through unchanged.
-export function cleanOfficialLyrics(body, contentType) {
+export function cleanOfficialLyrics(body, contentType, options = {}) {
   if (!body || !body.length) return { hasLyrics: false, body: null, json: false };
 
+  const hans = options.hansLyrics !== false;
   const type = String(contentType || "").toLowerCase();
   const first = firstNonSpaceByte(body);
   const looksJson = type.indexOf("json") >= 0 || first === 0x7b;
@@ -701,13 +1112,43 @@ export function cleanOfficialLyrics(body, contentType) {
       return { hasLyrics: false, body: null, json: true };
     }
     if (!jsonHasLyrics(text)) return { hasLyrics: false, body: null, json: true };
-    const cleaned = stripRestrictionJson(text);
-    return { hasLyrics: true, body: cleaned ? TE.encode(cleaned) : null, json: true };
+    try {
+      const data = JSON.parse(text);
+      const lyrics = data && data.lyrics;
+      let changed = false;
+      if (lyrics && Object.prototype.hasOwnProperty.call(lyrics, "restriction")) {
+        delete lyrics.restriction;
+        changed = true;
+      }
+      if (hans && hanVariants && lyrics && Array.isArray(lyrics.lines)) {
+        const lang = String(lyrics.language || "");
+        const sample = lyrics.lines.slice(0, 20).map((l) => (l && l.words) || "").join("");
+        if (/^zh-(?:hant|tw|hk|mo)\b/i.test(lang) || hanVariants.isTraditional(sample)) {
+          for (const line of lyrics.lines) {
+            if (line && typeof line.words === "string") {
+              const folded = hanVariants.fold(line.words);
+              if (folded !== line.words) {
+                line.words = folded;
+                changed = true;
+              }
+            }
+          }
+          if (lyrics.language !== "zh-Hans") {
+            lyrics.language = "zh-Hans";
+            changed = true;
+          }
+        }
+      }
+      return { hasLyrics: true, body: changed ? TE.encode(JSON.stringify(data)) : null, json: true };
+    } catch {
+      const cleaned = stripRestrictionJson(text);
+      return { hasLyrics: true, body: cleaned ? TE.encode(cleaned) : null, json: true };
+    }
   }
 
   const count = protoLineCount(body);
   if (count <= 0) return { hasLyrics: false, body: null, json: false };
-  return { hasLyrics: true, body: normalizeRestrictionProto(body), json: false };
+  return { hasLyrics: true, body: normalizeRestrictionProto(body, { hans }), json: false };
 }
 
 // Pick the format for synthesized lyrics. When the official response has a
@@ -908,7 +1349,7 @@ export function protoLineCount(bytes) {
 // LyricsRestriction: 0 unrestricted / 1 showLyrics / 2 showLyricsMonthlyLimit /
 // 3 monthlyLimitReached. Free accounts hit 3 after the monthly quota; the
 // client then refuses to render even when lines are present. Set it back to 1.
-export function normalizeRestrictionProto(bytes) {
+export function normalizeRestrictionProto(bytes, options = {}) {
   let top;
   try {
     top = pbFields(bytes);
@@ -917,6 +1358,7 @@ export function normalizeRestrictionProto(bytes) {
   }
   if (!top.length) return null;
 
+  const hans = options.hans !== false && hanVariants;
   let changed = false;
   const outTop = [];
   for (const outer of top) {
@@ -930,8 +1372,47 @@ export function normalizeRestrictionProto(bytes) {
     } catch (error) {
       return null;
     }
+    let isTrad = false;
+    if (hans) {
+      let lang = "";
+      const sample = [];
+      for (const f of innerFields) {
+        if (f.field === 10 && f.wire === 2) {
+          lang = TD.decode(f.bytes);
+        } else if (f.field === 2 && f.wire === 2 && sample.length < 20) {
+          try {
+            const wf = pbFields(f.bytes).find((x) => x.field === 2 && x.wire === 2);
+            if (wf) sample.push(TD.decode(wf.bytes));
+          } catch {}
+        }
+      }
+      isTrad = /^zh-(?:hant|tw|hk|mo)\b/i.test(lang) || hanVariants.isTraditional(sample.join(""));
+    }
+
+    const rewriteLineField = (lineBytes) => {
+      try {
+        const sub = pbFields(lineBytes);
+        let subChanged = false;
+        const parts = sub.map((sf) => {
+          if (sf.field === 2 && sf.wire === 2) {
+            const w = TD.decode(sf.bytes);
+            const fw = hanVariants.fold(w);
+            if (fw !== w) {
+              subChanged = true;
+              return pbBytes(2, TE.encode(fw));
+            }
+          }
+          return pbEncodeField(sf);
+        });
+        return subChanged ? pbConcat(parts) : null;
+      } catch {
+        return null;
+      }
+    };
+
     const outInner = [];
     let found = false;
+    let foundLang = false;
     for (const inner of innerFields) {
       if (inner.field === 14 && inner.wire === 0) {
         found = true;
@@ -941,10 +1422,29 @@ export function normalizeRestrictionProto(bytes) {
           continue;
         }
       }
+      if (isTrad && (inner.field === 2 || inner.field === 17) && inner.wire === 2) {
+        const nextLine = rewriteLineField(inner.bytes);
+        if (nextLine) {
+          outInner.push(pbBytes(inner.field, nextLine));
+          changed = true;
+          continue;
+        }
+      }
+      if (isTrad && inner.field === 10 && inner.wire === 2) {
+        foundLang = true;
+        if (TD.decode(inner.bytes) !== "zh-Hans") {
+          outInner.push(pbBytes(10, TE.encode("zh-Hans")));
+          changed = true;
+          continue;
+        }
+      }
       outInner.push(pbEncodeField(inner));
     }
-    // No restriction field means the response is already unrestricted.
-    if (!found) {
+    if (isTrad && !foundLang) {
+      outInner.push(pbBytes(10, TE.encode("zh-Hans")));
+      changed = true;
+    }
+    if (!found && !changed) {
       outTop.push(pbEncodeField(outer));
       continue;
     }

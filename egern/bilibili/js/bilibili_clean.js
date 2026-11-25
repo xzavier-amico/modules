@@ -53,20 +53,27 @@ export default async function (ctx) {
   const request = ctx.request
     ? { url: ctx.request.url, method: ctx.request.method, headers: plainHeaders(ctx.request.headers), body: requestBody }
     : undefined;
+  const rawTrailers =
+    ctx.response && (ctx.response.trailers !== undefined ? ctx.response.trailers : ctx.response.h2_trailers);
+  const responseTrailers = rawTrailers !== undefined ? plainHeaders(rawTrailers) : undefined;
   const response = ctx.response
-    ? {
-        url: ctx.request && ctx.request.url,
-        status: ctx.response.status,
-        statusCode: ctx.response.status,
-        headers: plainHeaders(ctx.response.headers),
-        body: responseBody,
-      }
+    ? Object.assign(
+        {
+          url: ctx.request && ctx.request.url,
+          status: ctx.response.status,
+          statusCode: ctx.response.status,
+          headers: plainHeaders(ctx.response.headers),
+          body: responseBody,
+        },
+        responseTrailers !== undefined ? { trailers: responseTrailers, h2_trailers: responseTrailers } : {},
+      )
     : undefined;
 
   // $httpClient 的 callback 形式（error, response, data）。
   const httpOptions = (options) => ("string" == typeof options ? { url: options } : options || {});
   const httpCall = (method, options, callback) => {
     const opt = httpOptions(options);
+    const isBinary = !!(opt["binary-mode"] || opt.binaryMode);
     Promise.resolve()
       .then(() =>
         ctx.http[method](opt.url, {
@@ -77,7 +84,8 @@ export default async function (ctx) {
       )
       .then(async (res) => {
         const headers = plainHeaders(res.headers);
-        callback(null, { status: res.status, statusCode: res.status, headers }, await res.text());
+        const body = isBinary ? new Uint8Array(await res.arrayBuffer()) : await res.text();
+        callback(null, { status: res.status, statusCode: res.status, headers }, body);
       })
       .catch((error) => callback(error || new Error("request failed"), null, null));
   };
@@ -122,6 +130,7 @@ export default async function (ctx) {
 
       const next = Object.assign({}, value);
       if (next.body === undefined && body !== undefined) next.body = body;
+      if (next.h2_trailers !== undefined && next.trailers === undefined) next.trailers = next.h2_trailers;
       resolve(next);
     };
 
@@ -210,6 +219,7 @@ export default async function (ctx) {
 
   const isWebEndpoint =
     path.indexOf("/x/web-interface/") >= 0 ||
+    path.indexOf("/x/v2/reply/wbi/") >= 0 ||
     path.indexOf("/x/polymer/web-dynamic/v1/feed/all") >= 0 ||
     path.indexOf("/pgc/view/web/season") >= 0 ||
     path.indexOf("/xlive/web-interface/") >= 0 ||
@@ -231,6 +241,7 @@ export default async function (ctx) {
   const isWebViewDetail = path.indexOf("/x/web-interface/wbi/view/detail") >= 0;
   const isWebView = !isWebViewDetail && path.indexOf("/x/web-interface/view") >= 0;
   const isWebDynamic = path.indexOf("/x/polymer/web-dynamic/v1/feed/all") >= 0;
+  const isReply = path.indexOf("/x/v2/reply/") >= 0;
   const isVipMaterials = path.indexOf("/x/vip/ads/materials") >= 0;
   const isPgcSeason = path.indexOf("/pgc/view/v2/app/season") >= 0 || path.indexOf("/pgc/view/web/season") >= 0;
   const isPgcPage = path.indexOf("/pgc/page/") >= 0;
@@ -239,7 +250,7 @@ export default async function (ctx) {
   const isLive = path.indexOf("/xlive/") >= 0;
 
   const handled =
-    ((isSplash || isFeed || isSearchSquare || isWebRcmd || isWebSearch || isWebRelated || isWebView || isWebViewDetail || isWebDynamic || isPgcPage || isLive) && blockAds) ||
+    ((isSplash || isFeed || isSearchSquare || isWebRcmd || isWebSearch || isWebRelated || isWebView || isWebViewDetail || isWebDynamic || isReply || isPgcPage || isLive) && blockAds) ||
     (isVipMaterials && (blockAds || hideVip)) ||
     (isPgcSeason && hideVip) ||
     (isShowTab && cleanUi) ||
@@ -260,11 +271,11 @@ export default async function (ctx) {
     $done({});
     return;
   }
-  if ((isWebRcmd || isWebSearch || isWebRelated || isSearchSquare) && !/cm_|ad_|"ad"|"is_ad"\s*:\s*true/.test(body)) {
+  if ((isWebRcmd || isWebSearch || isWebRelated || isSearchSquare) && !/cm_|ad_|"ad"|"is_ad"\s*:\s*true|small_cover_v10|ad_info/.test(body)) {
     $done({});
     return;
   }
-  if ((isWebView || isWebViewDetail) && !/cm_config|cm_ipad|cm_under_player|cm_|ad_|"ad"|"is_ad"\s*:\s*true/.test(body)) {
+  if ((isWebView || isWebViewDetail) && !/cm_config|cm_ipad|cm_under_player|cm_|ad_|"ad"|"is_ad"\s*:\s*true|small_cover_v10|ad_info/.test(body)) {
     $done({});
     return;
   }
@@ -277,11 +288,13 @@ export default async function (ctx) {
   // 先用占位对象保护字符串外的 16+ 位数字，JSON.stringify 后原样还原。
   const BIGINT_MARK = "__bili_bigint_";
   let hasBigInt = false;
-  const safeBody = body.replace(/"(?:\\.|[^"\\])*"|(-?\d{16,})/g, (m, num) => {
-    if (!num) return m;
-    hasBigInt = true;
-    return '"' + BIGINT_MARK + num + '"';
-  });
+  const safeBody = /\d{16}/.test(body)
+    ? body.replace(/"(?:\\.|[^"\\])*"|(-?\d{16,})/g, (m, num) => {
+        if (!num) return m;
+        hasBigInt = true;
+        return '"' + BIGINT_MARK + num + '"';
+      })
+    : body;
 
   let data;
   try {
@@ -311,6 +324,7 @@ export default async function (ctx) {
       ct.indexOf("cm_") === 0 ||
       cg.indexOf("ad_") === 0 ||
       (ct === "small_cover_v10" && cg === "game") ||
+      (isObj(o.ad_info) && Boolean(o.ad_info.creative_id)) ||
       o.goto === "ad" ||
       o.is_ad === true
     );
@@ -342,11 +356,21 @@ export default async function (ctx) {
     }
   };
 
-  // 开屏：把几个已知数组清空。
+  // 开屏：清空广告列表并拉长轮询间隔、把 max_time 归零，减少客户端重启后立刻重拉开屏。
   if (isSplash && blockAds) {
     const d = data.data;
     if (isObj(d)) {
       ["list", "event_list", "brand_list", "show"].forEach((k) => clearArray(d, k));
+      if ("max_time" in d && d.max_time !== 0) {
+        d.max_time = 0;
+        changed = true;
+      }
+      ["min_interval", "pull_interval"].forEach((k) => {
+        if (typeof d[k] === "number" && d[k] < 86400) {
+          d[k] = 86400;
+          changed = true;
+        }
+      });
     } else if (Array.isArray(d) && d.length) {
       data.data = [];
       changed = true;
@@ -543,6 +567,52 @@ export default async function (ctx) {
     }
   }
 
+  // 网页版 / REST 评论区（/x/v2/reply/wbi/main 等）：删评论广告对象、带货置顶与商品/招募广告评论。
+  if (blockAds && isReply && isObj(data.data)) {
+    const d = data.data;
+    const REPLY_AD_RE = /(?:b23\.tv\/(?:cm|mall)|cm\.bilibili\.com\/ad-showcase-h5|(?:gaoneng|huahuo|mall|ad)\.bilibili\.com)/i;
+    const isReplyAd = (r) => {
+      if (!isObj(r)) return false;
+      if (truthyFlag(r.is_ad) || isObj(r.cm)) return true;
+      const c = isObj(r.content) ? r.content : null;
+      if (!c) return false;
+      if (typeof c.message === "string" && REPLY_AD_RE.test(c.message)) return true;
+      if (isObj(c.jump_url)) {
+        for (const k of Object.keys(c.jump_url)) {
+          if (REPLY_AD_RE.test(k)) return true;
+          const v = c.jump_url[k];
+          if (isObj(v) && (REPLY_AD_RE.test(String(v.pc_url || "")) || REPLY_AD_RE.test(String(v.url || "")))) {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+    ["cm", "cm_info"].forEach((k) => {
+      if (k in d) {
+        delete d[k];
+        changed = true;
+      }
+    });
+    if (isObj(d.notice) && (REPLY_AD_RE.test(String(d.notice.link || "")) || REPLY_AD_RE.test(String(d.notice.content || "")))) {
+      delete d.notice;
+      changed = true;
+    }
+    if (isObj(d.upper) && isReplyAd(d.upper.top)) {
+      delete d.upper.top;
+      changed = true;
+    }
+    ["top_replies", "replies"].forEach((key) => {
+      const list = d[key];
+      if (!Array.isArray(list)) return;
+      const kept = list.filter((r) => !isReplyAd(r));
+      if (kept.length !== list.length) {
+        d[key] = kept;
+        changed = true;
+      }
+    });
+  }
+
   // 搜索广场：data 本身就是数组，只过滤广告项。
   if (blockAds && isSearchSquare) {
     const kept = keepNotAd(data.data);
@@ -579,7 +649,23 @@ export default async function (ctx) {
         if (!isObj(t)) return false;
         const name = typeof t.name === "string" ? t.name.trim() : "";
         const id = typeof t.tab_id === "string" ? t.tab_id : "";
-        return name === "发布" || name === "会员购" || name === "游戏中心" || id.indexOf("会员购") >= 0;
+        const idLow = id.toLowerCase();
+        const uri = typeof t.uri === "string" ? t.uri : "";
+        return (
+          name === "发布" ||
+          name === "發布" ||
+          name === "会员购" ||
+          name === "會員購" ||
+          name === "游戏中心" ||
+          name === "遊戲中心" ||
+          id.indexOf("会员购") >= 0 ||
+          id.indexOf("會員購") >= 0 ||
+          idLow.indexOf("mall") >= 0 ||
+          idLow.indexOf("publish") >= 0 ||
+          uri.indexOf("mall.bilibili.com") >= 0 ||
+          uri.indexOf("game.bilibili.com") >= 0 ||
+          uri.indexOf("bilibili://upper/clip") >= 0
+        );
       };
       ["top", "tab", "bottom"].forEach((key) => {
         const list = d[key];
@@ -613,8 +699,8 @@ export default async function (ctx) {
         const kept = list.filter((s) => {
           if (!isObj(s)) return true;
           const title = typeof s.title === "string" ? s.title : "";
-          if (hideVip && /大会员|会员购/.test(title)) return false;
-          if (cleanUi && /我的服务|更多服务|推荐服务/.test(title)) return false;
+          if (hideVip && /大会员|大會員|会员购|會員購/.test(title)) return false;
+          if (cleanUi && /我的服务|我的服務|更多服务|更多服務|推荐服务|推薦服務/.test(title)) return false;
           return true;
         });
         if (kept.length !== list.length) {

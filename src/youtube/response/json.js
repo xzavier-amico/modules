@@ -387,18 +387,19 @@
   }
 
   // 字幕翻译：与 App 版逻辑一致，但直接操作 JSON 属性。
-  function jsonApplyCaptionTranslation(player, lang) {
+  function jsonApplyCaptionTranslation(player, lang, stripAuto) {
     const renderer = player?.captions?.playerCaptionsTrackListRenderer;
     const tracks = renderer?.captionTracks;
     if (!Array.isArray(tracks) || !tracks.length) return false;
 
     let changed = false;
     let bestIndex = 0;
-    let bestScore = 0;
-    const target = String(lang).toLowerCase();
+    let bestScore = -1;
     for (let i = 0; i < tracks.length; i++) {
-      const code = String(tracks[i]?.languageCode ?? "").toLowerCase();
-      const score = code === target ? 2 : /^en(?:-|$)/.test(code) ? 1 : 0;
+      const code = String(tracks[i]?.languageCode ?? "");
+      const manual = jsonIsAutoCaptionTrack(tracks[i]) ? 0 : 1;
+      const langScore = sameCaptionLanguage(code, lang) ? 4 : /^en(?:-|$)/i.test(code) ? 2 : 0;
+      const score = langScore + manual;
       if (score > bestScore) {
         bestScore = score;
         bestIndex = i;
@@ -409,8 +410,9 @@
       }
     }
 
+    const hasTarget = bestScore >= 4;
     let selected = bestIndex;
-    if (bestScore !== 2) {
+    if (!hasTarget) {
       const baseUrl = String(tracks[bestIndex]?.baseUrl ?? "");
       if (!baseUrl) return changed;
       const translated = {
@@ -425,6 +427,7 @@
       changed = true;
     }
 
+    const shouldEnable = !hasTarget && !stripAuto;
     if (renderer.defaultCaptionTrackIndex !== selected) {
       renderer.defaultCaptionTrackIndex = selected;
       changed = true;
@@ -441,7 +444,7 @@
           audio.defaultCaptionTrackIndex = selected;
           changed = true;
         }
-        if (audio.captionsInitialState !== 3) {
+        if (shouldEnable && audio.captionsInitialState !== 3) {
           audio.captionsInitialState = 3;
           changed = true;
         }
@@ -611,7 +614,7 @@
 
     if (options.captionLang && "off" !== String(options.captionLang).toLowerCase()) {
       try {
-        changed = jsonApplyCaptionTranslation(player, options.captionLang) || changed;
+        changed = jsonApplyCaptionTranslation(player, options.captionLang, !!options.stripAutoCaptions) || changed;
       } catch (e) {
         // 字幕结构异常时只跳过字幕，不影响广告清理。
       }

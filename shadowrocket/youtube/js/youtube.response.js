@@ -39,7 +39,14 @@ if ("undefined" == typeof TextDecoder) {
   };
   TextDecoder.prototype.decode = function (input) {
     const b = input instanceof Uint8Array ? input : new Uint8Array(input || []);
+    const codes = [];
     let out = "";
+    const flush = () => {
+      if (codes.length) {
+        out += String.fromCharCode.apply(null, codes);
+        codes.length = 0;
+      }
+    };
     for (let i = 0; i < b.length; ) {
       const start = i;
       const first = b[i++];
@@ -65,18 +72,21 @@ if ("undefined" == typeof TextDecoder) {
       if (ok && need === 3 && (cp < 0x10000 || cp > 0x10ffff)) ok = false;
       if (!ok) {
         if (this.fatal) throw new TypeError("invalid utf-8");
-        out += "\ufffd";
+        codes.push(0xfffd);
+        if (codes.length >= 4096) flush();
         i = start + 1;
         continue;
       }
       i += need;
       if (cp > 0xffff) {
         cp -= 0x10000;
-        out += String.fromCharCode(0xd800 + (cp >> 10), 0xdc00 + (cp & 1023));
+        codes.push(0xd800 + (cp >> 10), 0xdc00 + (cp & 1023));
       } else {
-        out += String.fromCharCode(cp);
+        codes.push(cp);
       }
+      if (codes.length >= 4096) flush();
     }
+    flush();
     return out;
   };
 }
@@ -89,23 +99,34 @@ if ("undefined" == typeof Object.hasOwn) {
 
 // Uint8Array.fromBase64 / toBase64 是较新的 API，部分 Shadowrocket 的 JSC 没有。
 // 这里补标准 base64（带填充），并保留命名函数供冒烟测试直接调用。
+let shadowrocketB64Dec = null;
+
 function shadowrocketBase64From(text) {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  const clean = String(text)
-    .replace(/[-_]/g, (ch) => (ch === "-" ? "+" : "/"))
-    .replace(/[^A-Za-z0-9+/]/g, "");
-  const out = [];
-  for (let i = 0; i < clean.length; i += 4) {
-    const a = chars.indexOf(clean.charAt(i));
-    const b = chars.indexOf(clean.charAt(i + 1));
-    const c = chars.indexOf(clean.charAt(i + 2));
-    const d = chars.indexOf(clean.charAt(i + 3));
-    const n = (a << 18) | ((b & 63) << 12) | ((c & 63) << 6) | (d & 63);
-    out.push((n >> 16) & 255);
-    if (i + 2 < clean.length) out.push((n >> 8) & 255);
-    if (i + 3 < clean.length) out.push(n & 255);
+  if (!shadowrocketB64Dec) {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    shadowrocketB64Dec = new Int16Array(128).fill(-1);
+    for (let i = 0; i < chars.length; i++) shadowrocketB64Dec[chars.charCodeAt(i)] = i;
+    shadowrocketB64Dec[45] = 62;
+    shadowrocketB64Dec[95] = 63;
   }
-  return new Uint8Array(out);
+  const s = String(text);
+  const out = new Uint8Array(((s.length + 3) >>> 2) * 3);
+  let p = 0;
+  let acc = 0;
+  let bits = 0;
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code >= 128) continue;
+    const v = shadowrocketB64Dec[code];
+    if (v < 0) continue;
+    acc = (acc << 6) | v;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out[p++] = (acc >>> bits) & 0xff;
+    }
+  }
+  return p === out.length ? out : out.subarray(0, p);
 }
 
 function shadowrocketBase64To(bytes) {
@@ -450,8 +471,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   // 优先按 BADGE_STYLE_TYPE_MEMBERS_ONLY 判定，文案只作兜底。
   const MEMBERS_ONLY_LABELS = [
     "Members only",
+    "Members first",
     "会员专享",
+    "会员抢先看",
     "會員專享",
+    "會員搶先看",
     "メンバー限定",
     "멤버 전용",
   ];
@@ -835,7 +859,9 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   function clientKeyFor(request) {
-    return isMusicRequest(request) ? "youtubeMusic" : "youtube";
+    const info = inspectRequest(request);
+    if (info.isWeb) return info.isMusic ? "youtubeMusicWeb" : "youtubeWeb";
+    return info.isMusic ? "youtubeMusic" : "youtube";
   }
 
   // 编码偏好：any 不过滤，no_av1 去掉 AV1，avc 只留 H.264。
@@ -845,6 +871,26 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     if ("avc" === codec) return text.includes("avc1");
     if ("no_av1" === codec) return !text.includes("av01");
     return true;
+  }
+
+  function normalizeCaptionLang(lang) {
+    const raw = String(lang ?? "").trim().toLowerCase().replace(/_/g, "-");
+    if (!raw) return "";
+    if (/^zh-(?:hans|cn|sg|my)(?:-|$)/.test(raw)) return "zh-hans";
+    if (/^zh-(?:hant|tw|hk|mo)(?:-|$)/.test(raw)) return "zh-hant";
+    if ("iw" === raw || raw.startsWith("iw-")) return "iw" === raw ? "he" : "he-" + raw.slice(3);
+    if ("in" === raw || raw.startsWith("in-")) return "in" === raw ? "id" : "id-" + raw.slice(3);
+    return raw;
+  }
+
+  function sameCaptionLanguage(trackCode, targetCode) {
+    const a = normalizeCaptionLang(trackCode);
+    const b = normalizeCaptionLang(targetCode);
+    if (!a || !b) return false;
+    if (a === b) return true;
+    // 中文严格区分简繁，避免 zh-Hans 与 zh-Hant 互相匹配。
+    if (a.startsWith("zh") || b.startsWith("zh")) return false;
+    return !b.includes("-") && a.startsWith(b + "-");
   }
 
   function isQualityEntry(entry) {
@@ -1256,6 +1302,311 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     }
     return { ...defaults, ...options };
   }
+
+// 共享 GZIP 解压（Loon $utils.ungzip / Egern ctx.compress / DecompressionStream / 纯 JS 兜底）
+
+function gunzipJs(raw) {
+  const src =
+    raw instanceof Uint8Array
+      ? raw
+      : ArrayBuffer.isView(raw)
+        ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)
+        : raw instanceof ArrayBuffer
+          ? new Uint8Array(raw)
+          : null;
+  if (!src || src.length < 18 || src[0] !== 0x1f || src[1] !== 0x8b || src[2] !== 8) {
+    throw new Error("not gzip");
+  }
+  const flg = src[3];
+  if (flg & 0xe0) throw new Error("bad gzip flags");
+  const end = src.length - 8;
+  let p = 10;
+  if (flg & 4) {
+    if (p + 2 > end) throw new Error("truncated gzip fextra");
+    p += 2 + (src[p] | (src[p + 1] << 8));
+  }
+  if (flg & 8) {
+    while (p < end && src[p] !== 0) p++;
+    if (p >= end) throw new Error("truncated gzip fname");
+    p++;
+  }
+  if (flg & 16) {
+    while (p < end && src[p] !== 0) p++;
+    if (p >= end) throw new Error("truncated gzip fcomment");
+    p++;
+  }
+  if (flg & 2) p += 2;
+  if (p > end) throw new Error("truncated gzip header");
+
+  const MAX_OUT = 16777216;
+  let bitBuf = 0;
+  let bitLen = 0;
+  function readBits(n) {
+    while (bitLen < n) {
+      if (p >= end) throw new Error("unexpected end of deflate stream");
+      bitBuf |= src[p++] << bitLen;
+      bitLen += 8;
+    }
+    const val = bitBuf & ((1 << n) - 1);
+    bitBuf >>>= n;
+    bitLen -= n;
+    return val;
+  }
+
+  function buildTree(lengths) {
+    const counts = new Uint16Array(16);
+    let maxBits = 0;
+    for (let i = 0; i < lengths.length; i++) {
+      const len = lengths[i];
+      if (len) {
+        counts[len]++;
+        if (len > maxBits) maxBits = len;
+      }
+    }
+    if (!maxBits) return { counts, syms: new Uint16Array(0), maxBits: 0 };
+    const offs = new Uint16Array(16);
+    let left = 1;
+    for (let b = 1; b <= 15; b++) {
+      left <<= 1;
+      left -= counts[b];
+      if (left < 0) throw new Error("oversubscribed huffman tree");
+      if (b < 15) offs[b + 1] = offs[b] + counts[b];
+    }
+    const syms = new Uint16Array(lengths.length);
+    for (let sym = 0; sym < lengths.length; sym++) {
+      const len = lengths[sym];
+      if (len) syms[offs[len]++] = sym;
+    }
+    return { counts, syms, maxBits };
+  }
+
+  function decodeSym(tree) {
+    let code = 0;
+    let first = 0;
+    let index = 0;
+    for (let len = 1; len <= tree.maxBits; len++) {
+      code |= readBits(1);
+      const count = tree.counts[len];
+      if (code - count < first) return tree.syms[index + (code - first)];
+      index += count;
+      first = (first + count) << 1;
+      code <<= 1;
+    }
+    throw new Error("invalid huffman symbol");
+  }
+
+  const fixedLitLens = new Uint8Array(288);
+  for (let i = 0; i <= 143; i++) fixedLitLens[i] = 8;
+  for (let i = 144; i <= 255; i++) fixedLitLens[i] = 9;
+  for (let i = 256; i <= 279; i++) fixedLitLens[i] = 7;
+  for (let i = 280; i <= 287; i++) fixedLitLens[i] = 8;
+  const fixedLit = buildTree(fixedLitLens);
+  const fixedDistLens = new Uint8Array(32);
+  fixedDistLens.fill(5);
+  const fixedDist = buildTree(fixedDistLens);
+
+  const CL_ORDER = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+  const LEN_BASE = [
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
+    35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258,
+  ];
+  const LEN_EXTRA = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+  const DIST_BASE = [
+    1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193,
+    257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
+  ];
+  const DIST_EXTRA = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+
+  let out = new Uint8Array(Math.min(Math.max(end * 3, 256), MAX_OUT));
+  let outLen = 0;
+  function ensureOut(add) {
+    const req = outLen + add;
+    if (req > MAX_OUT) throw new Error("gunzip output exceeds 16 MiB");
+    if (req <= out.length) return;
+    let nextLen = out.length * 2;
+    while (nextLen < req) nextLen *= 2;
+    const next = new Uint8Array(Math.min(nextLen, MAX_OUT));
+    next.set(out.subarray(0, outLen));
+    out = next;
+  }
+
+  let bfinal = 0;
+  do {
+    bfinal = readBits(1);
+    const btype = readBits(2);
+    if (btype === 0) {
+      bitBuf = 0;
+      bitLen = 0;
+      if (p + 4 > end) throw new Error("truncated stored block");
+      const len = src[p] | (src[p + 1] << 8);
+      const nlen = src[p + 2] | (src[p + 3] << 8);
+      p += 4;
+      if ((len ^ nlen) !== 0xffff || p + len > end) throw new Error("bad stored block");
+      ensureOut(len);
+      out.set(src.subarray(p, p + len), outLen);
+      outLen += len;
+      p += len;
+      continue;
+    }
+
+    let litTree = fixedLit;
+    let distTree = fixedDist;
+    if (btype === 2) {
+      const hlit = readBits(5) + 257;
+      const hdist = readBits(5) + 1;
+      const hclen = readBits(4) + 4;
+      const clLens = new Uint8Array(19);
+      for (let i = 0; i < hclen; i++) clLens[CL_ORDER[i]] = readBits(3);
+      const clTree = buildTree(clLens);
+      const total = hlit + hdist;
+      const allLens = new Uint8Array(total);
+      let idx = 0;
+      while (idx < total) {
+        const sym = decodeSym(clTree);
+        if (sym < 16) {
+          allLens[idx++] = sym;
+        } else {
+          let rep = 0;
+          let val = 0;
+          if (sym === 16) {
+            if (idx === 0) throw new Error("bad repeat length");
+            val = allLens[idx - 1];
+            rep = 3 + readBits(2);
+          } else if (sym === 17) {
+            rep = 3 + readBits(3);
+          } else {
+            rep = 11 + readBits(7);
+          }
+          if (idx + rep > total) throw new Error("huffman lengths overflow");
+          while (rep-- > 0) allLens[idx++] = val;
+        }
+      }
+      if (!allLens[256]) throw new Error("missing eob symbol");
+      litTree = buildTree(allLens.subarray(0, hlit));
+      distTree = buildTree(allLens.subarray(hlit));
+    } else if (btype !== 1) {
+      throw new Error("reserved deflate block");
+    }
+
+    for (;;) {
+      const sym = decodeSym(litTree);
+      if (sym < 256) {
+        ensureOut(1);
+        out[outLen++] = sym;
+      } else if (sym === 256) {
+        break;
+      } else {
+        const li = sym - 257;
+        if (li >= LEN_BASE.length) throw new Error("invalid length symbol");
+        const len = LEN_BASE[li] + (LEN_EXTRA[li] ? readBits(LEN_EXTRA[li]) : 0);
+        const di = decodeSym(distTree);
+        if (di >= DIST_BASE.length) throw new Error("invalid distance symbol");
+        const dist = DIST_BASE[di] + (DIST_EXTRA[di] ? readBits(DIST_EXTRA[di]) : 0);
+        if (dist <= 0 || dist > outLen) throw new Error("invalid back-reference distance");
+        ensureOut(len);
+        for (let i = 0; i < len; i++) {
+          out[outLen] = out[outLen - dist];
+          outLen++;
+        }
+      }
+    }
+  } while (!bfinal);
+
+  const isize = (src[end + 4] | (src[end + 5] << 8) | (src[end + 6] << 16) | (src[end + 7] << 24)) >>> 0;
+  if ((outLen >>> 0) !== isize) throw new Error("gzip isize mismatch");
+  return out.subarray(0, outLen);
+}
+
+async function gunzipBytes(raw) {
+  const bytes =
+    raw instanceof Uint8Array
+      ? raw
+      : ArrayBuffer.isView(raw)
+        ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)
+        : raw instanceof ArrayBuffer
+          ? new Uint8Array(raw)
+          : null;
+  if (!bytes || bytes.length < 18 || bytes[0] !== 0x1f || bytes[1] !== 0x8b || bytes[2] !== 8) {
+    return null;
+  }
+  const emptyExpected =
+    (bytes[bytes.length - 4] | bytes[bytes.length - 3] | bytes[bytes.length - 2] | bytes[bytes.length - 1]) === 0;
+  const coerce = (out) => {
+    const u =
+      out instanceof Uint8Array
+        ? out
+        : ArrayBuffer.isView(out)
+          ? new Uint8Array(out.buffer, out.byteOffset, out.byteLength)
+          : out instanceof ArrayBuffer
+            ? new Uint8Array(out)
+            : null;
+    return u && (u.length > 0 || emptyExpected) ? u : null;
+  };
+
+  if ("undefined" != typeof $utils && $utils && "function" == typeof $utils.ungzip) {
+    try {
+      const u = coerce($utils.ungzip(bytes));
+      if (u) return u;
+    } catch {}
+  }
+  if ("undefined" != typeof ctx && ctx && ctx.compress && "function" == typeof ctx.compress.gunzip) {
+    try {
+      const u = coerce(await ctx.compress.gunzip(bytes));
+      if (u) return u;
+    } catch {}
+  }
+  if ("undefined" != typeof DecompressionStream) {
+    let reader = null;
+    let writer = null;
+    try {
+      const stream = new DecompressionStream("gzip");
+      reader = stream.readable.getReader();
+      writer = stream.writable.getWriter();
+      const collected = (async () => {
+        const chunks = [];
+        let total = 0;
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          total += value.length;
+          if (total > 16777216) throw new Error("gunzip exceeds 16 MiB");
+          chunks.push(value);
+        }
+        const out = new Uint8Array(total);
+        let pos = 0;
+        for (let i = 0; i < chunks.length; i++) {
+          out.set(chunks[i], pos);
+          pos += chunks[i].length;
+        }
+        return out;
+      })();
+      const written = (async () => {
+        await writer.write(bytes);
+        await writer.close();
+      })();
+      const u = coerce((await Promise.all([collected, written]))[0]);
+      if (u) return u;
+    } catch (e) {
+      if (reader || writer) {
+        try {
+          await Promise.allSettled([reader && reader.cancel(e), writer && writer.abort(e)]);
+        } catch {}
+      }
+    } finally {
+      try {
+        if (reader) reader.releaseLock();
+      } catch {}
+      try {
+        if (writer) writer.releaseLock();
+      } catch {}
+    }
+  }
+  try {
+    return coerce(gunzipJs(bytes));
+  } catch {
+    return null;
+  }
+}
 
   //=====================================================================================
   // §6 schema
@@ -2034,7 +2385,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       const unique = new Set();
       let match;
       while ((match = re.exec(text))) unique.add(match[1]);
-      if (!unique.size) return false;
+      if (!unique.size) return countMembersOnlyBadges(bytes, 1) > 0;
       if (1 === unique.size) return true;
       return countMembersOnlyBadges(bytes, unique.size) >= unique.size;
     } catch {
@@ -2540,20 +2891,22 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   // 字幕翻译：在原字幕轨道后面补一条带 tlang 的翻译轨道，并把它设为默认。
-  // 目标语言本身就在轨道列表里时直接选中它，不再重复添加。
-  function applyCaptionTranslation(player, lang) {
+  // 目标语言（或等价区域码，如 zh-CN 之于 zh-Hans）已在轨道列表里时直接选中它；
+  // 同语言与英文底本均优先选择人工字幕而非自动生成（ASR）字幕，以免翻译底本质量退化。
+  function applyCaptionTranslation(player, lang, stripAuto) {
     const renderer = player.captions?.playerCaptionsTrackListRenderer;
     const tracks = renderer?.captionTracks;
     if (!Array.isArray(tracks) || !tracks.length) return false;
 
     let changed = false;
     let bestIndex = 0;
-    let bestScore = 0;
-    const target = String(lang).toLowerCase();
+    let bestScore = -1;
     for (let i = 0; i < tracks.length; i++) {
       const track = tracks[i];
-      const code = String(track.languageCode ?? "").toLowerCase();
-      const score = code === target ? 2 : /^en(?:-|$)/.test(code) ? 1 : 0;
+      const code = String(track.languageCode ?? "");
+      const manual = isAutoCaptionTrack(track) ? 0 : 1;
+      const langScore = sameCaptionLanguage(code, lang) ? 4 : /^en(?:-|$)/i.test(code) ? 2 : 0;
+      const score = langScore + manual;
       if (score > bestScore) {
         bestScore = score;
         bestIndex = i;
@@ -2561,8 +2914,9 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       if (track.isTranslatable !== true) changed = setField(track, "isTranslatable", true) || changed;
     }
 
+    const hasTarget = bestScore >= 4;
     let selected = bestIndex;
-    if (bestScore !== 2) {
+    if (!hasTarget) {
       const base = tracks[bestIndex];
       const baseUrl = String(base.baseUrl ?? "");
       if (!baseUrl) return changed;
@@ -2577,13 +2931,14 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       changed = setField(renderer, "captionTracks", [...tracks, translated]) || changed;
     }
 
+    const shouldEnable = !hasTarget && !stripAuto;
     changed = setField(renderer, "defaultCaptionTrackIndex", selected) || changed;
     if (Array.isArray(renderer.audioTracks)) {
       for (const audio of renderer.audioTracks) {
         const indices = Array.isArray(audio.captionTrackIndices) ? audio.captionTrackIndices : [];
         if (!indices.includes(selected)) changed = setField(audio, "captionTrackIndices", [...indices, selected]) || changed;
         changed = setField(audio, "defaultCaptionTrackIndex", selected) || changed;
-        changed = setField(audio, "captionsInitialState", 3) || changed;
+        if (shouldEnable) changed = setField(audio, "captionsInitialState", 3) || changed;
       }
     }
     return changed;
@@ -2615,7 +2970,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
     if (options.captionLang && "off" !== String(options.captionLang).toLowerCase()) {
       // 字幕轨道结构异常时只跳过字幕，不能连累广告清理。
       try {
-        changed = applyCaptionTranslation(player, options.captionLang) || changed;
+        changed = applyCaptionTranslation(player, options.captionLang, !!options.stripAutoCaptions) || changed;
       } catch (e) {
         // ignore
       }
@@ -3064,18 +3419,19 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
   }
 
   // 字幕翻译：与 App 版逻辑一致，但直接操作 JSON 属性。
-  function jsonApplyCaptionTranslation(player, lang) {
+  function jsonApplyCaptionTranslation(player, lang, stripAuto) {
     const renderer = player?.captions?.playerCaptionsTrackListRenderer;
     const tracks = renderer?.captionTracks;
     if (!Array.isArray(tracks) || !tracks.length) return false;
 
     let changed = false;
     let bestIndex = 0;
-    let bestScore = 0;
-    const target = String(lang).toLowerCase();
+    let bestScore = -1;
     for (let i = 0; i < tracks.length; i++) {
-      const code = String(tracks[i]?.languageCode ?? "").toLowerCase();
-      const score = code === target ? 2 : /^en(?:-|$)/.test(code) ? 1 : 0;
+      const code = String(tracks[i]?.languageCode ?? "");
+      const manual = jsonIsAutoCaptionTrack(tracks[i]) ? 0 : 1;
+      const langScore = sameCaptionLanguage(code, lang) ? 4 : /^en(?:-|$)/i.test(code) ? 2 : 0;
+      const score = langScore + manual;
       if (score > bestScore) {
         bestScore = score;
         bestIndex = i;
@@ -3086,8 +3442,9 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       }
     }
 
+    const hasTarget = bestScore >= 4;
     let selected = bestIndex;
-    if (bestScore !== 2) {
+    if (!hasTarget) {
       const baseUrl = String(tracks[bestIndex]?.baseUrl ?? "");
       if (!baseUrl) return changed;
       const translated = {
@@ -3102,6 +3459,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       changed = true;
     }
 
+    const shouldEnable = !hasTarget && !stripAuto;
     if (renderer.defaultCaptionTrackIndex !== selected) {
       renderer.defaultCaptionTrackIndex = selected;
       changed = true;
@@ -3118,7 +3476,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
           audio.defaultCaptionTrackIndex = selected;
           changed = true;
         }
-        if (audio.captionsInitialState !== 3) {
+        if (shouldEnable && audio.captionsInitialState !== 3) {
           audio.captionsInitialState = 3;
           changed = true;
         }
@@ -3288,7 +3646,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
     if (options.captionLang && "off" !== String(options.captionLang).toLowerCase()) {
       try {
-        changed = jsonApplyCaptionTranslation(player, options.captionLang) || changed;
+        changed = jsonApplyCaptionTranslation(player, options.captionLang, !!options.stripAutoCaptions) || changed;
       } catch (e) {
         // 字幕结构异常时只跳过字幕，不影响广告清理。
       }
@@ -3715,19 +4073,11 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       t = (g) => (g << 8) | (g >>> 24);
     function n(g, I) {
       if (256 !== g.length) throw new Error("Wrong sbox length");
-      let A = new Uint32Array(256).map((A, C) => I(g[C])),
-        C = A.map(t),
-        E = C.map(t),
-        o = E.map(t),
-        e = new Uint32Array(65536),
-        B = new Uint32Array(65536),
-        n = new Uint16Array(65536);
-      for (let I = 0; I < 256; I++)
-        for (let t = 0; t < 256; t++) {
-          let S = 256 * I + t;
-          ((e[S] = A[I] ^ C[t]), (B[S] = E[I] ^ o[t]), (n[S] = (g[I] << 8) | g[t]));
-        }
-      return { sbox2: n, T01: e, T23: B };
+      let T0 = new Uint32Array(256).map((A, C) => I(g[C])),
+        T1 = T0.map(t),
+        T2 = T1.map(t),
+        T3 = T2.map(t);
+      return { sbox: g, T0, T1, T2, T3 };
     }
     var S = n(
         (() => {
@@ -3748,23 +4098,23 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
         for (let I = 0, A = 1; I < 16; I++, A = o(A)) g[I] = A;
         return g;
       })();
-    function r(g, I, A, C, E, o) {
-      return g[((A << 8) & 65280) | ((C >>> 8) & 255)] ^ I[((E >>> 8) & 65280) | ((o >>> 24) & 255)];
+    function r(T0, T1, T2, T3, s0, s1, s2, s3) {
+      return T0[255 & s0] ^ T1[(s1 >>> 8) & 255] ^ T2[(s2 >>> 16) & 255] ^ T3[(s3 >>> 24) & 255];
     }
-    function h(g, I, A, C, E) {
-      return g[(255 & I) | (65280 & A)] | (g[((C >>> 16) & 255) | ((E >>> 16) & 65280)] << 16);
+    function h(sbox, s0, s1, s2, s3) {
+      return sbox[255 & s0] | (sbox[(s1 >>> 8) & 255] << 8) | (sbox[(s2 >>> 16) & 255] << 16) | (sbox[(s3 >>> 24) & 255] << 24);
     }
     function a(g, I, A, C, E) {
-      let { sbox2: o, T01: e, T23: B } = S,
+      let { sbox: o, T0, T1, T2, T3 } = S,
         t = 0;
       ((I ^= g[t++]), (A ^= g[t++]), (C ^= g[t++]), (E ^= g[t++]));
       let n = g.length / 4 - 2;
-      for (let o = 0; o < n; o++) {
-        let o = g[t++] ^ r(e, B, I, A, C, E),
-          n = g[t++] ^ r(e, B, A, C, E, I),
-          S = g[t++] ^ r(e, B, C, E, I, A),
-          i = g[t++] ^ r(e, B, E, I, A, C);
-        ((I = o), (A = n), (C = S), (E = i));
+      for (let i = 0; i < n; i++) {
+        let w0 = g[t++] ^ r(T0, T1, T2, T3, I, A, C, E),
+          w1 = g[t++] ^ r(T0, T1, T2, T3, A, C, E, I),
+          w2 = g[t++] ^ r(T0, T1, T2, T3, C, E, I, A),
+          w3 = g[t++] ^ r(T0, T1, T2, T3, E, I, A, C);
+        ((I = w0), (A = w1), (C = w2), (E = w3));
       }
       return {
         s0: g[t++] ^ h(o, I, A, C, E),
@@ -3926,7 +4276,7 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
             let e = o.length;
             if (![16, 24, 32].includes(e))
               throw new Error("aes: invalid key size, should be 16, 24 or 32, got " + e);
-            let { sbox2: t } = S,
+            let { sbox: t } = S,
               n = [];
             C(o) || n.push((o = E(o)));
             let r = I(o),
@@ -4060,7 +4410,15 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       const isGzip = 31 === plaintext[0] && 139 === plaintext[1];
       if (1 === envelope.compressionAlgorithm && !isGzip) throw new Error("Invalid UMP gzip payload");
 
-      const decoded = isGzip ? await gzipStream(plaintext, true) : plaintext;
+      let decoded = plaintext;
+      if (isGzip) {
+        if ("function" == typeof gunzipBytes) {
+          decoded = await gunzipBytes(plaintext);
+          if (!decoded) throw new Error("Invalid UMP gzip payload");
+        } else {
+          decoded = await gzipStream(plaintext, true);
+        }
+      }
       const response = Onesie.fromBinary(decoded);
 
       if (collectPlayers) {
@@ -4083,7 +4441,16 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
       const reencoded = Onesie.toBinary(response);
       if (bytesEqual(reencoded, decoded)) return partBytes;
 
-      const recompressed = isGzip ? await gzipStream(reencoded, false) : reencoded;
+      let recompressed = reencoded;
+      if (isGzip) {
+        if ("undefined" != typeof CompressionStream) {
+          recompressed = await gzipStream(reencoded, false);
+        } else if ("undefined" != typeof ctx && ctx && ctx.compress && "function" == typeof ctx.compress.gzip) {
+          recompressed = await ctx.compress.gzip(reencoded);
+        } else {
+          setField(envelope, "compressionAlgorithm", 0);
+        }
+      }
       const encrypted = await context.encrypt(recompressed);
       setField(envelope, "encryptedContent", encrypted.encryptedContent);
       setField(envelope, "hmac", encrypted.hmac);
