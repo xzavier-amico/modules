@@ -714,7 +714,7 @@ check("Spotify han variant table folds traditional text with phrase exceptions",
   assert.equal(han.toHans("僕らの愛を"), "僕らの愛を");
 });
 
-check("Spotify third-party lyrics append a clear provider credit line and decode QQ entities", () => {
+check("Spotify third-party lyrics decode QQ entities without a provider credit line", () => {
   const id = "creditcheck";
   const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json";
   const map = { "spotify.track.meta.v2": JSON.stringify({ [id]: ["Song", "Artist", 200000, Date.now()] }) };
@@ -740,25 +740,23 @@ check("Spotify third-party lyrics append a clear provider credit line and decode
     },
   });
   const payload = JSON.parse(out.body);
-  assert.deepEqual(payload.lyrics.lines.map((l) => l.words), [
-    "I'm想你",
-    "Rock & Roll",
-    "— 歌词来自第三方（QQ） —",
-  ]);
+  assert.deepEqual(payload.lyrics.lines.map((l) => l.words), ["I'm想你", "Rock & Roll"]);
   assert.deepEqual(payload.lyrics.previewLines.map((l) => l.words), ["I'm想你", "Rock & Roll"]);
 
-  // 缓存再次命中时不能重复追加第二条来源标记。
+  // 旧版本缓存末尾可能带有来源行，命中时要顺手剔除。
+  const cacheMap = JSON.parse(map["spotify.lyrics.cache.v2"]);
+  const entry = Object.values(cacheMap)[0];
+  entry.a.push([3000, "— 歌词来自第三方（QQ） —"]);
+  map["spotify.lyrics.cache.v2"] = JSON.stringify(cacheMap);
+
   const cachedOut = run("loon/spotify/js/spotify_lyrics.js", "", url, ["qq", true], {
     $response: undefined,
     $persistentStore: store,
     $httpClient: { get: () => assert.fail("cache hit must not query providers") },
   });
   const cachedPayload = JSON.parse(cachedOut.response.body);
-  assert.deepEqual(cachedPayload.lyrics.lines.map((l) => l.words), [
-    "I'm想你",
-    "Rock & Roll",
-    "— 歌词来自第三方（QQ） —",
-  ]);
+  assert.deepEqual(cachedPayload.lyrics.lines.map((l) => l.words), ["I'm想你", "Rock & Roll"]);
+  assert.deepEqual(cachedPayload.lyrics.previewLines.map((l) => l.words), ["I'm想你", "Rock & Roll"]);
 });
 
 check("Loon official race winner is never overwritten in cache by late third-party callback", () => {
@@ -2874,7 +2872,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     const base = "https://spclient.wg.spotify.com/color-lyrics/v2/track/id";
     const lines = [{ startTimeMs: "41310", words: "First", syllables: [], endTimeMs: "0" },
       { startTimeMs: "48450", words: "Second", syllables: [], endTimeMs: "0" }];
-    const expected = lines.concat([{ startTimeMs: "49450", words: "— 歌词来自第三方（LRCLIB） —", syllables: [], endTimeMs: "0" }]);
+    const expected = lines;
     for (const format of ["json", "protobuf"]) {
       const out = run(file, "", base + "?format=" + format, { lyrics_source: "lrclib" }, {
         $response: { status: 404, body: "" },
@@ -3357,10 +3355,10 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
       else {
         const lyrics = parse(first(parse(out.body), 1).p);
         const lines = lyrics.filter((f) => f.no === 2).map((f) => parse(f.p));
-        assert.equal(lines.length, 3);
+        assert.equal(lines.length, 2);
         assert.equal(first(lines[0], 1).v, 1000n);
         assert.equal(text(first(lines[0], 2)), "Hello");
-        assert.equal(text(first(lines[2], 2)), "— 歌词来自第三方（LRCLIB） —");
+        assert.equal(text(first(lines[1], 2)), "World");
       }
     }
     assert.equal(Object.keys(run(file, "denied", base, {}, { $response: { status: 403, body: "denied" },

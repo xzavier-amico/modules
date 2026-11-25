@@ -1806,7 +1806,7 @@ const SPOTIFY_HAN_VARIANTS = (() => {
       }
     }
     const syncType = entry.s === "UNSYNCED" ? "UNSYNCED" : "LINE_SYNCED";
-    const fullLines = appendCreditLine(rebuilt, syncType, provider);
+    const fullLines = stripLegacyCredit(rebuilt);
     const language = String(entry.l || "en");
     return {
       payload: {
@@ -1845,16 +1845,11 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     const colors = payload.colors || {};
     const lines = [];
     const raw = Array.isArray(lyrics.lines) ? lyrics.lines : [];
-    const lastRaw = raw.length ? raw[raw.length - 1] : null;
-    const hasTrailingCredit = !!(lastRaw && typeof lastRaw.words === "string" && THIRD_PARTY_CREDIT_RE.test(lastRaw.words));
-    const maxBody = hasTrailingCredit && raw.length > LYRICS_CACHE_MAX_LINES ? LYRICS_CACHE_MAX_LINES - 1 : LYRICS_CACHE_MAX_LINES;
-    for (let i = 0; i < raw.length && lines.length < maxBody; i += 1) {
+    for (let i = 0; i < raw.length && lines.length < LYRICS_CACHE_MAX_LINES; i += 1) {
       const line = raw[i];
       if (!line || typeof line.words !== "string" || !line.words.trim()) continue;
+      if (LEGACY_CREDIT_RE.test(line.words)) continue;
       lines.push([Number(line.startTimeMs) || 0, line.words.slice(0, 200)]);
-    }
-    if (hasTrailingCredit && raw.length > LYRICS_CACHE_MAX_LINES) {
-      lines.push([Number(lastRaw.startTimeMs) || 0, lastRaw.words.slice(0, 200)]);
     }
     if (!lines.length) return;
     const unfolded = typeof SPOTIFY_HAN_VARIANTS === "undefined" ? 1 : 0;
@@ -1899,28 +1894,16 @@ const SPOTIFY_HAN_VARIANTS = (() => {
   // 当前 / 已唱行白色。三项都是 alpha=0xFF 的不透明色，不能依赖 alpha 区分。
   // 官方 previewLines 给 5 行；超过歌词总行数时按实际行数截断。
   const PREVIEW_LINES = 5;
-  const PROVIDER_LABEL = {
-    NetEase: "网易",
-    "QQ Music": "QQ",
-    LRCLIB: "LRCLIB",
-    Musixmatch: "Musixmatch",
-  };
-  const THIRD_PARTY_CREDIT_RE = /^— 歌词来自第三方（.+） —$/;
-  function thirdPartyCredit(provider) {
-    const label = PROVIDER_LABEL[provider] || String(provider || "第三方");
-    return "— 歌词来自第三方（" + label + "） —";
-  }
-  function appendCreditLine(lines, syncType, provider) {
-    if (!lines.length) return lines;
-    if (THIRD_PARTY_CREDIT_RE.test(lines[lines.length - 1].words)) return lines;
-    const lastMs = syncType === "LINE_SYNCED" ? (Number(lines[lines.length - 1].startTimeMs) || 0) + 1000 : 0;
-    return lines.concat([{ startTimeMs: String(lastMs), words: thirdPartyCredit(provider), syllables: [], endTimeMs: "0" }]);
+  // 旧版本会在第三方歌词末尾追加「— 歌词来自第三方（QQ） —」来源行。
+  // 现在不再追加；读取旧缓存时顺手剔除，避免升级后还残留。
+  const LEGACY_CREDIT_RE = /^— 歌词来自第三方（.+） —$/;
+  function stripLegacyCredit(lines) {
+    let end = lines.length;
+    while (end > 0 && LEGACY_CREDIT_RE.test(String((lines[end - 1] && lines[end - 1].words) || ""))) end -= 1;
+    return end === lines.length ? lines : lines.slice(0, end);
   }
   function previewFromLines(lines) {
-    const clean = lines.length && THIRD_PARTY_CREDIT_RE.test(lines[lines.length - 1].words)
-      ? lines.slice(0, -1)
-      : lines;
-    return clean.slice(0, PREVIEW_LINES);
+    return stripLegacyCredit(lines).slice(0, PREVIEW_LINES);
   }
 
   // 这些正则会在逐行解析里反复用到，提到外层只创建一次。
@@ -3999,14 +3982,13 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     const id = record.providerId !== undefined ? record.providerId : record.id;
     const language = detectLanguage(lines);
     const preview = lines.slice(0, PREVIEW_LINES);
-    const fullLines = appendCreditLine(lines, syncType, provider);
     // 值是 32 位有符号整数。
     const signed = (v) => (v > 0x7fffffff ? v - 0x100000000 : v);
     const palette = albumColors(record);
     return {
       lyrics: {
         syncType: syncType,
-        lines: fullLines,
+        lines: lines,
         provider: provider,
         providerLyricsId: id === undefined || id === null ? "" : String(id),
         providerDisplayName: provider,

@@ -40,28 +40,8 @@ const REQUEST_TIMEOUT_MS = 4000;
 // so synthesized responses must always include them.
 // Official responses carry at most 5 preview lines for the lyrics card.
 const PREVIEW_LINES = 5;
-const PROVIDER_LABEL = {
-  NetEase: "网易",
-  "QQ Music": "QQ",
-  LRCLIB: "LRCLIB",
-  Musixmatch: "Musixmatch",
-};
-const THIRD_PARTY_CREDIT_RE = /^— 歌词来自第三方（.+） —$/;
-function thirdPartyCredit(provider) {
-  const label = PROVIDER_LABEL[provider] || String(provider || "第三方");
-  return "— 歌词来自第三方（" + label + "） —";
-}
-function appendCreditLine(lines, syncType, provider) {
-  if (!lines.length) return lines;
-  if (THIRD_PARTY_CREDIT_RE.test(lines[lines.length - 1].words)) return lines;
-  const lastMs = syncType === "LINE_SYNCED" ? (Number(lines[lines.length - 1].startTimeMs) || 0) + 1000 : 0;
-  return lines.concat([{ startTimeMs: String(lastMs), words: thirdPartyCredit(provider), syllables: [], endTimeMs: "0" }]);
-}
 function previewFromLines(lines) {
-  const clean = lines.length && THIRD_PARTY_CREDIT_RE.test(lines[lines.length - 1].words)
-    ? lines.slice(0, -1)
-    : lines;
-  return clean.slice(0, PREVIEW_LINES);
+  return lines.slice(0, PREVIEW_LINES);
 }
 const COLOR_BG = 0xff121212;
 const COLOR_LINE = 0xb3ffffff;
@@ -894,7 +874,7 @@ function makeLyrics(syncType, lines, record, options = {}) {
   }
   return {
     syncType,
-    lines: appendCreditLine(finalLines, syncType, provider),
+    lines: finalLines,
     provider,
     providerId: id === undefined || id === null ? "" : String(id),
     language,
