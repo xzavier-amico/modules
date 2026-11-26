@@ -12,7 +12,9 @@
   const LYRICS_SECTION_ID_BYTES = TE.encode(LYRICS_SECTION_ID);
 
   function scrollTrackId(url) {
-    const match = /\/scrollsita\/v\d+\/scroll\/(?:spotify%3Atrack%3A|spotify:track:)([A-Za-z0-9]{22})/i.exec(url);
+    // 路径式 /scroll/spotify:track:{id} 与查询式 /scroll?uri=spotify%3Atrack%3A{id}
+    // 都要支持；桌面端两种都出现过。
+    const match = /(?:\/scrollsita\/v\d+\/scroll\/|[?&]uri=)(?:spotify%3Atrack%3A|spotify:track:)([A-Za-z0-9]{22})/i.exec(url);
     return match ? match[1] : "";
   }
 

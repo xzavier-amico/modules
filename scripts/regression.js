@@ -1270,6 +1270,22 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
   });
 }
 
+check("Spotify feed handles query-style scroll URLs", () => {
+  const section = b(1, serialize([
+    b(1, serialize([s(2, "normal-card")])),
+    b(5, serialize([s(1, track)])),
+    s(9, "探索 周杰倫"),
+    b(4, serialize([s(1, "track_title"), s(2, "說謊")])),
+  ]));
+  const body = serialize([b(1, serialize([section]))]);
+  const url = "https://spclient.wg.spotify.com/scrollsita/v1/scroll?uri=" +
+    encodeURIComponent("spotify:track:" + track) + "&is_playing=true";
+  const out = run("loon/spotify/js/spotify.feed.js", body, url, { block_ads: false, enable_lyrics: false, meta_script: "hans" });
+  const decoded = new TextDecoder().decode(out.body);
+  assert.ok(decoded.includes("探索 周杰伦"), "query-style scroll URLs must be recognised");
+  assert.ok(decoded.includes("说谎"));
+});
+
 for (const platform of ["loon", "egern", "shadowrocket"]) {
   check(platform + " Spotify partner script converts Pathfinder JSON names", () => {
     const file = platform + "/spotify/js/spotify.partner.js";

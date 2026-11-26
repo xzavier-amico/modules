@@ -4446,7 +4446,9 @@ const SPOTIFY_HAN_VARIANTS = (() => {
   const LYRICS_SECTION_ID_BYTES = TE.encode(LYRICS_SECTION_ID);
 
   function scrollTrackId(url) {
-    const match = /\/scrollsita\/v\d+\/scroll\/(?:spotify%3Atrack%3A|spotify:track:)([A-Za-z0-9]{22})/i.exec(url);
+    // 路径式 /scroll/spotify:track:{id} 与查询式 /scroll?uri=spotify%3Atrack%3A{id}
+    // 都要支持；桌面端两种都出现过。
+    const match = /(?:\/scrollsita\/v\d+\/scroll\/|[?&]uri=)(?:spotify%3Atrack%3A|spotify:track:)([A-Za-z0-9]{22})/i.exec(url);
     return match ? match[1] : "";
   }
 
@@ -4634,7 +4636,8 @@ const SPOTIFY_HAN_VARIANTS = (() => {
   // 查询串很常见（?locale=zh / ?market=US）；只用 (?:\/|$) 会把这些请求整个放行。
   const HOME_URL = /\/casita\/v\d+\/home(?:\/|\?|$)/;
   const BROWSE_URL = /\/browsita\/v\d+\/browse(?:\/|\?|$)/;
-  const SCROLL_URL = /\/scrollsita\/v\d+\/scroll\//;
+  // 有些客户端把 URI 放在查询串里（/scroll?uri=...），不能只认 /scroll/{uri}。
+  const SCROLL_URL = /\/scrollsita\/v\d+\/scroll(?:\/|\?|$)/;
 
   const isHome = HOME_URL.test(url);
   const isBrowse = BROWSE_URL.test(url);
