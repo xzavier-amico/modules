@@ -1276,18 +1276,15 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     }
   };
 
-  const isJsonUrl = /\/pathfinder\//.test(res.url || (typeof $request !== "undefined" && $request && $request.url) || "");
   const json = asJson();
   if (json) {
     if (walkJson(json)) $done({ body: JSON.stringify(json) });
     else $done({});
     return;
   }
-  if (isJsonUrl) {
-    // pathfinder 只处理 JSON；解析失败（gzip / zstd 未解压）原样放行。
-    $done({});
-    return;
-  }
+  // 不是 JSON 时继续按 protobuf 处理：Pathfinder 在部分客户端上也会返回
+  // protobuf（content-type: application/x-protobuf），不能因为 URL 是
+  // pathfinder 就提前放行。解析失败时下面会原样 $done({})。
 
   // ---------------- protobuf（spclient 列表 / 实体） ----------------
   const fields = parse(bytes);

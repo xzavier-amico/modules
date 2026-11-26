@@ -1325,6 +1325,11 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.ok(decoded.includes("范特西"));
     assert.ok(decoded.includes("宇多田ヒカル"), "kana names must stay unchanged");
     assert.equal(out.body.length, body.length, "name folding must keep byte length");
+    // 部分客户端从同一 Pathfinder URL 返回 protobuf，不能因为 URL 是
+    // pathfinder 就提前放行。
+    const pb = run(file, body, "https://api-partner.spotify.com/pathfinder/v2/query", { meta_script: "hans" });
+    assert.ok(pb.body, "Pathfinder protobuf must be folded too");
+    assert.ok(new TextDecoder().decode(pb.body).includes("周杰伦"));
     assert.equal(Object.keys(run(file, body, url, { meta_script: "source" })).length, 0);
   });
 }
