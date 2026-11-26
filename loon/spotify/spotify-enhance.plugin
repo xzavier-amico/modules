@@ -35,8 +35,8 @@ AND, ((DOMAIN-SUFFIX, spotify.com), (PROTOCOL, QUIC)), REJECT
 
 [Rewrite]
 # 删除 if-none-match 与 if-modified-since，避免 304 空响应导致脚本拿不到 body。
-request if ${url} ~= /^https:\/\/(?:[\w-]+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:bootstrap|user-customization-service|extended-metadata|context-resolve|connect-state|metadata\/4\/track|color-lyrics|remote-config-resolver|nebula|casita|browsita|scrollsita)\//i then request.header.del("if-none-match")
-request if ${url} ~= /^https:\/\/(?:[\w-]+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:bootstrap|user-customization-service|extended-metadata|context-resolve|connect-state|metadata\/4\/track|color-lyrics|remote-config-resolver|nebula|casita|browsita|scrollsita)\//i then request.header.del("if-modified-since")
+request if ${url} ~= /^https:\/\/(?:[\w-]+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:bootstrap|user-customization-service|extended-metadata|context-resolve|connect-state|metadata\/4\/(?:track|album|artist|show|episode)|color-lyrics|remote-config-resolver|nebula|casita|browsita|scrollsita|playlist\/v2|collection\/v2|searchview|search\/v[23]|album\/v2|artist\/v2|track-entity-view|creatorabout\/v0|vanilla\/v1|user-profile-view|genre-view|browse\/v2)\//i then request.header.del("if-none-match")
+request if ${url} ~= /^https:\/\/(?:[\w-]+-spclient|spclient\.wg)\.spotify\.com(?::443)?\/(?:bootstrap|user-customization-service|extended-metadata|context-resolve|connect-state|metadata\/4\/(?:track|album|artist|show|episode)|color-lyrics|remote-config-resolver|nebula|casita|browsita|scrollsita|playlist\/v2|collection\/v2|searchview|search\/v[23]|album\/v2|artist\/v2|track-entity-view|creatorabout\/v0|vanilla\/v1|user-profile-view|genre-view|browse\/v2)\//i then request.header.del("if-modified-since")
 # 桌面端广告与推广接口；iOS 不请求这些路径，保留不影响。
 request if ${url} ~= /^https:\/\/(?:[\w-]+-spclient|spclient\.wg)\.spotify\.com(?::443)?(?:\/ads\/|\/ad-|\/premium-marketing\/|[^?#]*\/ad-on-app-open)/i then reject(404)
 

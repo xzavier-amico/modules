@@ -392,13 +392,13 @@ check("Shadowrocket Spotify module rejects desktop ad endpoints", () => {
 check("Spotify modules drop if-none-match for track metadata too", () => {
   // metadata/4/track 是桌面端判断「这首歌有没有歌词」的来源。不禁用 304 时
   // 客户端会一直用浏览器缓存里的旧 has_lyrics，补了元数据也看不到歌词。
-  const loonNeedle = "metadata\\/4\\/track";
+  const loonNeedle = "metadata\\/4\\/";
   for (const file of ["loon/spotify/spotify-enhance.plugin"]) {
     const line = read(file).split("\n").find((item) => item.includes('request.header.del("if-none-match")'));
-    assert.ok(line && line.includes(loonNeedle), file + " must drop if-none-match for metadata/4/track");
+    assert.ok(line && line.includes(loonNeedle) && line.includes("track"), file + " must drop if-none-match for metadata/4/track");
   }
   const sr = read("shadowrocket/spotify/spotify-enhance.sgmodule").split("\n").find((l) => l.includes("header-del if-none-match"));
-  assert.ok(sr && sr.includes(loonNeedle), "shadowrocket must drop if-none-match for metadata/4/track");
+  assert.ok(sr && sr.includes(loonNeedle) && sr.includes("track"), "shadowrocket must drop if-none-match for metadata/4/track");
   const egern = read("egern/spotify/spotify-enhance.yaml");
   assert.ok(egern.includes("metadata\\\\/4\\\\/track"), "egern must drop if-none-match for metadata/4/track");
 });
