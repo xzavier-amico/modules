@@ -1350,6 +1350,26 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
   });
 }
 
+for (const platform of ["loon", "egern", "shadowrocket"]) {
+  check(platform + " Spotify partner script folds watch-feed names", () => {
+    const file = platform + "/spotify/js/spotify.partner.js";
+    const url = "https://spclient.wg.spotify.com/watch-feed-entrypoints/v1/discovery-from-seed";
+    const body = serialize([
+      s(1, "探索 楊丞琳"),
+      b(2, serialize([s(1, "楊丞琳 的歌曲"), s(2, "雨愛")])),
+      b(3, serialize([s(1, "宇多田ヒカル")])),
+    ]);
+    const out = run(file, body, url, { meta_script: "hans" });
+    assert.ok(out.body, "watch-feed protobuf must be patched");
+    const decoded = new TextDecoder().decode(out.body);
+    assert.ok(decoded.includes("探索 杨丞琳"));
+    assert.ok(decoded.includes("杨丞琳 的歌曲"));
+    assert.ok(decoded.includes("雨爱"));
+    assert.ok(decoded.includes("宇多田ヒカル"), "kana names must stay unchanged");
+    assert.equal(out.body.length, body.length, "name folding must keep byte length");
+  });
+}
+
 check("Spotify manifests intercept api-partner Pathfinder for name conversion", () => {
   for (const file of [
     "loon/spotify/spotify-enhance.plugin",
@@ -1359,6 +1379,7 @@ check("Spotify manifests intercept api-partner Pathfinder for name conversion", 
     const text = read(file);
     assert.ok(text.includes("api-partner.spotify.com"), file + " must MITM api-partner");
     assert.ok(text.includes("spotify.partner.js"), file + " must load the partner script");
+    assert.ok(text.includes("watch-feed-view") && text.includes("watch-feed-entrypoints"), file + " must cover watch-feed");
   }
 });
 
