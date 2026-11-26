@@ -23,6 +23,7 @@ const PARTS = [
   ["spotify", "core/options.js"],
   ["spotify", "core/protobuf.js"],
   ["spotify", "t2s.js"],
+  ["spotify", "feed/names.js"],
   ["spotify", "premium/rules.js"],
   ["spotify", "premium/attributes.js"],
   ["spotify", "premium/config.js"],

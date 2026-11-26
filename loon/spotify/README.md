@@ -24,6 +24,7 @@
 | `lyrics_source` | auto | 歌词源；`auto` 并发查询网易云 / QQ / LRCLIB / Musixmatch（官方上游，排最后兜底） |
 | `desktop` | auto | `auto` 按 User-Agent 识别 iPhone / iPad 与 Loon for Mac；识别不准时手动指定 `ios` / `macos` |
 | `lyrics_script` | hans | 官方与第三方歌词默认转简体（`hans`）；`source` 保持原文。官方响应按 `language` 判断，并把 `zh-Hant` 同步改成 `zh-Hans` |
+| `meta_script` | source | `hans` 把界面里的曲名 / 歌手 / 专辑名转成简体；`source` 保持 Spotify 原文。含日文假名的名称保持原样，且与歌词字形互不影响 |
 | `ignore_han_variants` | true | 查歌词时把繁体曲名 / 歌手按简体比较；关闭后繁简写法必须完全一致 |
 | `sync_plain_lyrics` | true | 只有纯文本歌词时按歌曲时长把每行均分出时间轴（伪同步），让它能跟着滚动；关闭则保持整屏纯文本 |
 | `lyrics_isrc` | true | 前面几轮都搜不到时，用 Deezer 公开接口反查 ISRC，再用 ISRC 直查 Musixmatch、并用 Deezer 的规范曲名重查一遍曲库 |
@@ -48,6 +49,7 @@
 - 歌名比较会忽略 `feat.` / `ft.` / `with` / `prod.`、`Remastered 2011` / `2011 Remaster`、`Radio Edit`、`Single Version`、`Album Version`、`Bonus Track`、`Deluxe Edition`、`Explicit` / `Clean` 等版本后缀；歌手按 `feat.` / `ft.` / `with` 和多歌手分隔符拆分，任意一位匹配即可。
 - 曲名 / 歌手比较默认做繁→简折叠（OpenCC t2s 表）：Spotify 的中文元数据常是繁体，网易云 / QQ 返回简体，不折叠时「說謊」对不上「说谎」、「周杰倫」对不上「周杰伦」。关闭 `ignore_han_variants` 后恢复逐字比较。
 - 歌词默认转简体（`lyrics_script=hans`）：官方歌词按 `language` 判断（`zh-Hant` / `zh-TW` / `zh-HK` 直接转，并同步改成 `zh-Hans`；`lines` 与 `previewLines` 都改，protobuf 与桌面端 JSON 都覆盖），第三方歌词只在整段判定为繁体时转换；简体 / 英文 / 日文歌词原样保留。词表随脚本下发（约 30KB），首次用到时才构建，非繁体文本零逐字开销。
+- 界面曲名 / 歌手 / 专辑名默认保持原文（`meta_script=source`）。改成 `hans` 后，Now Playing、歌词卡、首页 / 搜索 / 滚动页以及 `/metadata/4/track`、`extended-metadata` 里的这三种名称会按同一份 OpenCC 表转成简体；含日文假名的名称（如「宇多田ヒカル」）保持原样。歌词缓存仍记录 Spotify 原文，避免转简体后和繁体曲库对不上；关闭补全歌词时单独开 `hans` 也不会顺手打开 `has_lyrics`。
 - 曲名里带 `()` / `（）` 的装饰信息（影视剧名、节目名、歌手名等）会先去掉再查一次；括号里含 `Live`、`Remix`、`Acoustic`、`伴奏`、`版` 等版本词时保留，避免把现场版查成录音室版。返回结果仍按完整曲名或去掉装饰后的曲名校验。
 - `DJ版` / `DJ Remix` / `(DJ)` / `- DJ` 这类标记会先从曲名里去掉再查，并跳过歌手约束（DJ 版通常挂别人名字）；时长容差放宽到 60 秒，避免混音版比原曲长而匹配失败。
 - LRCLIB 并行候选都没命中时，会再用歌名搜一次；仍按歌手 / 版本 / Live / 时长校验，不会拿别人的同名歌。
@@ -192,7 +194,7 @@ User-Agent 识别 Loon for Mac，并默认拒绝 QUIC 以确保请求经过 MITM
   > 的那几条脚本（`spotify.config` / `spotify.meta` / bootstrap）会静默不执行——
   > 表现是「账号属性没改写，但歌词还正常」，很容易误判成代码问题。
 - 参数定义随插件保存；新增或删除参数后需要重新导入插件才会更新。脚本按 `?v=` 缓存，更新后需重启 App。
-- 新增参数同理：`[Argument]` 清单随安装保存在本地，远程新增的开关不会自动出现。需要删除插件后重新添加（可给插件 URL 加 `?v=日期` 绕过 raw 缓存），设置页才会显示「歌词字形」「忽略简繁」。重新添加后其它参数会回到默认值，按需再调。
+- 新增参数同理：`[Argument]` 清单随安装保存在本地，远程新增的开关不会自动出现。需要删除插件后重新添加（可给插件 URL 加 `?v=日期` 绕过 raw 缓存），设置页才会显示「歌词字形」「界面字形」「忽略简繁」。重新添加后其它参数会回到默认值，按需再调。
 - `force_zh_hans` 已由 `lyrics_script` 取代：官方与第三方歌词都按这个开关转字形，不改 `Accept-Language`。
 - `spotify.headers` 请求脚本固定伪装时区；旧安装需要重新导入插件才会带上它。脚本不改 `Accept-Language`。
 - 需开启 MitM：`*-spclient.spotify.com`、`spclient.wg.spotify.com`。

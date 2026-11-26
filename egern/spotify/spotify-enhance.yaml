@@ -60,6 +60,11 @@ env_schema:
     description: "hans 把官方与第三方歌词都转成简体（默认），source 保持原文；官方歌词会按 language 判断并同步改成 zh-Hans"
     default_value: "hans"
     options: ["hans", "source"]
+  meta_script:
+    name: "界面字形"
+    description: "hans 把曲名 / 歌手 / 专辑名里的繁体字转成简体；source 保持 Spotify 原文（默认）。含日文假名的名称保持原样"
+    default_value: "source"
+    options: ["source", "hans"]
   ignore_han_variants:
     name: "忽略简繁"
     description: "查歌词时把繁体曲名 / 歌手按简体比较，兼容 Spotify 的繁体元数据与简体曲库；关闭后繁简写法必须完全一致"
@@ -188,7 +193,7 @@ scriptings:
       max_size: 41943040
       timeout: 30
 
-  # 将曲目元数据里的 has_lyrics 改为 true，客户端才会请求 color-lyrics。
+  # 将曲目元数据里的 has_lyrics 改为 true，客户端才会请求 color-lyrics；开启界面字形时同时把曲名 / 歌手 / 专辑名转成简体。
   - http_response:
       name: "spotify.meta"
       match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:extended-metadata|context-resolve|connect-state|metadata\\/4\\/track)\\/"

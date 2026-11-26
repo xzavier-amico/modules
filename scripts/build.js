@@ -92,6 +92,7 @@ const TARGETS = [
     title: "Spotify Enhance — bootstrap / UCS / 元数据 / 远程配置 / 账号属性",
     parts: [
       ...SP_CORE,
+      "t2s.js",
       "premium/rules.js",
       "premium/attributes.js",
       "premium/config.js",
@@ -105,7 +106,7 @@ const TARGETS = [
     file: "spotify.feed.js",
     binary: true,
     title: "Spotify Enhance — 信息流广告过滤",
-    parts: [...SP_CORE, "feed/ads.js", "feed/lyrics-card.js", "t2s.js", "lyrics.js", "feed/lyrics.js", "feed/entry.js"],
+    parts: [...SP_CORE, "feed/ads.js", "feed/lyrics-card.js", "t2s.js", "feed/names.js", "lyrics.js", "feed/lyrics.js", "feed/entry.js"],
   },
   {
     module: "spotify",

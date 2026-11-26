@@ -11,18 +11,21 @@
       lyrics_isrc: value.lyrics_isrc,
       lyrics_script: value.lyrics_script,
       ignore_han_variants: value.ignore_han_variants,
+      meta_script: value.meta_script,
     });
     if (Array.isArray(raw)) {
       // Loon 位置参数：spoof, ads, unlock, enable_lyrics, desktop, lyrics_source,
-      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc（可选追加 lyrics_script, ignore_han_variants）。
+      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc, meta_script,
+      // lyrics_script, ignore_han_variants。
       return {
         enable_lyrics: raw[3],
         lyrics_source: raw[5],
         prefetch_lyrics: raw[6],
         sync_plain_lyrics: raw[7],
         lyrics_isrc: raw[8],
-        lyrics_script: raw[9],
-        ignore_han_variants: raw[10],
+        meta_script: raw[9],
+        lyrics_script: raw[10],
+        ignore_han_variants: raw[11],
       };
     }
     if (typeof raw === "string") {

@@ -162,6 +162,7 @@ docker run --rm -p 8787:8787 \
 | `DESKTOP` | auto | 客户端模式：auto 按 User-Agent 判断；true/false 强制桌面/移动端 |
 | `LYRICS_ENABLED` | true | 官方没有歌词时是否用第三方歌词补全；关闭后只清额度限制 |
 | `LYRICS_SOURCE` | lrclib | `lrclib` / `musixmatch` / `netease` / `qq`；`auto` 依次尝试，也可用逗号组合，如 `lrclib,netease` |
+| `META_SCRIPT` | source | `hans` 把界面里的曲名 / 歌手 / 专辑名转成简体；`source` 保持原文。含日文假名的名称保持原样，且与 `LYRICS_SCRIPT` 互不影响 |
 | `LYRICS_TIMEOUT_MS` | 5000 | 一次歌词解析（元数据 + 所有歌词源）的总超时 |
 | `LYRICS_CACHE_TTL` | 21600 | 命中歌词的缓存秒数；查不到 / 超时不缓存，下次请求会重试 |
 | `LYRICS_PARALLEL` | true | 官方 `color-lyrics` 请求与第三方查询并行发出；设 `false` 回到「先等官方、404 再查」 |

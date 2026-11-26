@@ -1118,6 +1118,127 @@ check("Spotify context metadata patches current track without losing opaque fiel
 });
 
 for (const platform of ["loon", "egern", "shadowrocket"]) {
+  check(platform + " Spotify meta_script converts context names without enabling lyrics", () => {
+    const file = platform + "/spotify/js/spotify.js";
+    const url = "https://spclient.wg.spotify.com/connect-state/v1/player";
+    const entry = (key, value) => b(3, serialize([s(1, key), s(2, value)]));
+    const context = serialize([
+      s(1, track), s(2, "uid"),
+      entry("track_title", "說謊"),
+      entry("artist_name", "周杰倫"),
+      entry("album_title", "范特西"),
+    ]);
+    const entries = (out) => parse(out.body).filter((f) => f.no === 3).map((f) => {
+      const pair = parse(f.p);
+      return [text(first(pair, 1)), text(first(pair, 2))];
+    });
+    const patched = entries(run(file, context, url, { enable_lyrics: false, meta_script: "hans" }));
+    assert.ok(patched.some(([key, value]) => key === "track_title" && value === "说谎"));
+    assert.ok(patched.some(([key, value]) => key === "artist_name" && value === "周杰伦"));
+    assert.ok(patched.some(([key, value]) => key === "album_title" && value === "范特西"));
+    assert.ok(!patched.some(([key]) => key === "has_lyrics"), "meta_script must not turn lyrics back on");
+    assert.equal(Object.keys(run(file, context, url, { enable_lyrics: false, meta_script: "source" })).length, 0);
+  });
+
+  check(platform + " Spotify meta_script converts metadata/4/track names and caches the original", () => {
+    const file = platform + "/spotify/js/spotify.js";
+    const url = "https://spclient.wg.spotify.com/metadata/4/track/0VjIjW4GlUZAMYd2vXMi3b?market=from_token";
+    const map = {};
+    const store = { read: (key) => (key in map ? map[key] : null), write: (value, key) => { map[key] = value; return true; } };
+    const entity = serialize([
+      b(1, new Uint8Array(16).fill(0xab)),
+      s(2, "說謊"),
+      b(3, serialize([s(2, "范特西"), b(3, serialize([s(2, "周杰倫")]))])),
+      b(4, serialize([s(2, "周杰倫")])),
+      v(7, 210000n),
+    ]);
+    const out = parse(run(file, entity, url, { enable_lyrics: true, meta_script: "hans" }, { $persistentStore: store }).body);
+    assert.equal(text(first(out, 2)), "说谎");
+    assert.equal(text(first(parse(first(out, 3).p), 2)), "范特西");
+    assert.equal(text(first(parse(first(out, 4).p), 2)), "周杰伦");
+    assert.equal(first(out, 18).v, 1n);
+    const cached = JSON.parse(map["spotify.track.meta.v2"])["0VjIjW4GlUZAMYd2vXMi3b"];
+    assert.deepEqual(cached.slice(0, 3), ["說謊", "周杰倫", 210000]);
+  });
+
+  check(platform + " Spotify meta_script converts extended-metadata Track / Album / Artist names", () => {
+    const file = platform + "/spotify/js/spotify.js";
+    const url = "https://spclient.wg.spotify.com/extended-metadata/v0/extended-metadata";
+    const any = (type, payload) => b(3, serialize([s(1, type), b(2, payload)]));
+    const entity = (uri, type, payload) => b(3, serialize([s(2, uri), any(type, payload)]));
+    const trackPayload = serialize([
+      s(2, "說謊"),
+      b(3, serialize([s(2, "范特西")])),
+      b(4, serialize([s(2, "周杰倫")])),
+    ]);
+    const albumPayload = serialize([s(2, "范特西"), b(3, serialize([s(2, "周杰倫")]))]);
+    const artistPayload = serialize([s(2, "周杰倫")]);
+    const body = serialize([
+      b(1, serialize([v(2, 1n), entity(track, "type.googleapis.com/spotify.metadata.Track", trackPayload)])),
+      b(1, serialize([v(2, 9n), entity("spotify:album:abc", "type.googleapis.com/spotify.metadata.Album", albumPayload)])),
+      b(1, serialize([v(2, 8n), entity("spotify:artist:abc", "type.googleapis.com/spotify.metadata.Artist", artistPayload)])),
+    ]);
+    const out = parse(run(file, body, url, { enable_lyrics: false, meta_script: "hans" }).body);
+    const payloadAt = (index) => {
+      const array = parse(out.filter((f) => f.no === 1)[index].p);
+      const ed = parse(first(array, 3).p);
+      const anyFields = parse(first(ed, 3).p);
+      return parse(first(anyFields, 2).p);
+    };
+    const trackOut = payloadAt(0);
+    assert.equal(text(first(trackOut, 2)), "说谎");
+    assert.equal(text(first(parse(first(trackOut, 3).p), 2)), "范特西");
+    assert.equal(text(first(parse(first(trackOut, 4).p), 2)), "周杰伦");
+    assert.ok(!first(trackOut, 18), "meta_script must not enable lyrics");
+    assert.equal(text(first(payloadAt(1), 2)), "范特西");
+    assert.equal(text(first(payloadAt(2), 2)), "周杰伦");
+  });
+
+  check(platform + " Spotify meta_script converts feed card names and leaves kana alone", () => {
+    const file = platform + "/spotify/js/spotify.feed.js";
+    const url = "https://spclient.wg.spotify.com/casita/v1/home?locale=zh";
+    const section = b(1, serialize([
+      b(1, serialize([s(2, "normal-card")])),
+      b(5, serialize([s(1, track)])),
+      b(4, serialize([s(1, "track_title"), s(2, "說謊")])),
+      b(4, serialize([s(1, "artist_name"), s(2, "周杰倫")])),
+      b(4, serialize([s(1, "album_title"), s(2, "范特西")])),
+      b(4, serialize([s(1, "title"), s(2, "我們的愛")])),
+      b(4, serialize([s(1, "track_title"), s(2, "宇多田ヒカル")])),
+    ]));
+    const body = serialize([b(1, serialize([section]))]);
+    const out = run(file, body, url, { block_ads: false, enable_lyrics: false, meta_script: "hans" });
+    const decoded = new TextDecoder().decode(out.body);
+    assert.ok(decoded.includes("说谎"));
+    assert.ok(decoded.includes("周杰伦"));
+    assert.ok(decoded.includes("范特西"));
+    assert.ok(decoded.includes("我们的爱"), "generic title / artist keys must convert too");
+    assert.ok(decoded.includes("宇多田ヒカル"), "kana names must stay unchanged");
+    assert.equal(Object.keys(run(file, body, url, { block_ads: false, enable_lyrics: false, meta_script: "source" })).length, 0);
+  });
+}
+
+check("Loon Spotify meta_script reads the 10th positional argument for metadata and feed", () => {
+  const entry = (key, value) => b(3, serialize([s(1, key), s(2, value)]));
+  const context = serialize([s(1, track), s(2, "uid"), entry("track_title", "說謊"), entry("artist_name", "周杰倫")]);
+  const args = [true, true, true, false, "ios", "auto", true, true, true, "hans"];
+  const out = parse(run("loon/spotify/js/spotify.js", context, "https://spclient.wg.spotify.com/connect-state/v1/player", args).body);
+  const values = out.filter((f) => f.no === 3).map((f) => text(first(parse(f.p), 2)));
+  assert.ok(values.includes("说谎"));
+  assert.ok(values.includes("周杰伦"));
+
+  const section = b(1, serialize([
+    b(1, serialize([s(2, "normal-card")])),
+    b(5, serialize([s(1, track)])),
+    b(4, serialize([s(1, "track_title"), s(2, "說謊")])),
+  ]));
+  const feedBody = serialize([b(1, serialize([section]))]);
+  const feedArgs = [true, true, true, false, "ios", "auto", true, true, true, "hans", "source", true];
+  const feedOut = run("loon/spotify/js/spotify.feed.js", feedBody, "https://spclient.wg.spotify.com/casita/v1/home", feedArgs);
+  assert.ok(new TextDecoder().decode(feedOut.body).includes("说谎"));
+});
+
+for (const platform of ["loon", "egern", "shadowrocket"]) {
   check(platform + " Spotify caches the client's own track metadata for the lyrics script", () => {
     const map = {};
     const store = { read: (key) => (key in map ? map[key] : null), write: (value, key) => { map[key] = value; return true; } };
@@ -2931,9 +3052,9 @@ check("Loon passes arguments in the declared order", () => {
     if (line.includes("spotify_lyrics.js")) {
       assert.deepEqual(names, ["lyrics_source", "enable_lyrics", "desktop", "lyrics_script", "ignore_han_variants", "sync_plain_lyrics", "lyrics_isrc"]);
     } else if (line.includes("spotify.feed.js")) {
-      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source", "prefetch_lyrics", "sync_plain_lyrics", "lyrics_isrc", "lyrics_script", "ignore_han_variants"]);
+      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source", "prefetch_lyrics", "sync_plain_lyrics", "lyrics_isrc", "meta_script", "lyrics_script", "ignore_han_variants"]);
     } else {
-      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source", "prefetch_lyrics", "sync_plain_lyrics", "lyrics_isrc"]);
+      assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source", "prefetch_lyrics", "sync_plain_lyrics", "lyrics_isrc", "meta_script"]);
     }
   }
   // 位置参数：spoof, ads, unlock, lyrics, desktop, source, prefetch, plain, isrc。
@@ -4864,7 +4985,7 @@ check("Spotify headers percent-encoded early return, feed prefetch, Shadowrocket
   };
   const failStore = { read: (k) => failMap[k] || null, write: (v, k) => { failMap[k] = v; return true; } };
   run("loon/spotify/js/spotify.feed.js", cards, sUrl,
-    [true, false, true, true, "ios", "netease", true, true, false, "hans", true],
+    [true, false, true, true, "ios", "netease", true, true, false, "source", "hans", true],
     {
       $persistentStore: failStore,
       $httpClient: { get: (req, cb) => cb(null, { status: 502 }, "bad gateway") },
@@ -4877,7 +4998,7 @@ check("Spotify headers percent-encoded early return, feed prefetch, Shadowrocket
   };
   const okStore = { read: (k) => okMap[k] || null, write: (v, k) => { okMap[k] = v; return true; } };
   run("loon/spotify/js/spotify.feed.js", cards, sUrl,
-    [true, false, true, true, "ios", "netease", true, true, false, "hans", true],
+    [true, false, true, true, "ios", "netease", true, true, false, "source", "hans", true],
     {
       $persistentStore: okStore,
       $httpClient: { get: (req, cb) => {

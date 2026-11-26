@@ -6,11 +6,12 @@
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
     if (Array.isArray(raw)) {
       // Loon 位置参数：spoof, ads, unlock, enable_lyrics, desktop, lyrics_source,
-      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc。
+      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc, meta_script。
       opt = {
         spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2],
         enable_lyrics: raw[3], desktop: raw[4], lyrics_source: raw[5],
         prefetch_lyrics: raw[6], sync_plain_lyrics: raw[7], lyrics_isrc: raw[8],
+        meta_script: raw[9],
       };
     } else if (typeof raw === "string") {
       opt = JSON.parse(raw || "{}") || {};
@@ -59,6 +60,14 @@
   // unlock_playback=auto 时移动端开启、桌面端关闭；桌面端强行写播放授权容易跳歌。
   const playOn = autoPlay(opt.unlock_playback) ? !desktop : flag(opt.unlock_playback, !desktop);
   const lyricsOn = flag(opt.enable_lyrics, true);
+  // 界面字形：默认保持 Spotify 原文；meta_script=hans 时把曲名 / 歌手 / 专辑名
+  // 里的繁体字转成简体。和 lyrics_script 分开，避免只想转歌词的人被改掉曲库名。
+  const metaHans = (() => {
+    const value = opt.meta_script;
+    if (value === undefined || value === null || value === "") return false;
+    const mode = String(value).trim().toLowerCase();
+    return mode === "hans" || mode === "simplified" || mode === "zh-hans" || mode === "true" || mode === "1";
+  })();
   // 响应体上限：超过上限直接放行，避免异常响应占满内存。
   const MAX_META_BYTES = 12 * 1024 * 1024; // extended-metadata / metadata：大块无关扩展数据会被跳过，不整树解析
   // context-resolve / connect-state 是大量小字段，整树解析时每 1MB 响应约占 7MB JS 堆；

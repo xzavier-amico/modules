@@ -231,6 +231,101 @@ test("extended-metadata Track gains has_lyrics = 18", () => {
   assert.equal(hasLyrics.v, 1n);
 });
 
+test("metaScript converts context metadata names without forcing lyrics", () => {
+  const hans = createPatcher({ metaScript: "hans", enableLyrics: false });
+  const context = concat([
+    str(1, "spotify:track:0VjIjW4GlUZAMYd2vXMi3b"),
+    bytes(2, Uint8Array.from([1])),
+    bytes(3, concat([str(1, "track_title"), str(2, "說謊")])),
+    bytes(3, concat([str(1, "artist_name"), str(2, "周杰倫")])),
+    bytes(3, concat([str(1, "album_title"), str(2, "范特西")])),
+  ]);
+  const patched = hans.patchMeta(bytes(1, context), "/connect-state/v1/player");
+  assert.ok(patched);
+  const trackFields = patcher.parse(patcher.parse(patched).find((f) => f.no === 1).p);
+  const entries = trackFields
+    .filter((f) => f.no === 3 && f.w === 2)
+    .map((f) => {
+      const pair = patcher.parse(f.p);
+      return [decoder.decode(pair.find((x) => x.no === 1).p), decoder.decode(pair.find((x) => x.no === 2).p)];
+    });
+  assert.ok(entries.some(([key, value]) => key === "track_title" && value === "说谎"));
+  assert.ok(entries.some(([key, value]) => key === "artist_name" && value === "周杰伦"));
+  assert.ok(entries.some(([key, value]) => key === "album_title" && value === "范特西"));
+  assert.ok(!entries.some(([key]) => key === "has_lyrics"));
+
+  const off = createPatcher({ metaScript: "source", enableLyrics: false });
+  assert.equal(off.patchMeta(bytes(1, context), "/connect-state/v1/player"), null);
+});
+
+test("metaScript converts metadata/4/track names", () => {
+  const hans = createPatcher({ metaScript: "hans", enableLyrics: false });
+  const track = concat([
+    bytes(1, new Uint8Array(16).fill(0xab)),
+    str(2, "說謊"),
+    bytes(3, concat([str(2, "范特西"), bytes(3, concat([str(2, "周杰倫")]))])),
+    bytes(4, concat([str(2, "周杰倫")])),
+  ]);
+  const patched = hans.patchMeta(track, "/metadata/4/track/0VjIjW4GlUZAMYd2vXMi3b");
+  assert.ok(patched);
+  const fields = patcher.parse(patched);
+  assert.equal(decoder.decode(fields.find((f) => f.no === 2).p), "说谎");
+  const album = patcher.parse(fields.find((f) => f.no === 3).p);
+  assert.equal(decoder.decode(album.find((f) => f.no === 2).p), "范特西");
+  const artist = patcher.parse(fields.find((f) => f.no === 4).p);
+  assert.equal(decoder.decode(artist.find((f) => f.no === 2).p), "周杰伦");
+  assert.equal(fields.find((f) => f.no === 18), undefined);
+});
+
+test("metaScript converts extended-metadata Track / Album / Artist names", () => {
+  const hans = createPatcher({ metaScript: "hans", enableLyrics: false });
+  const any = (type, payload) => bytes(3, concat([str(1, type), bytes(2, payload)]));
+  const entity = (uri, type, payload) => bytes(3, concat([str(2, uri), any(type, payload)]));
+  const trackPayload = concat([
+    str(2, "說謊"),
+    bytes(3, concat([str(2, "范特西")])),
+    bytes(4, concat([str(2, "周杰倫")])),
+  ]);
+  const albumPayload = concat([str(2, "范特西"), bytes(3, concat([str(2, "周杰倫")]))]);
+  const artistPayload = str(2, "周杰倫");
+  const body = concat([
+    bytes(1, concat([vi(2, 1), entity("spotify:track:0VjIjW4GlUZAMYd2vXMi3b", "type.googleapis.com/spotify.metadata.Track", trackPayload)])),
+    bytes(1, concat([vi(2, 9), entity("spotify:album:xyz", "type.googleapis.com/spotify.metadata.Album", albumPayload)])),
+    bytes(1, concat([vi(2, 8), entity("spotify:artist:xyz", "type.googleapis.com/spotify.metadata.Artist", artistPayload)])),
+  ]);
+  const patched = hans.patchMeta(body, "/extended-metadata/v0/extended-metadata");
+  assert.ok(patched);
+  const arrays = patcher.parse(patched).filter((f) => f.no === 1).map((f) => patcher.parse(f.p));
+  const payloadAt = (index) => {
+    const ed = patcher.parse(arrays[index].find((f) => f.no === 3).p);
+    const anyFields = patcher.parse(ed.find((f) => f.no === 3).p);
+    return patcher.parse(anyFields.find((f) => f.no === 2).p);
+  };
+  const track = payloadAt(0);
+  assert.equal(decoder.decode(track.find((f) => f.no === 2).p), "说谎");
+  assert.equal(decoder.decode(patcher.parse(track.find((f) => f.no === 3).p).find((f) => f.no === 2).p), "范特西");
+  assert.equal(decoder.decode(patcher.parse(track.find((f) => f.no === 4).p).find((f) => f.no === 2).p), "周杰伦");
+  assert.equal(track.find((f) => f.no === 18), undefined);
+  assert.equal(decoder.decode(payloadAt(1).find((f) => f.no === 2).p), "范特西");
+  assert.equal(decoder.decode(payloadAt(2).find((f) => f.no === 2).p), "周杰伦");
+});
+
+test("metaScript converts feed metadata map names in place", () => {
+  const hans = createPatcher({ metaScript: "hans", enableLyrics: false });
+  const section = bytes(1, concat([
+    bytes(1, concat([str(2, "normal-card")])),
+    bytes(4, concat([str(1, "track_title"), str(2, "說謊")])),
+    bytes(4, concat([str(1, "artist_name"), str(2, "周杰倫")])),
+  ]));
+  const body = bytes(1, section);
+  const out = hans.patchFeedNames(body);
+  assert.ok(out);
+  const text = decoder.decode(out);
+  assert.ok(text.includes("说谎"));
+  assert.ok(text.includes("周杰伦"));
+  assert.equal(createPatcher({ metaScript: "source", enableLyrics: false }).patchFeedNames(body), null);
+});
+
 test("context track without has_lyrics gets the metadata entry", () => {
   const contextTrack = concat([
     str(1, "spotify:track:xyz"),

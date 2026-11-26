@@ -137,6 +137,9 @@ function patchOptions(env, request) {
     // UNLOCK_PLAYBACK=true still forces it on for every client.
     unlockPlayback: flag(env.UNLOCK_PLAYBACK, !desktop),
     desktop,
+    // source（默认）保持 Spotify 原文；hans 把界面里的曲名 / 歌手 / 专辑名
+    // 转成简体。和 LYRICS_* 分开，避免只想转歌词时改掉曲库名。
+    metaScript: env.META_SCRIPT,
   };
 }
 
@@ -276,17 +279,20 @@ function patchResponse(patcher, route, targetPath, bytes, contentType, scrollCar
       return patcher.patchMeta(bytes, targetPath);
     }
     if (route.kind === "home") {
-      return patcher.stripHomeAds(bytes);
+      const patched = patcher.stripHomeAds(bytes);
+      return patcher.patchFeedNames(patched || bytes) || patched;
     }
     if (route.kind === "browse") {
-      return patcher.hideBrowseAds(bytes);
+      const patched = patcher.hideBrowseAds(bytes);
+      return patcher.patchFeedNames(patched || bytes) || patched;
     }
     if (route.kind === "scroll") {
-      return patcher.hideScrollAds(
+      const patched = patcher.hideScrollAds(
         bytes,
         scrollCard ? scrollCard.trackId : "",
         scrollCard ? scrollCard.wantCard : false,
       );
+      return patcher.patchFeedNames(patched || bytes) || patched;
     }
     if (route.kind === "configuration") {
       return patcher.patchConfigurationResponse(bytes);

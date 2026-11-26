@@ -1,7 +1,9 @@
   // ------------------------------------------------------------------ 歌词
 
   // Track 的 has_lyrics = 18（metadata.proto）。缺省时补一条。
+  // 只开界面字形、关掉补全歌词时不要顺手打开 has_lyrics，否则客户端仍会去请求歌词。
   function patchTrack(fields) {
+    if (!lyricsOn) return false;
     const f = first(fields, 18);
     if (f) {
       if (f.w !== 0 || f.v === 1n) return false;
@@ -10,6 +12,74 @@
     }
     fields.push({ no: 18, w: 0, v: 1n });
     return true;
+  }
+
+  // 界面字形：只换曲名 / 歌手 / 专辑名里的繁体字，含日文假名的名称保持原样。
+  // 与歌词不同，这里不能只看 isTraditional() 的常用字提示：像「周杰倫」
+  // 这类名字不在提示表里，但 fold() 能正确转成「周杰伦」。因此统一按
+  // fold() 是否有变化来判断，再用假名保护日文名称。
+  const NAME_KANA = /[\u3040-\u30ff]/;
+  const NAME_META_KEYS = [
+    "track_title", "track_name", "title",
+    "artist_name", "artist",
+    "album_title", "album_name",
+  ];
+
+  function hansName(value) {
+    if (!metaHans || typeof SPOTIFY_HAN_VARIANTS === "undefined") return value;
+    const text = String(value || "");
+    if (!text || NAME_KANA.test(text)) return text;
+    return SPOTIFY_HAN_VARIANTS.fold(text);
+  }
+
+  // 名字字段在 Track / Album / Artist 里都是 field 2；只改这一条，保留其余字段。
+  function patchNameField(fields, no) {
+    const f = first(fields, no);
+    if (!f || f.w !== 2) return false;
+    const value = text(f);
+    if (value === null) return false;
+    const next = hansName(value);
+    if (next === value) return false;
+    f.p = TE.encode(next);
+    return true;
+  }
+
+  // Album { name = 2, artist = 3 { name = 2 } }
+  function patchAlbumNames(album) {
+    let changed = patchNameField(album, 2);
+    for (const f of album) {
+      if (f.no !== 3 || f.w !== 2) continue;
+      const artist = parse(f.p);
+      if (!artist || !allCanonical(artist)) continue;
+      if (patchNameField(artist, 2)) {
+        f.p = serialize(artist);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  // Track { name = 2, album = 3 { name = 2 }, artist = 4 { name = 2 } }
+  function patchTrackNames(track) {
+    let changed = patchNameField(track, 2);
+    const albumField = first(track, 3);
+    if (albumField && albumField.w === 2) {
+      const album = parse(albumField.p);
+      if (album && allCanonical(album) && patchAlbumNames(album)) {
+        albumField.p = serialize(album);
+        changed = true;
+      }
+    }
+    for (const f of track) {
+      if (f.no !== 4 || f.w !== 2) continue;
+      const artist = parse(f.p);
+      if (!artist || !allCanonical(artist)) continue;
+      if (patchNameField(artist, 2)) {
+        f.p = serialize(artist);
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   // map entry 就是一条 { 1: key, 2: value } 的小消息。
@@ -66,8 +136,57 @@
       if (!track) continue;
       // 仅在可逐字节重建时改写，避免客户端解析出不同的值。
       if (!allCanonical(track)) continue;
-      if (!patchTrack(track)) continue;
+      let changedPayload = patchTrack(track);
+      if (metaHans && patchTrackNames(track)) changedPayload = true;
+      if (!changedPayload) continue;
       value.p = serialize(track);
+      anyField.p = serialize(any);
+      f.p = serialize(ed);
+      changed = true;
+    }
+    return changed;
+  }
+
+  // extended-metadata 里 Album / Artist 的 EntityExtensionData 也带
+  // spotify:album: / spotify:artist: 实体 URI；按 Any 的 type_url 只改名字字段。
+  function isNameArray(fields) {
+    for (const f of fields) {
+      if (f.no !== 3 || f.w !== 2) continue;
+      const ed = parse(f.p);
+      if (!ed) continue;
+      const uri = text(first(ed, 2));
+      if (uri && (uri.indexOf("spotify:album:") === 0 || uri.indexOf("spotify:artist:") === 0)) return true;
+    }
+    return false;
+  }
+
+  function patchNameArray(fields) {
+    let changed = false;
+    for (const f of fields) {
+      if (f.no !== 3 || f.w !== 2) continue;
+      const ed = parse(f.p);
+      if (!ed || !allCanonical(ed)) continue;
+      const uri = text(first(ed, 2));
+      if (!uri || (uri.indexOf("spotify:album:") !== 0 && uri.indexOf("spotify:artist:") !== 0)) continue;
+
+      const anyField = first(ed, 3);
+      if (!anyField || anyField.w !== 2) continue;
+      const any = parse(anyField.p);
+      if (!any || !allCanonical(any)) continue;
+      const value = first(any, 2);
+      if (!value || value.w !== 2) continue;
+
+      const typeUrl = text(first(any, 1));
+      if (!typeUrl) continue;
+      const entity = parse(value.p);
+      if (!entity || !allCanonical(entity)) continue;
+
+      let changedEntity = false;
+      if (/\.Album$/.test(typeUrl)) changedEntity = patchAlbumNames(entity);
+      else if (/\.Artist$/.test(typeUrl)) changedEntity = patchNameField(entity, 2);
+      if (!changedEntity) continue;
+
+      value.p = serialize(entity);
       anyField.p = serialize(any);
       f.p = serialize(ed);
       changed = true;
@@ -85,12 +204,14 @@
   // 大响应里只对可能包含曲目 URI 的子消息做解析；图片 / Credits / Canvas 等
   // 扩展数据没有这个标记，直接跳过，避免 12MB 级响应整树 parse。
   const TRACK_URI_MARKER = TE.encode("spotify:track:");
-  function containsTrackUri(bytes) {
-    const last = bytes.length - TRACK_URI_MARKER.length;
-    for (let start = bytes.indexOf(TRACK_URI_MARKER[0]); start >= 0 && start <= last; start = bytes.indexOf(TRACK_URI_MARKER[0], start + 1)) {
+  const ALBUM_URI_MARKER = TE.encode("spotify:album:");
+  const ARTIST_URI_MARKER = TE.encode("spotify:artist:");
+  function containsMarker(bytes, marker) {
+    const last = bytes.length - marker.length;
+    for (let start = bytes.indexOf(marker[0]); start >= 0 && start <= last; start = bytes.indexOf(marker[0], start + 1)) {
       let hit = true;
-      for (let i = 1; i < TRACK_URI_MARKER.length; i += 1) {
-        if (bytes[start + i] !== TRACK_URI_MARKER[i]) {
+      for (let i = 1; i < marker.length; i += 1) {
+        if (bytes[start + i] !== marker[i]) {
           hit = false;
           break;
         }
@@ -99,6 +220,8 @@
     }
     return false;
   }
+  const containsTrackUri = (bytes) => containsMarker(bytes, TRACK_URI_MARKER);
+  const containsNameUri = (bytes) => containsMarker(bytes, ALBUM_URI_MARKER) || containsMarker(bytes, ARTIST_URI_MARKER);
 
   // 合并 has_lyrics 改写、曲目元数据收集与播放队列扫描到单趟遍历：
   // 此前 connect-state / context-resolve 要整树递归 3-4 遍，每条 metadata entry
@@ -181,15 +304,31 @@
         const meta = collectHere ? Object.create(null) : null;
         let present = false;
         for (const item of entries) {
+          // 先抄原始值进缓存，再改显示值：歌词匹配仍按 Spotify 原文查，
+          // 不会因为界面转简体而和繁体曲库对不上。
           if (collectHere && !(item.entry.key in meta) && item.entry.value && item.entry.value.length <= 128) {
             meta[item.entry.key] = item.entry.value;
           }
-          if (canEdit && item.entry.key === MARK) {
-            present = true;
-            if (item.entry.value !== "true") {
-              // 保留 map entry 上的未知字段。
-              const value = first(item.sub, 2);
-              value.p = TE.encode("true");
+          if (canEdit) {
+            let entryChanged = false;
+            if (metaHans && NAME_META_KEYS.indexOf(item.entry.key) >= 0) {
+              const next = hansName(item.entry.value);
+              if (next !== item.entry.value) {
+                const value = first(item.sub, 2);
+                value.p = TE.encode(next);
+                entryChanged = true;
+              }
+            }
+            if (item.entry.key === MARK) {
+              present = true;
+              if (lyricsOn && item.entry.value !== "true") {
+                // 保留 map entry 上的未知字段。
+                const value = first(item.sub, 2);
+                value.p = TE.encode("true");
+                entryChanged = true;
+              }
+            }
+            if (entryChanged) {
               item.f.p = serialize(item.sub);
               changed = true;
             }
@@ -199,7 +338,7 @@
           const title = pickMeta(meta, TITLE_KEYS);
           if (title) ctx.found[uri.slice(14)] = [title, pickMeta(meta, ARTIST_KEYS), Number(meta.duration) || 0];
         }
-        if (canEdit && !present) {
+        if (canEdit && !present && lyricsOn) {
           fields.push({ no: metadataField, w: 2, p: encodeEntry(MARK, "true") });
           changed = true;
         }
@@ -222,7 +361,8 @@
 
       // 非曲目扩展数据（图片 / Credits / Canvas / 设备信息等）不含 spotify:track:，
       // 长度 > 256 也不可能是曲目 metadata entry（key<=64, value<=128），直接跳过。
-      if (f.p.length > 256 && !containsTrackUri(f.p)) continue;
+      // 开启界面字形时还要放行 album / artist 扩展数组。
+      if (f.p.length > 256 && !containsTrackUri(f.p) && !(metaHans && containsNameUri(f.p))) continue;
 
       const sub = parse(f.p);
       if (!sub) continue;
@@ -237,6 +377,14 @@
 
       if (canEdit && isTrackArray(sub)) {
         if (allCanonical(sub) && patchTrackArray(sub)) {
+          f.p = serialize(sub);
+          changed = true;
+        }
+        continue;
+      }
+
+      if (canEdit && metaHans && isNameArray(sub)) {
+        if (allCanonical(sub) && patchNameArray(sub)) {
           f.p = serialize(sub);
           changed = true;
         }
@@ -261,7 +409,7 @@
     }
 
     // 服务端 bundle 会额外注入 isContextTrack，处理只带 uri + uid 的当前曲目。
-    if (canEdit && !metadataField && typeof isContextTrack === "function" && isContextTrack(fields)) {
+    if (canEdit && lyricsOn && !metadataField && typeof isContextTrack === "function" && isContextTrack(fields)) {
       let has = false;
       for (const f of fields) {
         if (f.no !== 3 || f.w !== 2) continue;
@@ -520,6 +668,38 @@
   // 桌面端（CEF）拉 track 元数据时要的是 JSON：accept: application/json，
   // 响应是 { gid, name, has_lyrics, ... }。只按 protobuf 改的话 has_lyrics 永远是
   // 服务端给的原值（false），客户端就认为这首歌没有歌词、连 color-lyrics 都不请求。
+  function patchJsonName(holder, key) {
+    if (!holder || "object" !== typeof holder) return false;
+    const value = holder[key];
+    if (typeof value !== "string" || !value) return false;
+    const next = hansName(value);
+    if (next === value) return false;
+    holder[key] = next;
+    return true;
+  }
+
+  function patchJsonArtists(list) {
+    let changed = false;
+    if (!Array.isArray(list)) return false;
+    for (const artist of list) {
+      if (patchJsonName(artist, "name")) changed = true;
+    }
+    return changed;
+  }
+
+  function patchMetaJsonNames(data) {
+    let changed = patchJsonName(data, "name");
+    if (patchJsonArtists(data.artist)) changed = true;
+    if (patchJsonArtists(data.artists)) changed = true;
+    const album = data.album;
+    if (album && "object" === typeof album) {
+      if (patchJsonName(album, "name")) changed = true;
+      if (patchJsonArtists(album.artist)) changed = true;
+      if (patchJsonArtists(album.artists)) changed = true;
+    }
+    return changed;
+  }
+
   function patchMetaJson(text, target) {
     let data = null;
     try {
@@ -529,22 +709,20 @@
     }
     if (!data || "object" !== typeof data || Array.isArray(data)) return null;
     if (typeof data.gid !== "string" && typeof data.uri !== "string") return null;
-    let changed = false;
-    if (data.has_lyrics !== true) {
-      data.has_lyrics = true;
-      changed = true;
-    }
-    // 顺手把曲名 / 歌手 / 时长写进缓存，歌词脚本查源时零请求。
+    let changed = lyricsOn && data.has_lyrics !== true;
+    if (changed) data.has_lyrics = true;
+    // 先按原文把曲名 / 歌手 / 时长写进缓存，歌词脚本查源时零请求。
+    // 界面字形只改下面要返回的 JSON，不改缓存里的匹配用原文。
     const store = cacheStore();
     const id = trackIdFromUrl(target) || gidHexToBase62(data.gid);
-    if (store && id && typeof data.name === "string" && data.name) {
-      const artist = Array.isArray(data.artist)
-        ? data.artist.map((item) => item && item.name).filter(Boolean).join(", ")
-        : "";
+    if (lyricsOn && store && id && typeof data.name === "string" && data.name) {
+      const artists = Array.isArray(data.artist) ? data.artist : Array.isArray(data.artists) ? data.artists : [];
+      const artist = artists.map((item) => item && item.name).filter(Boolean).join(", ");
       const found = Object.create(null);
       found[id] = [data.name, artist, Number(data.duration) || 0];
       rememberTracks(found);
     }
+    if (metaHans && patchMetaJsonNames(data)) changed = true;
     return changed ? JSON.stringify(data) : null;
   }
 
@@ -558,15 +736,17 @@
     if (!fields) return null;
     const canonical = allCanonical(fields);
     if (/\/metadata\/4\/track\//.test(target)) {
-      if (cacheStore()) {
+      if (lyricsOn && cacheStore()) {
         const found = Object.create(null);
         collectTrackEntity(fields, trackIdFromUrl(target), found);
         rememberTracks(found);
       }
       if (!canonical) return null;
-      return patchTrack(fields) ? serialize(fields) : null;
+      let changed = patchTrack(fields);
+      if (metaHans && patchTrackNames(fields)) changed = true;
+      return changed ? serialize(fields) : null;
     }
-    const wantMeta = !!cacheStore() && target.indexOf("/extended-metadata/") < 0;
+    const wantMeta = lyricsOn && !!cacheStore() && target.indexOf("/extended-metadata/") < 0;
     if (!canonical && !wantMeta) return null;
     const wantQueue = wantMeta && target.indexOf("/connect-state/") >= 0;
     const ctx = {

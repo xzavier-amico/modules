@@ -24,7 +24,8 @@
   const isScroll = SCROLL_URL.test(url);
   const wantAds = adsOn;
   const wantCard = isScroll && lyricsOn;
-  if (!(isHome || isBrowse || isScroll) || !(wantAds || wantCard)) {
+  const wantNames = metaHans && typeof patchFeedNames === "function";
+  if (!(isHome || isBrowse || isScroll) || !(wantAds || wantCard || wantNames)) {
     $done({});
     return;
   }
@@ -112,6 +113,13 @@
     }
   };
 
+  // 界面字形：在广告过滤 / 补卡之后再做一次纯字节的 metadata map 改写。
+  const withNames = (out) => {
+    if (!wantNames) return out;
+    const named = safePatch(() => patchFeedNames(out || body));
+    return named || out;
+  };
+
   // 队列里的下一首：spotify.js 处理 connect-state 时写入 spotify.queue
   // （PlayerState: track = 7、next_tracks = 20）。只有队列里的当前曲目与本次
   // 滚动页一致时才认，避免用上一首歌的队列去预取。
@@ -152,7 +160,7 @@
   if (isScroll && wantCard) {
     const card = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsCard : null;
     const allowCard = () => !!trackId && (typeof card === "function" ? card(trackId) : true);
-    finish(safePatch(() => patchScroll(body, trackId, wantAds, allowCard)));
+    finish(withNames(safePatch(() => patchScroll(body, trackId, wantAds, allowCard))));
     return;
   }
 
@@ -167,4 +175,4 @@
     out = safePatch(() => patchScroll(body, trackId, wantAds, wantCard));
   }
 
-  finish(out);
+  finish(withNames(out));

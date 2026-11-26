@@ -276,11 +276,12 @@
     const raw = typeof $argument !== "undefined" ? $argument : undefined;
     if (Array.isArray(raw)) {
       // Loon 位置参数：spoof, ads, unlock, enable_lyrics, desktop, lyrics_source,
-      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc。
+      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc, meta_script。
       opt = {
         spoof_premium: raw[0], block_ads: raw[1], unlock_playback: raw[2],
         enable_lyrics: raw[3], desktop: raw[4], lyrics_source: raw[5],
         prefetch_lyrics: raw[6], sync_plain_lyrics: raw[7], lyrics_isrc: raw[8],
+        meta_script: raw[9],
       };
     } else if (typeof raw === "string") {
       opt = JSON.parse(raw || "{}") || {};
@@ -329,6 +330,14 @@
   // unlock_playback=auto 时移动端开启、桌面端关闭；桌面端强行写播放授权容易跳歌。
   const playOn = autoPlay(opt.unlock_playback) ? !desktop : flag(opt.unlock_playback, !desktop);
   const lyricsOn = flag(opt.enable_lyrics, true);
+  // 界面字形：默认保持 Spotify 原文；meta_script=hans 时把曲名 / 歌手 / 专辑名
+  // 里的繁体字转成简体。和 lyrics_script 分开，避免只想转歌词的人被改掉曲库名。
+  const metaHans = (() => {
+    const value = opt.meta_script;
+    if (value === undefined || value === null || value === "") return false;
+    const mode = String(value).trim().toLowerCase();
+    return mode === "hans" || mode === "simplified" || mode === "zh-hans" || mode === "true" || mode === "1";
+  })();
   // 响应体上限：超过上限直接放行，避免异常响应占满内存。
   const MAX_META_BYTES = 12 * 1024 * 1024; // extended-metadata / metadata：大块无关扩展数据会被跳过，不整树解析
   // context-resolve / connect-state 是大量小字段，整树解析时每 1MB 响应约占 7MB JS 堆；
@@ -780,18 +789,21 @@
       lyrics_isrc: value.lyrics_isrc,
       lyrics_script: value.lyrics_script,
       ignore_han_variants: value.ignore_han_variants,
+      meta_script: value.meta_script,
     });
     if (Array.isArray(raw)) {
       // Loon 位置参数：spoof, ads, unlock, enable_lyrics, desktop, lyrics_source,
-      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc（可选追加 lyrics_script, ignore_han_variants）。
+      // prefetch_lyrics, sync_plain_lyrics, lyrics_isrc, meta_script,
+      // lyrics_script, ignore_han_variants。
       return {
         enable_lyrics: raw[3],
         lyrics_source: raw[5],
         prefetch_lyrics: raw[6],
         sync_plain_lyrics: raw[7],
         lyrics_isrc: raw[8],
-        lyrics_script: raw[9],
-        ignore_han_variants: raw[10],
+        meta_script: raw[9],
+        lyrics_script: raw[10],
+        ignore_han_variants: raw[11],
       };
     }
     if (typeof raw === "string") {
@@ -1408,6 +1420,87 @@ const SPOTIFY_HAN_VARIANTS = (() => {
 
   return { fold: fold, toHans: toHans, isTraditional: isTraditional };
 })();
+
+  // ---------------------------------------------------------- 界面字形
+  //
+  // feed 卡片里的曲名 / 歌手 / 专辑名放在 metadata map（{1:key, 2:value}）里。
+  // 这里直接在原始字节上找这些 key，校验前面的 field-1 tag / 长度和后面的
+  // field-2 结构；命中的值等长替换（繁→简只换字，UTF-8 长度不变），不重编码
+  // 整包，12MB 响应也只多几次 indexOf。长度万一变化就放行，避免改坏响应。
+
+  // 与 lyrics.js 的 META_TITLE_KEYS / META_ARTIST_KEYS 保持一致：不同页面的
+  // metadata map 可能用 track_title / title，也可能只写 artist_name / artist。
+  const FEED_NAME_KEYS = [
+    "track_title", "track_name", "title",
+    "artist_name", "artist",
+    "album_title", "album_name",
+  ];
+  const FEED_NAME_KEY_BYTES = FEED_NAME_KEYS.map((key) => TE.encode(key));
+  const FEED_NAME_KANA = /[\u3040-\u30ff]/;
+
+  function feedIndexOf(haystack, needle, from) {
+    const last = haystack.length - needle.length;
+    const first = needle[0];
+    for (let at = haystack.indexOf(first, from); at >= 0 && at <= last; at = haystack.indexOf(first, at + 1)) {
+      let i = 1;
+      while (i < needle.length && haystack[at + i] === needle[i]) i += 1;
+      if (i === needle.length) return at;
+    }
+    return -1;
+  }
+
+  function feedReadLength(bytes, at) {
+    let value = 0;
+    let shift = 0;
+    for (let i = at; i < bytes.length && shift < 28; i += 1) {
+      const byte = bytes[i];
+      value |= (byte & 0x7f) << shift;
+      if (!(byte & 0x80)) return { value: value >>> 0, next: i + 1 };
+      shift += 7;
+    }
+    return null;
+  }
+
+  function patchFeedNames(buffer) {
+    if (!metaHans || typeof SPOTIFY_HAN_VARIANTS === "undefined") return null;
+    if (!buffer || !buffer.length) return null;
+
+    let out = null;
+    for (const keyBytes of FEED_NAME_KEY_BYTES) {
+      const keyLength = keyBytes.length;
+      for (let at = feedIndexOf(buffer, keyBytes, 0); at >= 0; at = feedIndexOf(buffer, keyBytes, at + 1)) {
+        // metadata entry 以 field 1（tag 0x0a）+ 长度开头；key 都短于 128，
+        // 长度 varint 只有一个字节。
+        if (at < 2 || buffer[at - 2] !== 0x0a || buffer[at - 1] !== keyLength) continue;
+
+        const tagAt = at + keyLength;
+        if (tagAt >= buffer.length || buffer[tagAt] !== 0x12) continue;
+        const length = feedReadLength(buffer, tagAt + 1);
+        if (!length || !length.value || length.value > 512) continue;
+
+        const start = length.next;
+        const end = start + length.value;
+        if (end > buffer.length) continue;
+
+        let value;
+        try {
+          value = TD.decode(buffer.subarray(start, end));
+        } catch (e) {
+          continue;
+        }
+        if (!value || FEED_NAME_KANA.test(value)) continue;
+
+        const folded = SPOTIFY_HAN_VARIANTS.fold(value);
+        if (folded === value) continue;
+        const encoded = TE.encode(folded);
+        if (encoded.length !== length.value) continue;
+
+        if (!out) out = buffer.slice();
+        out.set(encoded, start);
+      }
+    }
+    return out;
+  }
 
 // Spotify Lyrics — 官方歌词转简体；官方没有歌词时，用第三方歌词补上。
 //
@@ -4380,7 +4473,8 @@ const SPOTIFY_HAN_VARIANTS = (() => {
   const isScroll = SCROLL_URL.test(url);
   const wantAds = adsOn;
   const wantCard = isScroll && lyricsOn;
-  if (!(isHome || isBrowse || isScroll) || !(wantAds || wantCard)) {
+  const wantNames = metaHans && typeof patchFeedNames === "function";
+  if (!(isHome || isBrowse || isScroll) || !(wantAds || wantCard || wantNames)) {
     $done({});
     return;
   }
@@ -4468,6 +4562,13 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     }
   };
 
+  // 界面字形：在广告过滤 / 补卡之后再做一次纯字节的 metadata map 改写。
+  const withNames = (out) => {
+    if (!wantNames) return out;
+    const named = safePatch(() => patchFeedNames(out || body));
+    return named || out;
+  };
+
   // 队列里的下一首：spotify.js 处理 connect-state 时写入 spotify.queue
   // （PlayerState: track = 7、next_tracks = 20）。只有队列里的当前曲目与本次
   // 滚动页一致时才认，避免用上一首歌的队列去预取。
@@ -4508,7 +4609,7 @@ const SPOTIFY_HAN_VARIANTS = (() => {
   if (isScroll && wantCard) {
     const card = typeof globalThis !== "undefined" ? globalThis.__spotifyLyricsCard : null;
     const allowCard = () => !!trackId && (typeof card === "function" ? card(trackId) : true);
-    finish(safePatch(() => patchScroll(body, trackId, wantAds, allowCard)));
+    finish(withNames(safePatch(() => patchScroll(body, trackId, wantAds, allowCard))));
     return;
   }
 
@@ -4523,6 +4624,6 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     out = safePatch(() => patchScroll(body, trackId, wantAds, wantCard));
   }
 
-  finish(out);
+  finish(withNames(out));
 
 })();

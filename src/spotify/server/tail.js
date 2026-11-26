@@ -8,6 +8,7 @@
     stripHomeAds,
     hideBrowseAds,
     hideScrollAds,
+    patchFeedNames,
     hasLyricsCard,
     patchConfigurationResponse,
     patchAttributesResponse,
@@ -27,5 +28,6 @@ export function createPatcher(options = {}) {
     unlock_playback: options.unlockPlayback,
     enable_lyrics: options.enableLyrics,
     desktop: options.desktop,
+    meta_script: options.metaScript,
   });
 }
