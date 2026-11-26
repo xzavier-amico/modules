@@ -170,21 +170,21 @@ scriptings:
   - http_request:
       name: "spotify.headers"
       match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/.*[?&]timezone="
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.headers.js?v=20261126-9"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.headers.js?v=20261126-10"
       timeout: 5
 
   # pathfinder 响应可能是 zstd，改成 identity 保证名称脚本能读到明文 JSON。
   - http_request:
       name: "spotify.partner.headers"
       match: "^https:\\/\\/api-partner\\.spotify\\.com\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.headers.js?v=20261126-9"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.headers.js?v=20261126-10"
       timeout: 5
 
   # 删除 extended-metadata 请求体里的 etag，避免服务端回空数组。
   - http_request:
       name: "spotify.meta.req"
       match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/extended-metadata\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261126-9"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261126-10"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -194,7 +194,7 @@ scriptings:
   - http_response:
       name: "spotify.enhance"
       match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:bootstrap|user-customization-service)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261126-9"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261126-10"
       body_required: true
       binary_body: true
       max_size: 41943040
@@ -204,7 +204,7 @@ scriptings:
   - http_response:
       name: "spotify.meta"
       match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:extended-metadata|context-resolve|connect-state|metadata\\/4\\/track)\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261126-9"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261126-10"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -214,7 +214,7 @@ scriptings:
   - http_response:
       name: "spotify.config"
       match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:remote-config-resolver|nebula)\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261126-9"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.js?v=20261126-10"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -226,7 +226,7 @@ scriptings:
   - http_response:
       name: "spotify.feed"
       match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:casita\\/v\\d+\\/home|browsita\\/v\\d+\\/browse|scrollsita\\/v\\d+\\/scroll)"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.feed.js?v=20261126-9"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.feed.js?v=20261126-10"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -236,7 +236,7 @@ scriptings:
   - http_response:
       name: "spotify.partner"
       match: "^https:\\/\\/api-partner\\.spotify\\.com\\/pathfinder\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.partner.js?v=20261126-9"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.partner.js?v=20261126-10"
       body_required: true
       max_size: 8388608
       timeout: 10
@@ -246,7 +246,7 @@ scriptings:
   - http_response:
       name: "spotify.names"
       match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:playlist\\/v\\d+|collection\\/v\\d+|searchview|search\\/v\\d+|album\\/v\\d+|artist\\/v\\d+|track-entity-view|metadata\\/4\\/(?:album|artist|show|episode)|creatorabout\\/v\\d+|vanilla\\/v\\d+|user-profile-view|genre-view|browse\\/v\\d+|watch-feed-view\\/v\\d+|watch-feed-entrypoints\\/v\\d+|casita\\/v\\d+\\/feeds)\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.partner.js?v=20261126-9"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.partner.js?v=20261126-10"
       body_required: true
       binary_body: true
       max_size: 12582912
@@ -256,7 +256,7 @@ scriptings:
   - http_request:
       name: "spotify.lyrics.req"
       match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261126-9"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261126-10"
       binary_body: true
       max_size: 2097152
       timeout: 10
@@ -269,7 +269,7 @@ scriptings:
   - http_response:
       name: "spotify.lyrics"
       match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/color-lyrics\\/v\\d\\/track\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261126-9"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify_lyrics.js?v=20261126-10"
       body_required: true
       binary_body: true
       max_size: 2097152

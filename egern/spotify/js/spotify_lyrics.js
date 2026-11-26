@@ -1134,10 +1134,12 @@ const SPOTIFY_HAN_VARIANTS = (() => {
       endTimeMs: "0",
     }));
     // 预取由 feed 脚本完成，它没有携带 t2s 词表；旧版本写下的缓存也可能没转。
-    // 命中时再判一次，繁体就折叠，已经简体的缓存不受影响。
+    // 命中时逐行补一次折叠：简体是 no-op，含假名的日文行跳过。不再用整首
+    // isTraditional 判定，避免旧缓存因为样本问题一直显示繁体。
     if (!HELPER && hansLyrics && typeof SPOTIFY_HAN_VARIANTS !== "undefined") {
-      if (SPOTIFY_HAN_VARIANTS.isTraditional(jsonSample(rebuilt).text)) {
-        for (let i = 0; i < rebuilt.length; i += 1) rebuilt[i].words = SPOTIFY_HAN_VARIANTS.fold(rebuilt[i].words);
+      for (let i = 0; i < rebuilt.length; i += 1) {
+        if (KANA_MARK.test(rebuilt[i].words)) continue;
+        rebuilt[i].words = SPOTIFY_HAN_VARIANTS.fold(rebuilt[i].words);
       }
     }
     const syncType = entry.s === "UNSYNCED" ? "UNSYNCED" : "LINE_SYNCED";
@@ -2888,12 +2890,15 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     return "zh";
   }
 
-  // 语言标记明确是繁体时直接转；zh / 缺失 / 误标成 zh-Hans 时再看正文，
-  // 只有确实出现繁体特征字才转，简体文本不会被逐字改写。
+  // 语言标记只用来排除「明确是外语」的响应；zh / zh-Hans / az-Hant / 缺失时
+  // 一律逐行尝试折叠。fold() 对简体是 no-op，含假名的行会单独跳过。
+  // 之前用 isTraditional(sample) 做整首开关，样本里只要混进一个假名或
+  // TRAD_HINT 没覆盖到的繁体字，整首歌词就不会转 —— 这是偶发漏转的主因。
   function shouldFoldHan(kind, sample) {
-    if (kind === "hant") return true;
     if (kind === "other") return false;
-    return CJK_MARK.test(sample) && SPOTIFY_HAN_VARIANTS.isTraditional(sample);
+    // 语言缺失时，含假名的样本更像日文，保持原样；纯中文仍逐行折叠。
+    if (kind === "unknown" && KANA_MARK.test(String(sample || ""))) return false;
+    return true;
   }
 
   function protoLineText(field) {
@@ -2952,8 +2957,9 @@ const SPOTIFY_HAN_VARIANTS = (() => {
       const part = line[i];
       if (part.wire === 2) {
         const text = toText(part.bytes);
-        // 跳过含二进制控制字节的嵌套子消息（如 syllables），避免把 tag/长度当文本改坏。
-        if (CJK_MARK.test(text) && !/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) {
+        // 跳过含二进制控制字节的嵌套子消息（如 syllables），避免把 tag/长度当文本改坏；
+        // 含假名的行视为日文，保持原样。
+        if (CJK_MARK.test(text) && !KANA_MARK.test(text) && !/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) {
           const folded = SPOTIFY_HAN_VARIANTS.fold(text);
           if (folded !== text) {
             // toText 是非 fatal 解码；非法 UTF-8 重编码后会变样，这种行不碰。
@@ -3050,6 +3056,8 @@ const SPOTIFY_HAN_VARIANTS = (() => {
   // 否则整行是简体、逐字高亮又跳回繁体。
   function foldJsonLine(line) {
     if (!line || "object" != typeof line) return false;
+    // 含假名的行按日文处理，整行保持原样（包括逐字 syllables）。
+    if (typeof line.words === "string" && KANA_MARK.test(line.words)) return false;
     let changed = false;
     if (typeof line.words === "string") {
       const folded = SPOTIFY_HAN_VARIANTS.fold(line.words);
@@ -3061,7 +3069,7 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     if (Array.isArray(line.syllables)) {
       for (let i = 0; i < line.syllables.length; i += 1) {
         const syllable = line.syllables[i];
-        if (!syllable || typeof syllable.words !== "string") continue;
+        if (!syllable || typeof syllable.words !== "string" || KANA_MARK.test(syllable.words)) continue;
         const folded = SPOTIFY_HAN_VARIANTS.fold(syllable.words);
         if (folded !== syllable.words) {
           syllable.words = folded;
@@ -3306,11 +3314,13 @@ const SPOTIFY_HAN_VARIANTS = (() => {
   function makePayload(syncType, rawLines, record) {
     const lines = normalizeLines(rawLines);
     if (!lines.length) return null;
-    // 补全歌词默认转简体：复用 jsonSample 跳过长英文前奏，只对繁体逐行折叠。
-    // 网易云 / QQ 的简体歌词、英文与日文歌词都不会走到逐字转换。
+    // 补全歌词默认转简体：逐行折叠，简体 / 英文行是 no-op，含假名的日文行跳过。
+    // 不做整首 isTraditional 判定，避免样本里混进假名或提示表没覆盖的繁体字时
+    // 整首都不转（偶发漏转的来源之一）。
     if (hansLyrics && typeof SPOTIFY_HAN_VARIANTS !== "undefined") {
-      if (SPOTIFY_HAN_VARIANTS.isTraditional(jsonSample(lines).text)) {
-        for (let i = 0; i < lines.length; i += 1) lines[i].words = SPOTIFY_HAN_VARIANTS.fold(lines[i].words);
+      for (let i = 0; i < lines.length; i += 1) {
+        if (KANA_MARK.test(lines[i].words)) continue;
+        lines[i].words = SPOTIFY_HAN_VARIANTS.fold(lines[i].words);
       }
     }
     const provider = record.provider || "LRCLIB";

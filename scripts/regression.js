@@ -614,6 +614,62 @@ check("Spotify cache hits fold traditional prefetch entries", () => {
   assert.equal(payload.lyrics.previewLines[0].words, "我们的爱");
 });
 
+check("Spotify lyrics fold hintless traditional lines and skip kana lines", () => {
+  const id = "hintless";
+  const url = "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json";
+  const body = JSON.stringify({
+    lyrics: {
+      syncType: "LINE_SYNCED",
+      // 语言被误标为 zh-Hans，且行里含假名：旧逻辑会整首跳过。
+      language: "zh-Hans",
+      lines: [
+        { startTimeMs: "0", words: "劍膽琴心", syllables: [] },
+        { startTimeMs: "1000", words: "東京の夜", syllables: [] },
+        { startTimeMs: "2000", words: "書劍恩仇錄", syllables: [] },
+      ],
+      previewLines: [],
+      alternatives: [],
+    },
+  });
+  const out = run("loon/spotify/js/spotify_lyrics.js", body, url, ["auto", true]);
+  assert.ok(out.body, "official lyrics must be rewritten");
+  const payload = JSON.parse(out.body);
+  assert.equal(payload.lyrics.lines[0].words, "剑胆琴心", "hintless traditional chars must fold");
+  assert.equal(payload.lyrics.lines[1].words, "東京の夜", "kana lines must stay unchanged");
+  assert.equal(payload.lyrics.lines[2].words, "书剑恩仇录");
+
+  // protobuf 官方响应同样不能再依赖整首 isTraditional 采样。
+  const protoLine = (ms, words) => serialize([v(1, ms), s(2, words)]);
+  const protoBody = serialize([b(1, serialize([
+    v(1, 1),
+    b(2, protoLine(0, "劍膽琴心")),
+    b(2, protoLine(1000, "東京の夜")),
+    s(10, "zh-Hans"),
+  ]))]);
+  const protoOut = run("loon/spotify/js/spotify_lyrics.js", protoBody,
+    "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id, ["auto", true]);
+  const protoInner = parse(first(parse(protoOut.body), 1).p);
+  const protoWords = protoInner.filter((f) => f.no === 2).map((f) => text(first(parse(f.p), 2)) || "");
+  assert.equal(protoWords.join("|"), "剑胆琴心|東京の夜");
+
+  const map = {
+    "spotify.lyrics.cache.v2": JSON.stringify({
+      ["auto|hans|" + id]: {
+        t: Date.now(), m: 0, z: 1, u: 0, s: "LINE_SYNCED", p: "LRCLIB", i: "", l: "zh-Hans",
+        c: [-16777216, -1, -1], a: [[0, "劍膽琴心"], [1000, "東京の夜"]],
+      },
+    }),
+  };
+  const cached = run("loon/spotify/js/spotify_lyrics.js", "", url, ["auto", true], {
+    $response: undefined,
+    $persistentStore: { read: (key) => (key in map ? map[key] : null), write: () => true },
+    $httpClient: { get: () => assert.fail("cache hit must not query providers") },
+  });
+  const cachedPayload = JSON.parse(cached.response.body);
+  assert.equal(cachedPayload.lyrics.lines[0].words, "剑胆琴心", "cached traditional lyrics must fold on read");
+  assert.equal(cachedPayload.lyrics.lines[1].words, "東京の夜", "cached kana lines must stay unchanged");
+});
+
 check("Spotify lyrics leave the desktop CORS preflight untouched", () => {
   // 桌面端（macOS / Windows 新版播放器跑在 CEF 里）先发 OPTIONS 预检再发 GET。
   // 预检响应没有 body，脚本如果当成「官方没歌词」回一份歌词 JSON，CORS 头就被
