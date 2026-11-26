@@ -4649,6 +4649,8 @@ const SPOTIFY_HAN_VARIANTS = (() => {
 
   let body = res.body;
   if (body instanceof ArrayBuffer) body = new Uint8Array(body);
+  // 少数客户端在文本型响应上会直接给字符串；统一成字节后再做 protobuf 扫描。
+  else if (typeof body === "string") body = WIRE_TEXT.encode(body);
   if (!body || !ArrayBuffer.isView(body) || !body.length) {
     $done({});
     return;
