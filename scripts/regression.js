@@ -1209,6 +1209,9 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
       b(4, serialize([s(1, "album_title"), s(2, "范特西")])),
       b(4, serialize([s(1, "title"), s(2, "我們的愛")])),
       b(4, serialize([s(1, "track_title"), s(2, "宇多田ヒカル")])),
+      // scroll / browse 的 section 标题、卡片标题是普通文本字段，不是 metadata map。
+      s(6, "經典華語"),
+      s(7, "宇多田ヒカル"),
     ]));
     const body = serialize([b(1, serialize([section]))]);
     const out = run(file, body, url, { block_ads: false, enable_lyrics: false, meta_script: "hans" });
@@ -1217,6 +1220,7 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.ok(decoded.includes("周杰伦"));
     assert.ok(decoded.includes("范特西"));
     assert.ok(decoded.includes("我们的爱"), "generic title / artist keys must convert too");
+    assert.ok(decoded.includes("经典华语"), "plain text fields must convert too");
     assert.ok(decoded.includes("宇多田ヒカル"), "kana names must stay unchanged");
     assert.equal(Object.keys(run(file, body, url, { block_ads: false, enable_lyrics: false, meta_script: "source" })).length, 0);
   });

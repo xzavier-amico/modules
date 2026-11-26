@@ -1421,44 +1421,47 @@ const SPOTIFY_HAN_VARIANTS = (() => {
   return { fold: fold, toHans: toHans, isTraditional: isTraditional };
 })();
 
-  // ---------------------------------------------------------- 界面字形
+  // ------ 界面字形
   //
-  // feed 卡片里的曲名 / 歌手 / 专辑名放在 metadata map（{1:key, 2:value}）里。
-  // 这里直接在原始字节上找这些 key，校验前面的 field-1 tag / 长度和后面的
-  // field-2 结构；命中的值等长替换（繁→简只换字，UTF-8 长度不变），不重编码
-  // 整包，12MB 响应也只多几次 indexOf。长度万一变化就放行，避免改坏响应。
+  // feed / browse / scroll 里的名称有两种存法：
+  //   1. metadata map（{1:key, 2:value}，key 如 track_title / artist_name）
+  //   2. 普通 protobuf 文本字段（section 标题、卡片标题、副标题等）
+  // 只认第 1 种会漏掉大量列表标题，所以这里直接扫描整包字节里的
+  // 「连续非 ASCII UTF-8 文本段」，对每段做繁→简折叠。
+  //
+  // - 不解析整棵树：12MB 的 scroll 响应也只多一次线性扫描
+  // - UTF-8 序列严格校验，二进制长度前缀 / 哈希 / 图片 ID 不会被当成文本
+  // - 文本段里出现日文假名时整段跳过
+  // - fold() 保持 UTF-8 字节长度，命中后就地替换，不需要重编码长度字段
 
-  // 与 lyrics.js 的 META_TITLE_KEYS / META_ARTIST_KEYS 保持一致：不同页面的
-  // metadata map 可能用 track_title / title，也可能只写 artist_name / artist。
-  const FEED_NAME_KEYS = [
-    "track_title", "track_name", "title",
-    "artist_name", "artist",
-    "album_title", "album_name",
-  ];
-  const FEED_NAME_KEY_BYTES = FEED_NAME_KEYS.map((key) => TE.encode(key));
-  const FEED_NAME_KANA = /[\u3040-\u30ff]/;
+  const FEED_KANA = /[\u3040-\u30ff]/;
 
-  function feedIndexOf(haystack, needle, from) {
-    const last = haystack.length - needle.length;
-    const first = needle[0];
-    for (let at = haystack.indexOf(first, from); at >= 0 && at <= last; at = haystack.indexOf(first, at + 1)) {
-      let i = 1;
-      while (i < needle.length && haystack[at + i] === needle[i]) i += 1;
-      if (i === needle.length) return at;
-    }
-    return -1;
+  function feedUtf8Size(byte) {
+    if (byte < 0x80) return 1;
+    if (byte >= 0xc2 && byte <= 0xdf) return 2;
+    if (byte >= 0xe0 && byte <= 0xef) return 3;
+    if (byte >= 0xf0 && byte <= 0xf4) return 4;
+    return 0;
   }
 
-  function feedReadLength(bytes, at) {
-    let value = 0;
-    let shift = 0;
-    for (let i = at; i < bytes.length && shift < 28; i += 1) {
-      const byte = bytes[i];
-      value |= (byte & 0x7f) << shift;
-      if (!(byte & 0x80)) return { value: value >>> 0, next: i + 1 };
-      shift += 7;
+  // 校验一个完整的 UTF-8 序列，顺便拒绝过长编码 / 代理区。
+  function feedValidUtf8(bytes, at, size) {
+    if (at + size > bytes.length) return false;
+    for (let i = 1; i < size; i += 1) {
+      if ((bytes[at + i] & 0xc0) !== 0x80) return false;
     }
-    return null;
+    if (size === 3) {
+      const b0 = bytes[at];
+      const b1 = bytes[at + 1];
+      if (b0 === 0xe0 && b1 < 0xa0) return false;
+      if (b0 === 0xed && b1 >= 0xa0) return false;
+    } else if (size === 4) {
+      const b0 = bytes[at];
+      const b1 = bytes[at + 1];
+      if (b0 === 0xf0 && b1 < 0x90) return false;
+      if (b0 === 0xf4 && b1 >= 0x90) return false;
+    }
+    return true;
   }
 
   function patchFeedNames(buffer) {
@@ -1466,38 +1469,54 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     if (!buffer || !buffer.length) return null;
 
     let out = null;
-    for (const keyBytes of FEED_NAME_KEY_BYTES) {
-      const keyLength = keyBytes.length;
-      for (let at = feedIndexOf(buffer, keyBytes, 0); at >= 0; at = feedIndexOf(buffer, keyBytes, at + 1)) {
-        // metadata entry 以 field 1（tag 0x0a）+ 长度开头；key 都短于 128，
-        // 长度 varint 只有一个字节。
-        if (at < 2 || buffer[at - 2] !== 0x0a || buffer[at - 1] !== keyLength) continue;
-
-        const tagAt = at + keyLength;
-        if (tagAt >= buffer.length || buffer[tagAt] !== 0x12) continue;
-        const length = feedReadLength(buffer, tagAt + 1);
-        if (!length || !length.value || length.value > 512) continue;
-
-        const start = length.next;
-        const end = start + length.value;
-        if (end > buffer.length) continue;
-
-        let value;
-        try {
-          value = TD.decode(buffer.subarray(start, end));
-        } catch (e) {
-          continue;
-        }
-        if (!value || FEED_NAME_KANA.test(value)) continue;
-
-        const folded = SPOTIFY_HAN_VARIANTS.fold(value);
-        if (folded === value) continue;
-        const encoded = TE.encode(folded);
-        if (encoded.length !== length.value) continue;
-
-        if (!out) out = buffer.slice();
-        out.set(encoded, start);
+    const total = buffer.length;
+    let i = 0;
+    while (i < total) {
+      const b0 = buffer[i];
+      // ASCII（tag、长度、URI、ID、图片地址等）直接跳过。
+      if (b0 < 0x80) {
+        i += 1;
+        continue;
       }
+      const size = feedUtf8Size(b0);
+      if (!size || !feedValidUtf8(buffer, i, size)) {
+        i += 1;
+        continue;
+      }
+
+      // 收集连续的非 ASCII UTF-8 文本段。
+      const start = i;
+      let end = i;
+      while (end < total) {
+        const byte = buffer[end];
+        if (byte < 0x80) break;
+        const step = feedUtf8Size(byte);
+        if (!step || !feedValidUtf8(buffer, end, step)) break;
+        end += step;
+      }
+      if (end <= start) {
+        i = start + 1;
+        continue;
+      }
+
+      let text = null;
+      try {
+        text = TD.decode(buffer.subarray(start, end));
+      } catch (e) {
+        text = null;
+      }
+      if (text && !FEED_KANA.test(text)) {
+        const folded = SPOTIFY_HAN_VARIANTS.fold(text);
+        if (folded !== text) {
+          const encoded = TE.encode(folded);
+          // 繁→简保持字节长度；万一不等就跳过，避免写坏长度字段。
+          if (encoded.length === end - start) {
+            if (!out) out = buffer.slice();
+            out.set(encoded, start);
+          }
+        }
+      }
+      i = end;
     }
     return out;
   }
