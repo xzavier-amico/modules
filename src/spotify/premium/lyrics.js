@@ -711,35 +711,46 @@
   // 桌面端（CEF）拉 track 元数据时要的是 JSON：accept: application/json，
   // 响应是 { gid, name, has_lyrics, ... }。只按 protobuf 改的话 has_lyrics 永远是
   // 服务端给的原值（false），客户端就认为这首歌没有歌词、连 color-lyrics 都不请求。
-  function patchJsonName(holder, key) {
-    if (!holder || "object" !== typeof holder) return false;
-    const value = holder[key];
-    if (typeof value !== "string" || !value) return false;
-    const next = hansName(value);
-    if (next === value) return false;
-    holder[key] = next;
-    return true;
-  }
-
-  function patchJsonArtists(list) {
-    let changed = false;
-    if (!Array.isArray(list)) return false;
-    for (const artist of list) {
-      if (patchJsonName(artist, "name")) changed = true;
-    }
-    return changed;
-  }
+  // 桌面端（CEF）的元数据是 JSON：track 是 { gid, name, artist[], album{...} }，
+  // extended-metadata 是 { extension: { entityData: { ... } } } 这种嵌套结构，
+  // 名称不一定在固定的 name / artist 路径上。开启界面字形时递归折叠所有字符串值，
+  // URI / ID / 图片地址等 ASCII 字段本来就不会被 fold 改动。
+  const JSON_SKIP_KEY = { uri: 1, url: 1, id: 1, gid: 1, shareUrl: 1, image: 1, src: 1, href: 1 };
 
   function patchMetaJsonNames(data) {
-    let changed = patchJsonName(data, "name");
-    if (patchJsonArtists(data.artist)) changed = true;
-    if (patchJsonArtists(data.artists)) changed = true;
-    const album = data.album;
-    if (album && "object" === typeof album) {
-      if (patchJsonName(album, "name")) changed = true;
-      if (patchJsonArtists(album.artist)) changed = true;
-      if (patchJsonArtists(album.artists)) changed = true;
-    }
+    let changed = false;
+    const walk = (node) => {
+      if (!node || "object" !== typeof node) return;
+      if (Array.isArray(node)) {
+        for (let i = 0; i < node.length; i += 1) {
+          const val = node[i];
+          if (typeof val === "string") {
+            const next = hansName(val);
+            if (next !== val) {
+              node[i] = next;
+              changed = true;
+            }
+          } else if (val && "object" === typeof val) {
+            walk(val);
+          }
+        }
+        return;
+      }
+      for (const key of Object.keys(node)) {
+        const val = node[key];
+        if (typeof val === "string") {
+          if (JSON_SKIP_KEY[key]) continue;
+          const next = hansName(val);
+          if (next !== val) {
+            node[key] = next;
+            changed = true;
+          }
+        } else if (val && "object" === typeof val) {
+          walk(val);
+        }
+      }
+    };
+    walk(data);
     return changed;
   }
 
@@ -751,9 +762,14 @@
       return null;
     }
     if (!data || "object" !== typeof data || Array.isArray(data)) return null;
-    if (typeof data.gid !== "string" && typeof data.uri !== "string") return null;
+    // 桌面端 extended-metadata / context-resolve 的 JSON 顶层不是 track 实体，
+    // 但里面同样有名称；只对已知元数据路径放行，避免误改其它 JSON。
+    const structured = /\/metadata\/4\/track\//.test(target) ||
+      /\/extended-metadata\//.test(target) || /\/context-resolve\//.test(target) ||
+      /\/connect-state\//.test(target);
+    if (!structured) return null;
+    if (/\/metadata\/4\/track\//.test(target) && typeof data.gid !== "string" && typeof data.uri !== "string") return null;
     let changed = lyricsOn && data.has_lyrics !== true;
-    if (changed) data.has_lyrics = true;
     // 先按原文把曲名 / 歌手 / 时长写进缓存，歌词脚本查源时零请求。
     // 界面字形只改下面要返回的 JSON，不改缓存里的匹配用原文。
     const store = cacheStore();
@@ -766,6 +782,7 @@
       rememberTracks(found);
     }
     if (metaHans && patchMetaJsonNames(data)) changed = true;
+    if (changed && lyricsOn) data.has_lyrics = true;
     return changed ? JSON.stringify(data) : null;
   }
 

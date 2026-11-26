@@ -1020,6 +1020,50 @@ check("Spotify official JSON lyrics fold to simplified by language", () => {
   assert.equal(Object.keys(run("loon/spotify/js/spotify_lyrics.js", japanese, url, ["auto", true])).length, 0);
 });
 
+check("Spotify desktop JSON metadata converts every nested string", () => {
+  const track = JSON.stringify({
+    gid: "000f22c0461543e4a19bc1ec119d2c4e",
+    name: "書劍恩仇錄",
+    has_lyrics: false,
+    duration: 189753,
+    artist: [{ gid: "abc", name: "鄭少秋" }],
+    album: { name: "鄭少秋精選", artists: [{ name: "鄭少秋" }] },
+    credits: [{ name: "鄭少秋" }, { name: "宇多田ヒカル" }],
+    tags: ["經典", "武俠"],
+    uri: "spotify:track:000f22c0461543e4a19bc1ec119d2c4e",
+  });
+  const trackUrl = "https://spclient.wg.spotify.com/metadata/4/track/000f22c0461543e4a19bc1ec119d2c4e?market=from_token";
+  const args = { enable_lyrics: false, meta_script: "hans", desktop: "macos" };
+  const out = run("loon/spotify/js/spotify.js", track, trackUrl, args);
+  const patched = JSON.parse(new TextDecoder().decode(out.body));
+  assert.equal(patched.name, "书剑恩仇录");
+  assert.equal(patched.artist[0].name, "郑少秋");
+  assert.equal(patched.album.name, "郑少秋精选");
+  assert.equal(patched.album.artists[0].name, "郑少秋");
+  assert.equal(patched.credits[0].name, "郑少秋", "extra name fields must convert");
+  assert.equal(patched.credits[1].name, "宇多田ヒカル", "kana names must stay unchanged");
+  assert.deepEqual(patched.tags, ["经典", "武侠"], "arrays of strings must convert");
+  assert.equal(patched.uri, "spotify:track:000f22c0461543e4a19bc1ec119d2c4e");
+  assert.equal(patched.has_lyrics, false, "meta_script must not enable lyrics");
+
+  const extended = JSON.stringify({
+    extension: {
+      entityData: {
+        uri: "spotify:track:000f22c0461543e4a19bc1ec119d2c4e",
+        track: { name: "說謊", artist: [{ name: "周杰倫" }], album: { name: "范特西" } },
+        labels: ["經典", "宇多田ヒカル"],
+      },
+    },
+  });
+  const extendedUrl = "https://spclient.wg.spotify.com/extended-metadata/v0/extended-metadata";
+  const extOut = run("loon/spotify/js/spotify.js", extended, extendedUrl, args);
+  const extPatched = JSON.parse(new TextDecoder().decode(extOut.body));
+  assert.equal(extPatched.extension.entityData.track.name, "说谎");
+  assert.equal(extPatched.extension.entityData.track.artist[0].name, "周杰伦");
+  assert.equal(extPatched.extension.entityData.track.album.name, "范特西");
+  assert.deepEqual(extPatched.extension.entityData.labels, ["经典", "宇多田ヒカル"]);
+});
+
 check("Spotify desktop JSON track metadata gets has_lyrics", () => {
   // 桌面端拉 metadata/4/track 时 accept 是 application/json，响应是
   // { gid, name, has_lyrics, ... }；只按 protobuf 改不到它。
