@@ -1241,6 +1241,37 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
   });
 }
 
+for (const platform of ["loon", "egern", "shadowrocket"]) {
+  check(platform + " Spotify partner script folds spclient protobuf name fields", () => {
+    const file = platform + "/spotify/js/spotify.partner.js";
+    const url = "https://spclient.wg.spotify.com/playlist/v2/playlist/abc";
+    // 模拟 playlist / metadata 里常见的嵌套文本字段：
+    // Playlist { uri = 1, attributes = 2 { name = 1 }, owner = 3 { name = 2 } }
+    const album = serialize([
+      s(1, "spotify:album:abc"),
+      s(2, "范特西"),
+      b(3, serialize([s(2, "周杰倫")])),
+    ]);
+    const body = serialize([
+      s(1, "spotify:playlist:abc"),
+      b(2, serialize([s(1, "我的最愛"), s(2, "說謊")])),
+      b(3, serialize([s(2, "周杰倫")])),
+      b(4, album),
+      b(5, serialize([s(1, "宇多田ヒカル")])),
+    ]);
+    const out = run(file, body, url, { meta_script: "hans" });
+    assert.ok(out.body, "protobuf body must be patched");
+    const decoded = new TextDecoder().decode(out.body);
+    assert.ok(decoded.includes("我的最爱"));
+    assert.ok(decoded.includes("说谎"));
+    assert.ok(decoded.includes("周杰伦"));
+    assert.ok(decoded.includes("范特西"));
+    assert.ok(decoded.includes("宇多田ヒカル"), "kana names must stay unchanged");
+    assert.equal(out.body.length, body.length, "name folding must keep byte length");
+    assert.equal(Object.keys(run(file, body, url, { meta_script: "source" })).length, 0);
+  });
+}
+
 check("Spotify manifests intercept api-partner Pathfinder for name conversion", () => {
   for (const file of [
     "loon/spotify/spotify-enhance.plugin",
@@ -3073,7 +3104,7 @@ check("Loon passes arguments in the declared order", () => {
   assert.ok(!plugin.includes("lyrics_mode"), "plugin must not expose retired diagnostic modes");
   assert.ok(!plugin.includes("debug_log"), "plugin must not expose a diagnostic log switch");
   const scriptRules = plugin.split("\n").filter((line) => line.includes('then script("'));
-  assert.equal(scriptRules.length, 9);
+  assert.equal(scriptRules.length, 11);
   for (const line of scriptRules) {
     assert.ok(/\?v=\d{8}-\d+/.test(line), line);
     if (line.includes("spotify.headers.js")) {
@@ -3382,6 +3413,23 @@ check("Spotify headers script rewrites only the timezone", () => {
 
   const plain = call(storeFor("TW"), "https://spclient.wg.spotify.com/bootstrap/v1");
   assert.equal(Object.keys(plain).length, 0, "requests without a timezone param pass through");
+});
+
+check("Spotify headers script disables zstd for Pathfinder", () => {
+  const file = "loon/spotify/js/spotify.headers.js";
+  const call = (headers) => {
+    const calls = [];
+    const context = vm.createContext({ TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, console,
+      $request: { url: "https://api-partner.spotify.com/pathfinder/v1/query", headers },
+      $done: (value) => calls.push(value) });
+    vm.runInContext(read(file), context, { timeout: 10000 });
+    assert.equal(calls.length, 1, "headers script must finish once");
+    return calls[0];
+  };
+  const out = call({ "Accept-Encoding": "gzip, zstd", "User-Agent": "Spotify/1.0" });
+  assert.equal(out.headers["Accept-Encoding"], "identity");
+  assert.equal(out.headers["User-Agent"], "Spotify/1.0", "other headers must be preserved");
+  assert.equal(Object.keys(call({ "Accept-Encoding": "identity" })).length, 0);
 });
 
 check("Spotify headers script falls back to Asia/Hong_Kong without a region", () => {

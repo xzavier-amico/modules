@@ -1,18 +1,21 @@
 //======
-// Spotify Pathfinder — GraphQL 响应里的名称字形
+// Spotify Names — 界面名称字形（Pathfinder JSON + spclient 列表 protobuf）
 //
-// 首页 / 搜索 / 歌单 / 专辑 / 歌手页在较新的客户端里走
-// api-partner.spotify.com/pathfinder（JSON，GraphQL persisted query），
-// 不经过 spclient 的 metadata map，所以需要单独在这一层转名称。
+// 新版客户端里，歌单 / 专辑 / 歌手 / 搜索 / 资料库并不只走 metadata map：
+//   - api-partner.spotify.com/pathfinder 是 GraphQL JSON
+//   - spclient 的 playlist/v2、collection/v2、searchview、album/v2、
+//     artist/v2、metadata/4/album|artist 等是 protobuf
+// 这里统一把它们里面的名称转成简体。
 //
-// 只改名称类字段（name / title / xxxName / xxxTitle），含日文假名的名称、
-// URI / URL / id 等保持原样；meta_script=source（默认）时立即放行。
+// 只改「看起来是文本」的字段：能按 UTF-8 严格解码、且没有控制字符。
+// 这样 URI / ID / 图片 / 二进制块不会被误改；含日文假名的文本整段跳过。
+// fold() 繁→简保持 UTF-8 字节长度，所以 protobuf 可以原地重写，不用重排长度。
 //======
 
 (() => {
   "use strict";
 
-  // 这个脚本只接收一个参数：meta_script。Loon 传位置数组，Egern 传 env 对象，
+  // 只接收一个参数：meta_script。Loon 传位置数组，Egern 传 env 对象，
   // 手写 JSON 参数时是字符串，三种都兼容。
   const raw = typeof $argument !== "undefined" ? $argument : undefined;
   let value = "";
@@ -42,55 +45,43 @@
     return;
   }
 
-  let body = res.body;
-  if (typeof body !== "string") {
-    try {
-      if (body instanceof ArrayBuffer) body = new TextDecoder("utf-8").decode(new Uint8Array(body));
-      else if (body && body.buffer instanceof ArrayBuffer) body = new TextDecoder("utf-8").decode(new Uint8Array(body.buffer));
-      else {
-        $done({});
-        return;
-      }
-    } catch (e) {
-      $done({});
-      return;
-    }
-  }
-  // pathfinder 响应通常几十 KB；超过 8MB 直接放行，避免异常响应占满内存。
-  if (!body || body.length > 8 * 1024 * 1024) {
+  // 统一拿字节：JSON 与 protobuf 都从字节判断。
+  let bytes;
+  const body = res.body;
+  if (typeof body === "string") {
+    bytes = WIRE_TEXT.encode(body);
+  } else if (body instanceof ArrayBuffer) {
+    bytes = new Uint8Array(body);
+  } else if (body && body.buffer instanceof ArrayBuffer) {
+    bytes = new Uint8Array(body.buffer, body.byteOffset || 0, body.byteLength);
+  } else {
     $done({});
     return;
   }
-
-  let root;
-  try {
-    root = JSON.parse(body);
-  } catch (e) {
-    $done({});
-    return;
-  }
-  if (!root || "object" != typeof root) {
+  if (!bytes || !bytes.length || bytes.length > 12 * 1024 * 1024) {
     $done({});
     return;
   }
 
   const KANA = /[\u3040-\u30ff]/;
-  // name / title 是 pathfinder 里最常见的名称字段，trackName / albumName 等
-  // 变体一并覆盖；URI、URL、id 之类不动。
-  const NAME_KEY = /^(?:name|title)$|(?:Name|Title)$/;
-  const SKIP_KEY = { uri: 1, url: 1, id: 1, shareUrl: 1, image: 1, src: 1, href: 1 };
+  const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/;
 
-  function convert(text) {
+  function foldText(text) {
     if (!text || KANA.test(text)) return text;
     return SPOTIFY_HAN_VARIANTS.fold(text);
   }
 
-  function walk(node) {
+  // ---------------- JSON（Pathfinder / playlist attributes） ----------------
+  // 只改名称类字段，避免碰描述、简介、HTML 等其它文本。
+  const NAME_KEY = /^(?:name|title)$|(?:Name|Title)$/;
+  const SKIP_KEY = { uri: 1, url: 1, id: 1, shareUrl: 1, image: 1, src: 1, href: 1 };
+
+  function walkJson(node) {
     if (!node || "object" != typeof node) return false;
     let changed = false;
     if (Array.isArray(node)) {
       for (let i = 0; i < node.length; i += 1) {
-        if (walk(node[i])) changed = true;
+        if (walkJson(node[i])) changed = true;
       }
       return changed;
     }
@@ -98,21 +89,88 @@
       const val = node[key];
       if (typeof val === "string") {
         if (SKIP_KEY[key] || !NAME_KEY.test(key)) continue;
-        const next = convert(val);
+        const next = foldText(val);
         if (next !== val) {
           node[key] = next;
           changed = true;
         }
       } else if (val && "object" == typeof val) {
-        if (walk(val)) changed = true;
+        if (walkJson(val)) changed = true;
       }
     }
     return changed;
   }
 
-  if (!walk(root)) {
+  const asJson = () => {
+    const text = new TextDecoder("utf-8").decode(bytes);
+    const trimmed = text.replace(/^[\s\uFEFF]+/, "");
+    if (!trimmed || (trimmed.charAt(0) !== "{" && trimmed.charAt(0) !== "[")) return null;
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const isJsonUrl = /\/pathfinder\//.test(res.url || (typeof $request !== "undefined" && $request && $request.url) || "");
+  const json = asJson();
+  if (json) {
+    if (walkJson(json)) $done({ body: JSON.stringify(json) });
+    else $done({});
+    return;
+  }
+  if (isJsonUrl) {
+    // pathfinder 只处理 JSON；解析失败（gzip / zstd 未解压）原样放行。
     $done({});
     return;
   }
-  $done({ body: JSON.stringify(root) });
+
+  // ---------------- protobuf（spclient 列表 / 实体） ----------------
+  const fields = parse(bytes);
+  if (!fields || !allCanonical(fields)) {
+    $done({});
+    return;
+  }
+
+  // 严格 UTF-8 且无控制字符才当作文本；URI / ID / 图片 / 二进制都不会命中。
+  function asText(payload) {
+    let text;
+    try {
+      text = WIRE_UTF8.decode(payload);
+    } catch (e) {
+      return null;
+    }
+    if (!text || CONTROL.test(text)) return null;
+    return text;
+  }
+
+  function foldFields(list) {
+    let changed = false;
+    for (const f of list) {
+      if (f.w !== 2 || !f.p || !f.p.length) continue;
+      const text = asText(f.p);
+      if (text !== null) {
+        const next = foldText(text);
+        if (next === text) continue;
+        const encoded = WIRE_TEXT.encode(next);
+        // 理论上等长；万一不等就跳过，绝不改写长度字段。
+        if (encoded.length !== f.p.length) continue;
+        f.p = encoded;
+        changed = true;
+        continue;
+      }
+      const sub = parse(f.p);
+      if (sub && foldFields(sub)) {
+        f.p = serialize(sub);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  if (!foldFields(fields)) {
+    $done({});
+    return;
+  }
+  $done({ body: serialize(fields) });
 })();

@@ -12,7 +12,35 @@
   "use strict";
 
   const req = typeof $request !== "undefined" && $request ? $request : null;
-  if (!req || !req.url || !/[?&]timezone=/i.test(req.url)) {
+  if (!req || !req.url) {
+    $done({});
+    return;
+  }
+
+  // api-partner（pathfinder）的响应可能是 zstd / gzip。Loon 对 zstd 解压支持
+  // 不一致，拿不到明文时名称脚本只能原样放行。这里改成 identity，服务端返回
+  // 未压缩 JSON，脚本稳定能读到。
+  if (/^https:\/\/api-partner\.spotify\.com\//i.test(String(req.url))) {
+    const src = req.headers && "object" == typeof req.headers ? req.headers : {};
+    let current = "";
+    const headers = {};
+    for (const key in src) {
+      if (String(key).toLowerCase() === "accept-encoding") {
+        current = String(src[key] == null ? "" : src[key]);
+        continue;
+      }
+      headers[key] = src[key];
+    }
+    if (/^identity$/i.test(current.trim())) {
+      $done({});
+      return;
+    }
+    headers["Accept-Encoding"] = "identity";
+    $done({ headers: headers });
+    return;
+  }
+
+  if (!/[?&]timezone=/i.test(req.url)) {
     $done({});
     return;
   }

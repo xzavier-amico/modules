@@ -111,8 +111,8 @@ const TARGETS = [
   {
     module: "spotify",
     file: "spotify.partner.js",
-    title: "Spotify Enhance — Pathfinder GraphQL 名称字形",
-    parts: ["t2s.js", "partner/entry.js"],
+    title: "Spotify Enhance — 界面名称字形（Pathfinder JSON + spclient protobuf）",
+    parts: [WIRE, "core/protobuf.js", "t2s.js", "partner/entry.js"],
   },
   {
     module: "spotify",

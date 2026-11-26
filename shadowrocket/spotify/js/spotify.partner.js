@@ -1,5 +1,5 @@
 //=======================================================================================
-// Spotify Enhance — Pathfinder GraphQL 名称字形
+// Spotify Enhance — 界面名称字形（Pathfinder JSON + spclient protobuf）
 // 自动生成，请勿直接编辑。源文件在 src/，构建：node scripts/build.js
 //=======================================================================================
 
@@ -155,6 +155,547 @@ if ("undefined" == typeof Uint8Array.prototype.toBase64) {
 
 (() => {
   "use strict";
+
+  //=====================================================================================
+  // protobuf wire —— 三端脚本共用的底层编解码
+  //
+  // 只做「把一段字节拆成字段列表」「按字段号编码」「varint 读写」，
+  // 不建模具体消息。未建模的字段按 raw 原样保留，改不动时最多不生效，
+  // 不会把响应写坏。
+  //=====================================================================================
+
+  const WIRE_TEXT = new TextEncoder();
+  const WIRE_UTF8 = new TextDecoder("utf-8", { fatal: true });
+
+  // varint 用 BigInt 读，避免 64 位字段（时间戳、ID）超过 2^53 后丢低位。
+  function wireReadVarint(bytes, state, end) {
+    const limit = end === undefined ? bytes.length : end;
+    let value = 0n;
+    let shift = 0n;
+    while (state.i < limit) {
+      const byte = bytes[state.i++];
+      value |= BigInt(byte & 0x7f) << shift;
+      if (!(byte & 0x80)) return value;
+      shift += 7n;
+      if (shift > 63n) throw new Error("Invalid protobuf varint");
+    }
+    throw new Error("Truncated protobuf varint");
+  }
+
+  // 字段号 / 长度这类小整数走 Number，避免每个字段都分配 BigInt；
+  // 真的超过 4 字节时退回 BigInt 保证正确（实际只有超长字段才可能）。
+  function wireReadCount(bytes, state, end) {
+    const limit = end === undefined ? bytes.length : end;
+    const start = state.i;
+    let value = 0;
+    let shift = 0;
+    while (state.i < limit) {
+      const byte = bytes[state.i++];
+      if (shift < 28) {
+        value |= (byte & 0x7f) << shift;
+        if (!(byte & 0x80)) return value >>> 0;
+        shift += 7;
+        continue;
+      }
+      // 超过 4 字节：退回去用 BigInt 重读整个 varint。
+      state.i = start;
+      return Number(wireReadVarint(bytes, state, limit));
+    }
+    throw new Error("Truncated protobuf varint");
+  }
+
+  // 只跳过 wire 0 的 varint，不构造 BigInt。字段切分 / 扫描时不需要这个值，
+  // 大响应里能省掉每个数值字段一次 BigInt 分配。
+  function wireSkipVarint(bytes, state, end) {
+    const limit = end === undefined ? bytes.length : end;
+    while (state.i < limit) {
+      if (!(bytes[state.i++] & 0x80)) return;
+    }
+    throw new Error("Truncated protobuf varint");
+  }
+
+  function wireVarintLength(value) {
+    let length = 1;
+    while (value >= 0x80n) {
+      length++;
+      value >>= 7n;
+    }
+    return length;
+  }
+
+  function wireEncodeVarint(value) {
+    if ("number" == typeof value && value >= 0 && value <= 0x7fffffff) {
+      let n = value | 0;
+      const len = n < 0x80 ? 1 : n < 0x4000 ? 2 : n < 0x200000 ? 3 : n < 0x10000000 ? 4 : 5;
+      const out = new Uint8Array(len);
+      let at = 0;
+      while (n >= 0x80) {
+        out[at++] = (n & 0x7f) | 0x80;
+        n >>>= 7;
+      }
+      out[at] = n;
+      return out;
+    }
+    let rest = BigInt(value);
+    const out = new Uint8Array(wireVarintLength(rest));
+    let at = 0;
+    while (rest >= 0x80n) {
+      out[at++] = Number(rest & 0x7fn) | 0x80;
+      rest >>= 7n;
+    }
+    out[at] = Number(rest);
+    return out;
+  }
+
+  function wireConcat(parts) {
+    let size = 0;
+    for (const part of parts) size += part.length;
+    const out = new Uint8Array(size);
+    let at = 0;
+    for (const part of parts) {
+      out.set(part, at);
+      at += part.length;
+    }
+    return out;
+  }
+
+  function wireEqual(left, right) {
+    if (left === right) return true;
+    if (left.length !== right.length) return false;
+    for (let i = 0; i < left.length; i++) if (left[i] !== right[i]) return false;
+    return true;
+  }
+
+  // 旧式 group（wire type 3）：从 start 之后开始找匹配的 end group，返回结束位置。
+  // Spotify 的元数据响应里偶尔会带 group，不认它的话整条响应只能原样放行。
+  function wireSkipGroup(bytes, from, no) {
+    const state = { i: from };
+    while (state.i < bytes.length) {
+      const tag = wireReadCount(bytes, state);
+      const inner = tag >>> 3;
+      const wire = tag & 7;
+      if (!inner) throw new Error("Invalid protobuf field");
+      if (wire === 4) {
+        if (inner !== no) throw new Error("Mismatched protobuf end group");
+        return state.i;
+      }
+      if (wire === 2) {
+        const length = wireReadCount(bytes, state);
+        if (length > bytes.length - state.i) throw new Error("Truncated protobuf field");
+        state.i += length;
+      } else if (wire === 1) {
+        state.i += 8;
+      } else if (wire === 5) {
+        state.i += 4;
+      } else if (wire === 0) {
+        wireSkipVarint(bytes, state);
+      } else if (wire === 3) {
+        state.i = wireSkipGroup(bytes, state.i, inner);
+      } else {
+        throw new Error("Unsupported protobuf wire type " + wire);
+      }
+      if (state.i > bytes.length) throw new Error("Truncated protobuf field");
+    }
+    throw new Error("Truncated protobuf group");
+  }
+
+  // 返回 [{ no, wire, data, raw }]；data 是字段值，raw 是含 tag 的整段字节。
+  function wireParseFields(bytes) {
+    const fields = [];
+    const state = { i: 0 };
+    while (state.i < bytes.length) {
+      const rawStart = state.i;
+      const tag = wireReadCount(bytes, state);
+      const no = tag >>> 3;
+      const wire = tag & 7;
+      if (!no) throw new Error("Invalid protobuf field");
+
+      let dataStart = state.i;
+      if (wire === 2) {
+        const length = wireReadCount(bytes, state);
+        if (length > bytes.length - state.i) throw new Error("Truncated protobuf field");
+        dataStart = state.i;
+        state.i += length;
+      } else if (wire === 1) {
+        state.i += 8;
+      } else if (wire === 5) {
+        state.i += 4;
+      } else if (wire === 0) {
+        wireSkipVarint(bytes, state);
+      } else if (wire === 3) {
+        // group：整段（含起止 tag）当 opaque 值保留，重新编码时原样写回。
+        state.i = wireSkipGroup(bytes, state.i, no);
+      } else {
+        throw new Error("Unsupported protobuf wire type " + wire);
+      }
+      if (state.i > bytes.length) throw new Error("Truncated protobuf field");
+
+      fields.push({
+        no: no,
+        wire: wire,
+        data: bytes.subarray(dataStart, state.i),
+        raw: bytes.subarray(rawStart, state.i),
+      });
+    }
+    return fields;
+  }
+
+  // 只扫字段号、不建对象、不切子数组；onField(no) 返回 true 时提前结束。
+  // 用于大响应里判断「有没有某个字段」，比完整 parse 快很多。
+  function wireScanFields(bytes, onField) {
+    const state = { i: 0 };
+    while (state.i < bytes.length) {
+      const tag = wireReadCount(bytes, state);
+      const no = tag >>> 3;
+      const wire = tag & 7;
+      if (!no) throw new Error("Invalid protobuf field");
+      if (wire === 2) {
+        const length = wireReadCount(bytes, state);
+        if (length > bytes.length - state.i) throw new Error("Truncated protobuf field");
+        state.i += length;
+      } else if (wire === 1) {
+        state.i += 8;
+      } else if (wire === 5) {
+        state.i += 4;
+      } else if (wire === 0) {
+        wireSkipVarint(bytes, state);
+      } else if (wire === 3) {
+        state.i = wireSkipGroup(bytes, state.i, no);
+      } else {
+        throw new Error("Unsupported protobuf wire type " + wire);
+      }
+      if (state.i > bytes.length) throw new Error("Truncated protobuf field");
+      if (onField(no)) return true;
+    }
+    return false;
+  }
+
+  // 流式遍历字段，不分配字段对象与子数组；回调返回 true 时提前停止。
+  function wireForEachField(bytes, onField) {
+    const state = { i: 0 };
+    while (state.i < bytes.length) {
+      const rawStart = state.i;
+      const tag = wireReadCount(bytes, state);
+      const no = tag >>> 3;
+      const wire = tag & 7;
+      if (!no) throw new Error("Invalid protobuf field");
+
+      let dataStart = state.i;
+      if (wire === 2) {
+        const length = wireReadCount(bytes, state);
+        if (length > bytes.length - state.i) throw new Error("Truncated protobuf field");
+        dataStart = state.i;
+        state.i += length;
+      } else if (wire === 1) {
+        state.i += 8;
+      } else if (wire === 5) {
+        state.i += 4;
+      } else if (wire === 0) {
+        wireSkipVarint(bytes, state);
+      } else if (wire === 3) {
+        state.i = wireSkipGroup(bytes, state.i, no);
+      } else {
+        throw new Error("Unsupported protobuf wire type " + wire);
+      }
+      if (state.i > bytes.length) throw new Error("Truncated protobuf field");
+      if (onField(no, wire, dataStart, state.i, rawStart, state.i)) return true;
+    }
+    return false;
+  }
+
+  // 按 no / wire 编码一个字段；payload 对 wire 0 是 varint 字节，其余是字段值。
+  function wireEncodeField(no, wire, payload) {
+    const tag = wireEncodeVarint(BigInt(no) * 8n + BigInt(wire));
+    return wire === 2 ? wireConcat([tag, wireEncodeVarint(payload.length), payload]) : wireConcat([tag, payload]);
+  }
+
+  function wireDecodeText(bytes) {
+    try {
+      return WIRE_UTF8.decode(bytes);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // ---------------------------------------------------------------- protobuf
+  //
+  // 底层 varint / 字段切分 / 字段编码在 src/proto/wire.js，三端共用。
+  // 这里只保留 Spotify 需要的消息级封装：parse 失败返回 null，
+  // edit 在重编码前后做一次字节比对，防止把不认识的响应写坏。
+
+  const TE = WIRE_TEXT;
+  const TD = WIRE_UTF8;
+  const readVarint = wireReadVarint;
+
+  // 小整数 varint（字段号 / 长度）：失败（截断 / 超长 / 越界）返回 -1，不抛异常。
+  // 元数据响应里大量字符串会被拿来试探「是不是子消息」，绝大多数会在这里失败；
+  // 用异常处理失败既慢又会反复捕获调用栈。
+  function readCount(bytes, state) {
+    const start = state.i;
+    const limit = bytes.length;
+    let at = start;
+    let value = 0;
+    let shift = 0;
+    while (at < limit) {
+      const byte = bytes[at++];
+      if (shift < 28) {
+        value |= (byte & 0x7f) << shift;
+        if (!(byte & 0x80)) {
+          state.i = at;
+          return value >>> 0;
+        }
+        shift += 7;
+        continue;
+      }
+      // 超过 4 字节：退回 BigInt 路径，拒绝超出 32 位范围的非法 tag / 长度。
+      try {
+        const big = wireReadVarint(bytes, state, limit);
+        return big <= 0xffffffffn ? Number(big) : -1;
+      } catch (e) {
+        return -1;
+      }
+    }
+    return -1;
+  }
+
+  // 字节不是合法消息时返回 null。一趟扫描直接产出字段对象，不经过中间数组。
+  function parse(b) {
+    const fields = [];
+    const state = { i: 0 };
+    const total = b.length;
+    while (state.i < total) {
+      const rawStart = state.i;
+      const tag = readCount(b, state);
+      if (tag < 0) return null;
+      const no = tag >>> 3;
+      const wire = tag & 7;
+      if (!no) return null;
+
+      let dataStart = state.i;
+      let end;
+      let varintValue;
+      if (wire === 2) {
+        const length = readCount(b, state);
+        if (length < 0 || length > total - state.i) return null;
+        dataStart = state.i;
+        end = dataStart + length;
+      } else if (wire === 0) {
+        // 单趟解码 varint：1-4 字节小整数直接位运算，避免 subarray 与逐字节 BigInt 分配。
+        let at = dataStart;
+        let small = 0;
+        let shift = 0;
+        let resolved = false;
+        while (at < total && shift < 28) {
+          const byte = b[at++];
+          small |= (byte & 0x7f) << shift;
+          if (!(byte & 0x80)) {
+            const u = small >>> 0;
+            varintValue = u === 0 ? 0n : u === 1 ? 1n : BigInt(u);
+            end = at;
+            resolved = true;
+            break;
+          }
+          shift += 7;
+        }
+        if (!resolved) {
+          state.i = dataStart;
+          try {
+            varintValue = wireReadVarint(b, state, total);
+          } catch (e) {
+            return null;
+          }
+          end = state.i;
+        }
+      } else if (wire === 1) {
+        end = dataStart + 8;
+      } else if (wire === 5) {
+        end = dataStart + 4;
+      } else if (wire === 3) {
+        // group：整段（含起止 tag）当 opaque 值保留，重新编码时原样写回。
+        try {
+          end = wireSkipGroup(b, dataStart, no);
+        } catch (e) {
+          return null;
+        }
+      } else {
+        return null;
+      }
+      if (end > total) return null;
+      state.i = end;
+
+      const raw = b.subarray(rawStart, end);
+      if (wire === 0) {
+        fields.push({ no: no, w: 0, v: varintValue, raw: raw });
+      } else if (wire === 3) {
+        // group 原样保留：p 存的是含起止 tag 的整段，serialize 直接写回。
+        fields.push({ no: no, w: 3, p: raw, raw: raw });
+      } else {
+        fields.push({ no: no, w: wire, p: b.subarray(dataStart, end), raw: raw });
+      }
+    }
+    return fields;
+  }
+
+  // varint 的 Number 版：字段号 / 长度 / 常见数值都远小于 2^31，用常数分支和位运算
+  // 避开浮点除法；超过 2^53 的 64 位值仍走 BigInt 保证不丢位。
+  const MAX_SAFE_BIG = 9007199254740991n;
+  function varintSize(n) {
+    if (n < 128) return 1;
+    if (n < 16384) return 2;
+    if (n < 2097152) return 3;
+    if (n < 268435456) return 4;
+    if (n <= 0xffffffff) return 5;
+    let size = 1;
+    while (n >= 128) {
+      n = Math.floor(n / 128);
+      size += 1;
+    }
+    return size;
+  }
+
+  function writeVarint(out, at, n) {
+    if (n <= 0x7fffffff) {
+      while (n >= 128) {
+        out[at++] = (n & 0x7f) | 0x80;
+        n >>>= 7;
+      }
+      out[at++] = n;
+      return at;
+    }
+    while (n >= 128) {
+      out[at++] = (n % 128) | 128;
+      n = Math.floor(n / 128);
+    }
+    out[at++] = n;
+    return at;
+  }
+
+  function writeVarintBig(out, at, value) {
+    let rest = value;
+    while (rest >= 0x80n) {
+      out[at++] = Number(rest & 0x7fn) | 0x80;
+      rest >>= 7n;
+    }
+    out[at++] = Number(rest);
+    return at;
+  }
+
+  const isBigValue = (v) => typeof v === "bigint" && v > MAX_SAFE_BIG;
+
+  // 一次算好总长度、一次分配、直接写入；输出字节与逐字段 wireEncodeField + wireConcat 完全一致。
+  function serialize(fields) {
+    let size = 0;
+    for (const f of fields) {
+      if (f.w === 3) {
+        size += f.p.length;
+        continue;
+      }
+      size += varintSize(f.no * 8 + f.w);
+      if (f.w === 0) size += isBigValue(f.v) ? wireVarintLength(f.v) : varintSize(Number(f.v));
+      else if (f.w === 2) size += varintSize(f.p.length) + f.p.length;
+      else size += f.p.length;
+    }
+    const out = new Uint8Array(size);
+    let at = 0;
+    for (const f of fields) {
+      if (f.w === 3) {
+        out.set(f.p, at);
+        at += f.p.length;
+        continue;
+      }
+      at = writeVarint(out, at, f.no * 8 + f.w);
+      if (f.w === 0) {
+        at = isBigValue(f.v) ? writeVarintBig(out, at, f.v) : writeVarint(out, at, Number(f.v));
+      } else {
+        if (f.w === 2) at = writeVarint(out, at, f.p.length);
+        out.set(f.p, at);
+        at += f.p.length;
+      }
+    }
+    return out;
+  }
+
+  // 判断整条消息是否本来就是规范编码。等价于 same(serialize(parse(buffer)), buffer)，
+  // 但只比较每个字段的 tag / 长度，不复制大 payload，避免 12MB 响应白拷贝一遍。
+  function samePrefix(bytes, prefix) {
+    if (bytes.length !== prefix.length) return false;
+    for (let i = 0; i < prefix.length; i += 1) if (bytes[i] !== prefix[i]) return false;
+    return true;
+  }
+
+  // raw[at..at+len) 是否恰好是 n 的最短 varint 编码（不分配）。
+  function matchesVarint(raw, at, n, len) {
+    if (len === 1) return raw[at] === n;
+    if (n <= 0x7fffffff) {
+      for (let i = 0; i < len - 1; i += 1) {
+        if (raw[at + i] !== ((n & 0x7f) | 0x80)) return false;
+        n >>>= 7;
+      }
+      return raw[at + len - 1] === n;
+    }
+    for (let i = 0; i < len; i += 1) {
+      const byte = i < len - 1 ? (n % 128) | 128 : n;
+      if (raw[at + i] !== byte) return false;
+      n = Math.floor(n / 128);
+    }
+    return true;
+  }
+
+  function allCanonical(fields) {
+    for (const f of fields) {
+      const raw = f.raw;
+      if (!raw) return false;
+      const tag = f.no * 8 + f.w;
+      const tagLen = varintSize(tag);
+      if (raw.length < tagLen || !matchesVarint(raw, 0, tag, tagLen)) return false;
+      if (f.w === 0) {
+        if (isBigValue(f.v)) {
+          if (!samePrefix(raw.subarray(tagLen), wireEncodeVarint(f.v))) return false;
+        } else {
+          const value = Number(f.v);
+          const valueLen = varintSize(value);
+          if (raw.length !== tagLen + valueLen || !matchesVarint(raw, tagLen, value, valueLen)) return false;
+        }
+      } else if (f.w === 2) {
+        const lengthLen = varintSize(f.p.length);
+        if (raw.length !== tagLen + lengthLen + f.p.length) return false;
+        if (!matchesVarint(raw, tagLen, f.p.length, lengthLen)) return false;
+      } else if (f.w === 3) {
+        // group 按 raw 原样写回，只要保留着就认为是规范编码。
+        if (!f.raw || f.raw.length !== f.p.length) return false;
+      } else if (raw.length !== tagLen + (f.w === 1 ? 8 : 4)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  const first = (fields, no) => {
+    for (const f of fields) if (f.no === no) return f;
+    return null;
+  };
+  const fieldString = (no, text) => ({ no: no, w: 2, p: TE.encode(text) });
+  const fieldBytes = (no, payload) => ({ no: no, w: 2, p: payload });
+  const fieldVarint = (no, value) => ({ no: no, w: 0, v: BigInt(value) });
+
+  function text(f) {
+    if (!f || f.w !== 2) return null;
+    return wireDecodeText(f.p);
+  }
+
+  // 用 fn 的返回值替换 path 指向的消息；路径缺失或解析失败时返回 null。
+  function edit(message, path, fn, fields = parse(message)) {
+    if (!path.length) return fn(message, fields);
+    if (!fields || !allCanonical(fields)) return null;
+    const f = first(fields, path[0]);
+    if (!f || f.w !== 2) return null;
+    const inner = edit(f.p, path.slice(1), fn);
+    if (!inner) return null;
+    f.p = inner;
+    return serialize(fields);
+  }
+
+  const same = wireEqual;
 
 // 繁 → 简折叠表（OpenCC t2s，Apache-2.0）。
 //
@@ -761,20 +1302,23 @@ const SPOTIFY_HAN_VARIANTS = (() => {
 })();
 
 //======
-// Spotify Pathfinder — GraphQL 响应里的名称字形
+// Spotify Names — 界面名称字形（Pathfinder JSON + spclient 列表 protobuf）
 //
-// 首页 / 搜索 / 歌单 / 专辑 / 歌手页在较新的客户端里走
-// api-partner.spotify.com/pathfinder（JSON，GraphQL persisted query），
-// 不经过 spclient 的 metadata map，所以需要单独在这一层转名称。
+// 新版客户端里，歌单 / 专辑 / 歌手 / 搜索 / 资料库并不只走 metadata map：
+//   - api-partner.spotify.com/pathfinder 是 GraphQL JSON
+//   - spclient 的 playlist/v2、collection/v2、searchview、album/v2、
+//     artist/v2、metadata/4/album|artist 等是 protobuf
+// 这里统一把它们里面的名称转成简体。
 //
-// 只改名称类字段（name / title / xxxName / xxxTitle），含日文假名的名称、
-// URI / URL / id 等保持原样；meta_script=source（默认）时立即放行。
+// 只改「看起来是文本」的字段：能按 UTF-8 严格解码、且没有控制字符。
+// 这样 URI / ID / 图片 / 二进制块不会被误改；含日文假名的文本整段跳过。
+// fold() 繁→简保持 UTF-8 字节长度，所以 protobuf 可以原地重写，不用重排长度。
 //======
 
 (() => {
   "use strict";
 
-  // 这个脚本只接收一个参数：meta_script。Loon 传位置数组，Egern 传 env 对象，
+  // 只接收一个参数：meta_script。Loon 传位置数组，Egern 传 env 对象，
   // 手写 JSON 参数时是字符串，三种都兼容。
   const raw = typeof $argument !== "undefined" ? $argument : undefined;
   let value = "";
@@ -804,55 +1348,43 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     return;
   }
 
-  let body = res.body;
-  if (typeof body !== "string") {
-    try {
-      if (body instanceof ArrayBuffer) body = new TextDecoder("utf-8").decode(new Uint8Array(body));
-      else if (body && body.buffer instanceof ArrayBuffer) body = new TextDecoder("utf-8").decode(new Uint8Array(body.buffer));
-      else {
-        $done({});
-        return;
-      }
-    } catch (e) {
-      $done({});
-      return;
-    }
-  }
-  // pathfinder 响应通常几十 KB；超过 8MB 直接放行，避免异常响应占满内存。
-  if (!body || body.length > 8 * 1024 * 1024) {
+  // 统一拿字节：JSON 与 protobuf 都从字节判断。
+  let bytes;
+  const body = res.body;
+  if (typeof body === "string") {
+    bytes = WIRE_TEXT.encode(body);
+  } else if (body instanceof ArrayBuffer) {
+    bytes = new Uint8Array(body);
+  } else if (body && body.buffer instanceof ArrayBuffer) {
+    bytes = new Uint8Array(body.buffer, body.byteOffset || 0, body.byteLength);
+  } else {
     $done({});
     return;
   }
-
-  let root;
-  try {
-    root = JSON.parse(body);
-  } catch (e) {
-    $done({});
-    return;
-  }
-  if (!root || "object" != typeof root) {
+  if (!bytes || !bytes.length || bytes.length > 12 * 1024 * 1024) {
     $done({});
     return;
   }
 
   const KANA = /[\u3040-\u30ff]/;
-  // name / title 是 pathfinder 里最常见的名称字段，trackName / albumName 等
-  // 变体一并覆盖；URI、URL、id 之类不动。
-  const NAME_KEY = /^(?:name|title)$|(?:Name|Title)$/;
-  const SKIP_KEY = { uri: 1, url: 1, id: 1, shareUrl: 1, image: 1, src: 1, href: 1 };
+  const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/;
 
-  function convert(text) {
+  function foldText(text) {
     if (!text || KANA.test(text)) return text;
     return SPOTIFY_HAN_VARIANTS.fold(text);
   }
 
-  function walk(node) {
+  // ---------------- JSON（Pathfinder / playlist attributes） ----------------
+  // 只改名称类字段，避免碰描述、简介、HTML 等其它文本。
+  const NAME_KEY = /^(?:name|title)$|(?:Name|Title)$/;
+  const SKIP_KEY = { uri: 1, url: 1, id: 1, shareUrl: 1, image: 1, src: 1, href: 1 };
+
+  function walkJson(node) {
     if (!node || "object" != typeof node) return false;
     let changed = false;
     if (Array.isArray(node)) {
       for (let i = 0; i < node.length; i += 1) {
-        if (walk(node[i])) changed = true;
+        if (walkJson(node[i])) changed = true;
       }
       return changed;
     }
@@ -860,23 +1392,90 @@ const SPOTIFY_HAN_VARIANTS = (() => {
       const val = node[key];
       if (typeof val === "string") {
         if (SKIP_KEY[key] || !NAME_KEY.test(key)) continue;
-        const next = convert(val);
+        const next = foldText(val);
         if (next !== val) {
           node[key] = next;
           changed = true;
         }
       } else if (val && "object" == typeof val) {
-        if (walk(val)) changed = true;
+        if (walkJson(val)) changed = true;
       }
     }
     return changed;
   }
 
-  if (!walk(root)) {
+  const asJson = () => {
+    const text = new TextDecoder("utf-8").decode(bytes);
+    const trimmed = text.replace(/^[\s\uFEFF]+/, "");
+    if (!trimmed || (trimmed.charAt(0) !== "{" && trimmed.charAt(0) !== "[")) return null;
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const isJsonUrl = /\/pathfinder\//.test(res.url || (typeof $request !== "undefined" && $request && $request.url) || "");
+  const json = asJson();
+  if (json) {
+    if (walkJson(json)) $done({ body: JSON.stringify(json) });
+    else $done({});
+    return;
+  }
+  if (isJsonUrl) {
+    // pathfinder 只处理 JSON；解析失败（gzip / zstd 未解压）原样放行。
     $done({});
     return;
   }
-  $done({ body: JSON.stringify(root) });
+
+  // ---------------- protobuf（spclient 列表 / 实体） ----------------
+  const fields = parse(bytes);
+  if (!fields || !allCanonical(fields)) {
+    $done({});
+    return;
+  }
+
+  // 严格 UTF-8 且无控制字符才当作文本；URI / ID / 图片 / 二进制都不会命中。
+  function asText(payload) {
+    let text;
+    try {
+      text = WIRE_UTF8.decode(payload);
+    } catch (e) {
+      return null;
+    }
+    if (!text || CONTROL.test(text)) return null;
+    return text;
+  }
+
+  function foldFields(list) {
+    let changed = false;
+    for (const f of list) {
+      if (f.w !== 2 || !f.p || !f.p.length) continue;
+      const text = asText(f.p);
+      if (text !== null) {
+        const next = foldText(text);
+        if (next === text) continue;
+        const encoded = WIRE_TEXT.encode(next);
+        // 理论上等长；万一不等就跳过，绝不改写长度字段。
+        if (encoded.length !== f.p.length) continue;
+        f.p = encoded;
+        changed = true;
+        continue;
+      }
+      const sub = parse(f.p);
+      if (sub && foldFields(sub)) {
+        f.p = serialize(sub);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  if (!foldFields(fields)) {
+    $done({});
+    return;
+  }
+  $done({ body: serialize(fields) });
 })();
 
 })();
