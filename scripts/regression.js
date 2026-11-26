@@ -1170,6 +1170,8 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
       s(2, "說謊"),
       b(3, serialize([s(2, "范特西")])),
       b(4, serialize([s(2, "周杰倫")])),
+      // 真实响应里 App 显示的可能是 field 32 这类附加名称字段，不是字段 2/4。
+      b(32, serialize([s(2, "周杰倫"), v(3, 1n)])),
     ]);
     const albumPayload = serialize([s(2, "范特西"), b(3, serialize([s(2, "周杰倫")]))]);
     const artistPayload = serialize([s(2, "周杰倫")]);
@@ -1189,6 +1191,8 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.equal(text(first(trackOut, 2)), "说谎");
     assert.equal(text(first(parse(first(trackOut, 3).p), 2)), "范特西");
     assert.equal(text(first(parse(first(trackOut, 4).p), 2)), "周杰伦");
+    // 附加字段里的备用名称也要折叠，否则 App 会继续显示繁体。
+    assert.equal(text(first(parse(first(trackOut, 32).p), 2)), "周杰伦");
     assert.ok(!first(trackOut, 18), "meta_script must not enable lyrics");
     assert.equal(text(first(payloadAt(1), 2)), "范特西");
     assert.equal(text(first(payloadAt(2), 2)), "周杰伦");
@@ -1227,6 +1231,8 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
         tracks: { items: [{ name: "說謊", artists: { items: [{ profile: { name: "周杰倫" } }] }, albumOfTrack: { name: "范特西" } }] },
         artist: { profile: { name: "周杰倫" } },
         playlist: { name: "我的最愛", owner: { name: "小明" } },
+        card: { text: { title: "2000年代華語金曲", subtitle: "千禧後第一個十年，蔡依林" } },
+        names: ["最愛...周杰倫", "宇多田ヒカル"],
         title: "宇多田ヒカル",
       },
     };
@@ -1236,6 +1242,9 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     assert.ok(decoded.includes("说谎"));
     assert.ok(decoded.includes("周杰伦"));
     assert.ok(decoded.includes("我的最爱"));
+    assert.ok(decoded.includes("2000年代华语金曲"), "card titles must convert too");
+    assert.ok(decoded.includes("千禧后第一个十年"), "card subtitles must convert too");
+    assert.ok(decoded.includes("最爱...周杰伦"), "array string elements must convert too");
     assert.ok(decoded.includes("宇多田ヒカル"), "kana names must stay unchanged");
     assert.equal(Object.keys(run(file, body, url, { meta_script: "source" })).length, 0);
   });

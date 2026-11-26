@@ -1226,8 +1226,9 @@ const SPOTIFY_HAN_VARIANTS = (() => {
   }
 
   // ---------------- JSON（Pathfinder / playlist attributes） ----------------
-  // 只改名称类字段，避免碰描述、简介、HTML 等其它文本。
-  const NAME_KEY = /^(?:name|title)$|(?:Name|Title)$/;
+  // 客户端会在 JSON 里用 title / subtitle / name / text / biography 等多种键放
+  // 展示文本，只认 name/title 会漏掉卡片副标题和艺人资料。这里对所有字符串值
+  // 折叠；URI / URL / id / 图片地址等 ASCII 字段不会被 fold 改动。
   const SKIP_KEY = { uri: 1, url: 1, id: 1, shareUrl: 1, image: 1, src: 1, href: 1 };
 
   function walkJson(node) {
@@ -1235,14 +1236,23 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     let changed = false;
     if (Array.isArray(node)) {
       for (let i = 0; i < node.length; i += 1) {
-        if (walkJson(node[i])) changed = true;
+        const val = node[i];
+        if (typeof val === "string") {
+          const next = foldText(val);
+          if (next !== val) {
+            node[i] = next;
+            changed = true;
+          }
+        } else if (val && "object" == typeof val) {
+          if (walkJson(val)) changed = true;
+        }
       }
       return changed;
     }
     for (const key of Object.keys(node)) {
       const val = node[key];
       if (typeof val === "string") {
-        if (SKIP_KEY[key] || !NAME_KEY.test(key)) continue;
+        if (SKIP_KEY[key]) continue;
         const next = foldText(val);
         if (next !== val) {
           node[key] = next;

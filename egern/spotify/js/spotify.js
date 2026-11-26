@@ -2363,6 +2363,49 @@ const SPOTIFY_HAN_VARIANTS = (() => {
     return SPOTIFY_HAN_VARIANTS.fold(text);
   }
 
+  // 真实 extended-metadata 里，同一个实体常带多份名字：Track.name / artist.name
+  // 可能是简体，而 field 32 之类的附加字段还带一份繁体，App 显示的正是后者
+  // （例如 周杰倫 / 劉德華）。只按已知字段名改不够，所以开启界面字形时，
+  // 对整棵树里「能严格按 UTF-8 解码且没有控制字符」的文本统一折叠。
+  // URI / ID / 图片 / 二进制块不会被当成文本；含日文假名的文本整段跳过。
+  const TEXT_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/;
+
+  function asTextPayload(payload) {
+    let text;
+    try {
+      text = TD.decode(payload);
+    } catch (e) {
+      return null;
+    }
+    if (!text || TEXT_CONTROL.test(text)) return null;
+    return text;
+  }
+
+  function foldTextFields(list) {
+    let changed = false;
+    for (const f of list) {
+      if (f.w !== 2 || !f.p || !f.p.length) continue;
+      const text = asTextPayload(f.p);
+      if (text !== null) {
+        if (NAME_KANA.test(text)) continue;
+        const next = SPOTIFY_HAN_VARIANTS.fold(text);
+        if (next === text) continue;
+        const encoded = TE.encode(next);
+        // fold() 保持 UTF-8 字节长度；万一不等就跳过，绝不改写长度字段。
+        if (encoded.length !== f.p.length) continue;
+        f.p = encoded;
+        changed = true;
+        continue;
+      }
+      const sub = parse(f.p);
+      if (sub && foldTextFields(sub)) {
+        f.p = serialize(sub);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
   // 名字字段在 Track / Album / Artist 里都是 field 2；只改这一条，保留其余字段。
   function patchNameField(fields, no) {
     const f = first(fields, no);
@@ -3075,6 +3118,8 @@ const SPOTIFY_HAN_VARIANTS = (() => {
       if (!canonical) return null;
       let changed = patchTrack(fields);
       if (metaHans && patchTrackNames(fields)) changed = true;
+      // 附加字段（如 field 32 的备用歌手名）也一并折叠。
+      if (metaHans && foldTextFields(fields)) changed = true;
       return changed ? serialize(fields) : null;
     }
     const wantMeta = lyricsOn && !!cacheStore() && target.indexOf("/extended-metadata/") < 0;
@@ -3086,7 +3131,10 @@ const SPOTIFY_HAN_VARIANTS = (() => {
       wantQueue: wantQueue,
       queue: wantQueue ? { current: "", next: [] } : null,
     };
-    const changed = walkMeta(fields, 0, canonical, ctx);
+    let changed = walkMeta(fields, 0, canonical, ctx);
+    // extended-metadata / connect-state 里的附加名称字段（App 实际显示的那份）
+    // 不在已知字段表里，统一折叠整棵树的文本字段。
+    if (metaHans && canonical && foldTextFields(fields)) changed = true;
     if (wantMeta) rememberTracks(ctx.found);
     if (wantQueue && ctx.queue.current) persistQueue(ctx.queue);
     return changed ? serialize(fields) : null;
