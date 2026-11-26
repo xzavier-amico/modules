@@ -225,6 +225,15 @@ scriptings:
       max_size: 12582912
       timeout: 30
 
+  # Pathfinder（歌单 / 专辑 / 歌手 / 搜索 / 资料库）是 JSON，单独转名称。
+  - http_response:
+      name: "spotify.partner"
+      match: "^https:\\/\\/api-partner\\.spotify\\.com\\/pathfinder\\/"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.partner.js?v=20261126-1"
+      body_required: true
+      max_size: 8388608
+      timeout: 10
+
   # 请求阶段：缓存里已有这首歌的第三方歌词时直接返回，跳过可能很慢的官方请求。
   - http_request:
       name: "spotify.lyrics.req"
@@ -253,3 +262,4 @@ mitm:
     includes:
       - "*-spclient.spotify.com"
       - "spclient.wg.spotify.com"
+      - "api-partner.spotify.com"

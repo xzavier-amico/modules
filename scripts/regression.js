@@ -1218,6 +1218,41 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
   });
 }
 
+for (const platform of ["loon", "egern", "shadowrocket"]) {
+  check(platform + " Spotify partner script converts Pathfinder JSON names", () => {
+    const file = platform + "/spotify/js/spotify.partner.js";
+    const url = "https://api-partner.spotify.com/pathfinder/v1/query?operationName=fetchPlaylist";
+    const payload = {
+      data: {
+        tracks: { items: [{ name: "說謊", artists: { items: [{ profile: { name: "周杰倫" } }] }, albumOfTrack: { name: "范特西" } }] },
+        artist: { profile: { name: "周杰倫" } },
+        playlist: { name: "我的最愛", owner: { name: "小明" } },
+        title: "宇多田ヒカル",
+      },
+    };
+    const body = JSON.stringify(payload);
+    const out = run(file, body, url, { meta_script: "hans" });
+    const decoded = typeof out.body === "string" ? out.body : new TextDecoder().decode(out.body);
+    assert.ok(decoded.includes("说谎"));
+    assert.ok(decoded.includes("周杰伦"));
+    assert.ok(decoded.includes("我的最爱"));
+    assert.ok(decoded.includes("宇多田ヒカル"), "kana names must stay unchanged");
+    assert.equal(Object.keys(run(file, body, url, { meta_script: "source" })).length, 0);
+  });
+}
+
+check("Spotify manifests intercept api-partner Pathfinder for name conversion", () => {
+  for (const file of [
+    "loon/spotify/spotify-enhance.plugin",
+    "egern/spotify/spotify-enhance.yaml",
+    "shadowrocket/spotify/spotify-enhance.sgmodule",
+  ]) {
+    const text = read(file);
+    assert.ok(text.includes("api-partner.spotify.com"), file + " must MITM api-partner");
+    assert.ok(text.includes("spotify.partner.js"), file + " must load the partner script");
+  }
+});
+
 check("Loon Spotify meta_script reads the 10th positional argument for metadata and feed", () => {
   const entry = (key, value) => b(3, serialize([s(1, key), s(2, value)]));
   const context = serialize([s(1, track), s(2, "uid"), entry("track_title", "說謊"), entry("artist_name", "周杰倫")]);
@@ -3038,7 +3073,7 @@ check("Loon passes arguments in the declared order", () => {
   assert.ok(!plugin.includes("lyrics_mode"), "plugin must not expose retired diagnostic modes");
   assert.ok(!plugin.includes("debug_log"), "plugin must not expose a diagnostic log switch");
   const scriptRules = plugin.split("\n").filter((line) => line.includes('then script("'));
-  assert.equal(scriptRules.length, 8);
+  assert.equal(scriptRules.length, 9);
   for (const line of scriptRules) {
     assert.ok(/\?v=\d{8}-\d+/.test(line), line);
     if (line.includes("spotify.headers.js")) {
@@ -3051,6 +3086,8 @@ check("Loon passes arguments in the declared order", () => {
     for (const name of names) assert.ok(new RegExp("^" + name + " = ", "m").test(plugin));
     if (line.includes("spotify_lyrics.js")) {
       assert.deepEqual(names, ["lyrics_source", "enable_lyrics", "desktop", "lyrics_script", "ignore_han_variants", "sync_plain_lyrics", "lyrics_isrc"]);
+    } else if (line.includes("spotify.partner.js")) {
+      assert.deepEqual(names, ["meta_script"]);
     } else if (line.includes("spotify.feed.js")) {
       assert.deepEqual(names, ["spoof_premium", "block_ads", "unlock_playback", "enable_lyrics", "desktop", "lyrics_source", "prefetch_lyrics", "sync_plain_lyrics", "lyrics_isrc", "meta_script", "lyrics_script", "ignore_han_variants"]);
     } else {
@@ -5060,6 +5097,10 @@ check("Spotify headers percent-encoded early return, feed prefetch, Shadowrocket
   for (const line of read("shadowrocket/spotify/spotify-enhance.sgmodule").split("\n").filter((l) => l.includes('argument="'))) {
     const raw = /argument="(.*)"$/.exec(line)[1].replace(/\{\{\{[^}]*\}\}\}/g, "true");
     const parsed = JSON.parse(raw);
+    if (line.includes("spotify.partner.js")) {
+      assert.equal(parsed.meta_script, "true", "Shadowrocket Spotify partner argument JSON valid");
+      continue;
+    }
     assert.equal(parsed.enable_lyrics, true, "Shadowrocket Spotify argument JSON valid");
     if (!line.includes("spotify_lyrics.js")) assert.equal(parsed.spoof_premium, true, "Shadowrocket Spotify spoof_premium valid");
   }

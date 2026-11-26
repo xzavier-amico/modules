@@ -49,7 +49,7 @@
 - 歌名比较会忽略 `feat.` / `ft.` / `with` / `prod.`、`Remastered 2011` / `2011 Remaster`、`Radio Edit`、`Single Version`、`Album Version`、`Bonus Track`、`Deluxe Edition`、`Explicit` / `Clean` 等版本后缀；歌手按 `feat.` / `ft.` / `with` 和多歌手分隔符拆分，任意一位匹配即可。
 - 曲名 / 歌手比较默认做繁→简折叠（OpenCC t2s 表）：Spotify 的中文元数据常是繁体，网易云 / QQ 返回简体，不折叠时「說謊」对不上「说谎」、「周杰倫」对不上「周杰伦」。关闭 `ignore_han_variants` 后恢复逐字比较。
 - 歌词默认转简体（`lyrics_script=hans`）：官方歌词按 `language` 判断（`zh-Hant` / `zh-TW` / `zh-HK` 直接转，并同步改成 `zh-Hans`；`lines` 与 `previewLines` 都改，protobuf 与桌面端 JSON 都覆盖），第三方歌词只在整段判定为繁体时转换；简体 / 英文 / 日文歌词原样保留。词表随脚本下发（约 30KB），首次用到时才构建，非繁体文本零逐字开销。
-- 界面曲名 / 歌手 / 专辑名默认保持原文（`meta_script=source`）。改成 `hans` 后，Now Playing、歌词卡、首页 / 搜索 / 滚动页以及 `/metadata/4/track`、`extended-metadata` 里的这三种名称会按同一份 OpenCC 表转成简体；含日文假名的名称（如「宇多田ヒカル」）保持原样。歌词缓存仍记录 Spotify 原文，避免转简体后和繁体曲库对不上；关闭补全歌词时单独开 `hans` 也不会顺手打开 `has_lyrics`。
+- 界面曲名 / 歌手 / 专辑名默认保持原文（`meta_script=source`）。改成 `hans` 后，Now Playing、歌词卡、首页 / 搜索 / 滚动页以及 `/metadata/4/track`、`extended-metadata` 里的这三种名称会按同一份 OpenCC 表转成简体；含日文假名的名称（如「宇多田ヒカル」）保持原样。歌单 / 专辑 / 歌手 / 搜索 / 资料库这些走 `api-partner.spotify.com/pathfinder`（GraphQL JSON）的页面会一并转换其中的 `name` / `title` 字段。歌词缓存仍记录 Spotify 原文，避免转简体后和繁体曲库对不上；关闭补全歌词时单独开 `hans` 也不会顺手打开 `has_lyrics`。
 - 曲名里带 `()` / `（）` 的装饰信息（影视剧名、节目名、歌手名等）会先去掉再查一次；括号里含 `Live`、`Remix`、`Acoustic`、`伴奏`、`版` 等版本词时保留，避免把现场版查成录音室版。返回结果仍按完整曲名或去掉装饰后的曲名校验。
 - `DJ版` / `DJ Remix` / `(DJ)` / `- DJ` 这类标记会先从曲名里去掉再查，并跳过歌手约束（DJ 版通常挂别人名字）；时长容差放宽到 60 秒，避免混音版比原曲长而匹配失败。
 - LRCLIB 并行候选都没命中时，会再用歌名搜一次；仍按歌手 / 版本 / Live / 时长校验，不会拿别人的同名歌。
@@ -197,5 +197,5 @@ User-Agent 识别 Loon for Mac，并默认拒绝 QUIC 以确保请求经过 MITM
 - 新增参数同理：`[Argument]` 清单随安装保存在本地，远程新增的开关不会自动出现。需要删除插件后重新添加（可给插件 URL 加 `?v=日期` 绕过 raw 缓存），设置页才会显示「歌词字形」「界面字形」「忽略简繁」。重新添加后其它参数会回到默认值，按需再调。
 - `force_zh_hans` 已由 `lyrics_script` 取代：官方与第三方歌词都按这个开关转字形，不改 `Accept-Language`。
 - `spotify.headers` 请求脚本固定伪装时区；旧安装需要重新导入插件才会带上它。脚本不改 `Accept-Language`。
-- 需开启 MitM：`*-spclient.spotify.com`、`spclient.wg.spotify.com`。
+- 需开启 MitM：`*-spclient.spotify.com`、`spclient.wg.spotify.com`、`api-partner.spotify.com`（界面名称字形）。
 - 音质、下载与 Spotify Connect 由服务端判定，脚本无法修改。
