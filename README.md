@@ -121,7 +121,7 @@ YouTube、Spotify、Pluto、Tubi、AMap、Xiaohongshu、Bilibili、Delivery 与 
 - Xiaohongshu：`src/xiaohongshu/clean.js` 生成三端的 `xiaohongshu_clean.js`，删首页 / 搜索 / 评论广告。
 - Bilibili：`src/bilibili/bilibili_clean.js`（REST 接口，含网页版推荐/搜索/相关推荐/详情/动态/番剧/直播）、`bilibili_quality.js`（画质）、`grpc/` 下的四个片段合成 `bilibili_grpc.js`（gRPC 详情页 / 评论 / 动态）。
 - Delivery / Emby：单文件脚本，各自 `src/<module>/*.js` 生成三端同名成品。
-- Loon 与 Egern 的成品内容完全一致；Shadowrocket 成品额外前置 `src/compat/shadowrocket.js`，只在小火箭缺少 `TextEncoder` / `TextDecoder` / `Uint8Array.fromBase64` / `toBase64` / `Object.hasOwn` 时生效。
+- 三端共用脚本主体；Egern 成品额外套 `src/env/` 原生 `ctx` 适配层（二进制入口必须在构建目标声明 `binary: true`）；Shadowrocket 成品额外前置 `src/compat/shadowrocket.js`，只在小火箭缺少 `TextEncoder` / `TextDecoder` / `Uint8Array.fromBase64` / `toBase64` / `Object.hasOwn` 时生效。
 - protobuf 的 varint 读写、字段切分与字段编码集中在 `src/proto/wire.js`；Spotify 与 YouTube 只在各自的 `core/protobuf.js` 里保留消息级封装。
 - gRPC 的帧拆分、帧重组、按字段号删除、按条件过滤重复项集中在 `src/proto/grpc.js`，B 站脚本按 `head.js` + `wire.js` + `grpc.js` + `rules.js` + `entry.js` 拼接，换模块只需换 rules。
 - 模块图标统一放在 `icon/`（120px PNG，取自各 App 官方图标），模块里写 raw 绝对 URL。不用 App Store 的 artwork 链接：bilibili 等 App 会换季节性图标（比如英雄联盟赛季），链接和画面都会跟着变。AdBlock、local-reflect 这类不是 App 的模块仍用 Qure 的图标。

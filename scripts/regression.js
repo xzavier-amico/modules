@@ -200,6 +200,34 @@ for (const platform of ["loon", "egern", "shadowrocket"]) {
     }
   });
 
+  check(platform + " scroll preserves non-ad cards and opaque bytes when inserting lyrics", () => {
+    const normal = serialize([
+      b(1, serialize([s(2, "artist/event/discovery ".repeat(12))])),
+      b(23, serialize([s(1, "spotify:section:normal")])),
+      v(90, 9007199254740999n),
+      b(91, new Uint8Array([0xff, 0x80, 0x00])),
+    ]);
+    const ad = serialize([b(23, serialize([s(1, "spotify:section:ad")])), b(30, new Uint8Array([1]))]);
+    const original = serialize([b(1, serialize([b(1, normal), b(1, ad)])), v(8, 123n)]);
+    const headers = {
+      "Content-Type": "application/x-protobuf", "Content-Encoding": "gzip",
+      "Content-Length": "7", "Transfer-Encoding": "chunked", "X-Upstream": "keep",
+    };
+    const out = run(feed, original, scroll, { block_ads: true, enable_lyrics: true }, {
+      $response: { status: 200, body: original, headers },
+    });
+    const fields = parse(out.body);
+    const sections = parse(first(fields, 1).p).filter((field) => field.no === 1);
+    assert.equal(sections.length, 2, "only the sponsored card is replaced by lyrics");
+    assert.ok(sameBytes(sections[1].p, normal), "non-ad cards must remain byte-for-byte intact");
+    assert.equal(first(fields, 8).v, 123n);
+    const returned = Object.fromEntries(Object.entries(out.headers).map(([key, value]) => [key.toLowerCase(), value]));
+    assert.equal(returned["content-length"], String(out.body.length));
+    assert.equal(returned["content-encoding"], undefined);
+    assert.equal(returned["transfer-encoding"], undefined);
+    assert.equal(returned["x-upstream"], "keep");
+  });
+
   const hls = platform + "/pluto/js/pluto_hls.js";
   const vodUrl = "https://service.pluto.tv/stitch/hls/movie/id/master.m3u8";
   const header = "#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-MEDIA-SEQUENCE:100\n#EXT-X-TARGETDURATION:5\n";
@@ -1343,6 +1371,35 @@ check("Spotify feed handles query-style scroll URLs", () => {
 });
 
 for (const platform of ["loon", "egern", "shadowrocket"]) {
+  check(platform + " Spotify partner preserves binary search/discovery replies even with name folding off", () => {
+    const file = platform + "/spotify/js/spotify.partner.js";
+    // varint、长 payload 的长度前缀和不透明字段都不是 UTF-8。
+    // 旧样本只有短文本，恰好可以按 UTF-8 往返，漏掉了 Egern 的文本解码错误。
+    const body = serialize([
+      b(1, serialize([s(1, "說謊"), s(2, "周杰倫"), s(3, "card ".repeat(40))])),
+      v(8, 9007199254740999n),
+      b(99, new Uint8Array([0xff, 0x80, 0xc0, 0x00])),
+    ]);
+    const urls = [
+      "https://spclient.wg.spotify.com/searchview/km/v4/search/說謊",
+      "https://spclient.wg.spotify.com/watch-feed-entrypoints/v1/discovery-from-seed",
+      "https://api-partner.spotify.com/pathfinder/v2/query",
+    ];
+    for (const url of urls) {
+      for (const args of [{}, { meta_script: "source" }]) {
+        const out = run(file, body, url, args);
+        assert.equal(Object.keys(out || {}).length, 0, "disabled conversion must preserve every byte: " + url);
+      }
+      const out = run(file, body, url, { meta_script: "hans" });
+      const fields = parse(out.body);
+      assert.ok(fields, "binary reply must remain valid protobuf: " + url);
+      assert.equal(text(first(parse(first(fields, 1).p), 1)), "说谎");
+      assert.equal(first(fields, 8).v, 9007199254740999n);
+      assert.ok(sameBytes(first(fields, 99).p, new Uint8Array([0xff, 0x80, 0xc0, 0x00])));
+      assert.equal(out.body.length, body.length);
+    }
+  });
+
   check(platform + " Spotify partner script converts Pathfinder JSON names", () => {
     const file = platform + "/spotify/js/spotify.partner.js";
     const url = "https://api-partner.spotify.com/pathfinder/v1/query?operationName=fetchPlaylist";
@@ -1436,6 +1493,27 @@ check("Spotify manifests intercept api-partner Pathfinder for name conversion", 
     assert.ok(text.includes("api-partner.spotify.com"), file + " must MITM api-partner");
     assert.ok(text.includes("spotify.partner.js"), file + " must load the partner script");
     assert.ok(text.includes("watch-feed-view") && text.includes("watch-feed-entrypoints"), file + " must cover watch-feed");
+  }
+});
+
+check("Egern Spotify names use binary bodies and clear conditional caches like Loon", () => {
+  const yaml = read("egern/spotify/spotify-enhance.yaml");
+  const entries = yaml.split(/\n\s*-\s+(?=http_request:|http_response:)/)
+    .filter((entry) => /^http_response:/.test(entry) && /name: "spotify\.(?:partner|names)"/.test(entry));
+  assert.equal(entries.length, 2);
+  for (const entry of entries) {
+    assert.match(entry, /body_required: true/);
+    assert.match(entry, /binary_body: true/);
+  }
+  assert.match(read("egern/spotify/js/spotify.partner.js"), /const ENV_BODY_BINARY = true;/);
+  const rewrites = yaml.split("header_rewrites:")[1].split("scriptings:")[0];
+  for (const path of ["searchview/km/v4/search/test", "search/v2/test", "watch-feed-view/v1/test",
+    "watch-feed-entrypoints/v1/discovery-from-seed", "metadata/4/album/id", "casita/v1/feeds/test"]) {
+    const url = "https://spclient.wg.spotify.com/" + path;
+    for (const name of ["if-none-match", "if-modified-since"]) {
+      const matches = Array.from(rewrites.matchAll(/match: ("[^\n]+")\s+name: "([^"]+)"/g));
+      assert.ok(matches.some((match) => match[2] === name && new RegExp(JSON.parse(match[1])).test(url)), name + ": " + url);
+    }
   }
 });
 

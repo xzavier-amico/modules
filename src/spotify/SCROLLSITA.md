@@ -46,6 +46,29 @@ section {
 - CORS 头原样保留并在缺失时补上（桌面端 xpui 是跨域 fetch）。
 - 拿不到原始响应头时退回只换 body；任何异常都原样放行，绝不让请求挂到超时。
 
+## Egern 与 Loon 的二进制差异
+
+Loon 的 `binary_body_mode=true` 让脚本直接得到 `Uint8Array`；Egern 原生 API
+给的是一次性流，要用 `arrayBuffer()` 读取，且模块必须打开 `body_required` / `binary_body`。
+本仓库的 `src/env/head.js` 会按构建目标的 `binary` 标记决定是否转成 UTF-8 文本。
+
+`spotify.partner.js` 同时挂在搜索 `searchview`、`watch-feed-*` 和 Pathfinder 上，
+这些接口不保证返回 JSON。构建目标必须设 `binary: true`，否则 protobuf 会被
+`TextDecoder` 把非 UTF-8 字节替换成 `U+FFFD`，即使 `meta_script=source` 直接放行，
+适配层也会把已损坏的文本还回去。表现可能是搜索加载失败或发现卡片加载失败；
+Loon 不经过这层转换，所以同一脚本在 Loon 上可能正常。
+
+`spotify.feed.js`（scrollsita 主响应）本来就是二进制目标，不能把「只剩歌词」
+直接等同于同一个问题。回归测试会确认补卡时非广告 section 逐字节保留。
+若修复后仍然只剩歌词，需要抓同一首歌的原始 scrollsita 响应、脚本结果和缺失卡片
+关联请求的状态码 / 命中规则，区分服务端没下发、卡片子请求失败和过滤误判。
+不要为了试错关闭全部 MITM 或删除 QUIC 回落规则。
+
+文档依据：
+- [Loon Script API](https://nsloon.app/docs/Script/script_api)（二进制类型与 `$done`）
+- [Loon Script v2](https://nsloon.app/docs/Script/script_v2)（`requires_body` 与 `binary_body_mode` 分离）
+- [Egern JavaScript API](https://doc.egernapp.com/docs/javascript-api)（一次性 Body 流）
+- [Egern Scripting](https://doc.egernapp.com/docs/configuration/scriptings)（读取 / 修改 Body 所需配置）
 
 ## 曲目元数据回填
 

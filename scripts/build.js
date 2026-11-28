@@ -111,6 +111,8 @@ const TARGETS = [
   {
     module: "spotify",
     file: "spotify.partner.js",
+    // 同一入口同时处理 JSON 和 protobuf；Egern 不得先按 UTF-8 解码二进制。
+    binary: true,
     title: "Spotify Enhance — 界面名称字形（Pathfinder JSON + spclient protobuf）",
     parts: [WIRE, "core/protobuf.js", "t2s.js", "partner/entry.js"],
   },

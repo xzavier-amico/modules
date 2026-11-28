@@ -165,6 +165,16 @@ header_rewrites:
       name: "if-modified-since"
       type: "request"
 
+  # 与 Loon 的名称接口保持一致，避免搜索 / 发现页复用旧缓存的 protobuf。
+  - delete:
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:playlist\\/v\\d+|collection\\/v\\d+|searchview|search\\/v\\d+|album\\/v\\d+|artist\\/v\\d+|track-entity-view|metadata\\/4\\/(?:album|artist|show|episode)|creatorabout\\/v\\d+|vanilla\\/v\\d+|user-profile-view|genre-view|browse\\/v\\d+|watch-feed-view\\/v\\d+|watch-feed-entrypoints\\/v\\d+)\\/"
+      name: "if-none-match"
+      type: "request"
+  - delete:
+      match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:playlist\\/v\\d+|collection\\/v\\d+|searchview|search\\/v\\d+|album\\/v\\d+|artist\\/v\\d+|track-entity-view|metadata\\/4\\/(?:album|artist|show|episode)|creatorabout\\/v\\d+|vanilla\\/v\\d+|user-profile-view|genre-view|browse\\/v\\d+|watch-feed-view\\/v\\d+|watch-feed-entrypoints\\/v\\d+)\\/"
+      name: "if-modified-since"
+      type: "request"
+
 scriptings:
   # 请求头 / 时区：按账号地区改写 URL 里的 timezone（固定开启）。
   - http_request:
@@ -232,12 +242,13 @@ scriptings:
       max_size: 12582912
       timeout: 30
 
-  # Pathfinder（歌单 / 专辑 / 歌手 / 搜索 / 资料库）是 JSON，单独转名称。
+  # Pathfinder 既可能返回 JSON，也可能返回 protobuf，必须按二进制交给脚本判别。
   - http_response:
       name: "spotify.partner"
       match: "^https:\\/\\/api-partner\\.spotify\\.com\\/pathfinder\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.partner.js?v=20261126-10"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.partner.js?v=20261128-1"
       body_required: true
+      binary_body: true
       max_size: 8388608
       timeout: 10
 
@@ -246,7 +257,7 @@ scriptings:
   - http_response:
       name: "spotify.names"
       match: "^https:\\/\\/(?:[\\w-]+-spclient|spclient\\.wg)\\.spotify\\.com(?::443)?\\/(?:playlist\\/v\\d+|collection\\/v\\d+|searchview|search\\/v\\d+|album\\/v\\d+|artist\\/v\\d+|track-entity-view|metadata\\/4\\/(?:album|artist|show|episode)|creatorabout\\/v\\d+|vanilla\\/v\\d+|user-profile-view|genre-view|browse\\/v\\d+|watch-feed-view\\/v\\d+|watch-feed-entrypoints\\/v\\d+|casita\\/v\\d+\\/feeds)\\/"
-      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.partner.js?v=20261126-10"
+      script_url: "https://raw.githubusercontent.com/xzavier-amico/modules/master/egern/spotify/js/spotify.partner.js?v=20261128-1"
       body_required: true
       binary_body: true
       max_size: 12582912
